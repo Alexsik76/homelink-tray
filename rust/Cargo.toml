@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-slint = { version = "1.18", default-features = false, features = ["std", "backend-winit", "renderer-software", "software-renderer-systemfonts", "system-tray", "compat-1-2", "unstable-winit-030"] }
+slint = { version = "1.18", default-features = false, features = ["std", "backend-winit", "renderer-software", "system-tray", "compat-1-2", "unstable-winit-030"] }
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]

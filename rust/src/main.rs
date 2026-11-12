@@ -69,7 +69,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .backend_name("winit".into())
         .renderer_name("software".into())
         .with_winit_window_attributes_hook(|attrs| {
-            attrs.with_skip_taskbar(true).with_transparent(true)
+            attrs.with_skip_taskbar(true)
         })
         .select()?;
 

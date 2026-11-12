@@ -1,5 +1,8 @@
 // HomeLink prototype UI: a tray icon and a small two-column panel.
 
+import "./fonts/Inter-Regular.ttf";
+import "./fonts/Inter-SemiBold.ttf";
+
 export enum ViewState { online, waking, off, unknown }
 
 export struct PcView {
@@ -23,7 +26,6 @@ component TunnelButton inherits Rectangle {
     in property <bool> connected;
     callback clicked();
     height: 28px;
-    border-radius: 4px;
     background: root.connected
         ? (ta.has-hover ? #1d4ed8 : #2563eb)
         : (ta.has-hover ? #d1d5db : #e5e7eb);
@@ -43,7 +45,6 @@ component ActionButton inherits Rectangle {
     in property <bool> active: true;
     callback clicked();
     height: 26px;
-    border-radius: 4px;
     background: (root.active && ta.has-hover) ? #e6e6e6 : transparent;
     HorizontalLayout {
         padding-left: 6px;
@@ -65,7 +66,6 @@ component PcRowView inherits Rectangle {
     in property <PcView> pc;
     callback clicked();
     height: 28px;
-    border-radius: 4px;
     background: ta.has-hover ? #e6e6e6 : transparent;
 
     pure function dot-color(s: ViewState) -> color {
@@ -91,7 +91,6 @@ component PcRowView inherits Rectangle {
                 width: 10px;
                 height: 10px;
                 y: (parent.height - self.height) / 2;
-                border-radius: 5px;
                 background: root.dot-color(root.pc.state);
             }
         }
@@ -120,8 +119,8 @@ export component Panel inherits Window {
 
     no-frame: true;
     always-on-top: true;
-    background: transparent;
-    default-font-family: "Segoe UI";
+    background: #f9f9f9;
+    default-font-family: "Inter";
     default-font-size: 13px;
     width: 420px;
     height: root.content-height;
@@ -139,7 +138,6 @@ export component Panel inherits Window {
             background: #f9f9f9;
             border-width: 1px;
             border-color: #d4d4d4;
-            border-radius: 8px;
 
             inner := VerticalLayout {
                 padding: 12px;
