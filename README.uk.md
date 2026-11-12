@@ -1,6 +1,6 @@
 # HomeLink
 
-[![CI](https://github.com/Alexsik76/homelink-tray/actions/workflows/ci.yml/badge.svg)](https://github.com/Alexsik76/homelink-tray/actions/workflows/ci.yml)
+[![CI](https://github.com/Alexsik76/homelink-tray/actions/workflows/ci.yml/badge.svg)](https://github.com/Alexsik76/homelink-tray/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/Alexsik76/homelink-tray)](https://github.com/Alexsik76/homelink-tray/releases/latest)
 
 [English](README.md)
 
@@ -76,6 +76,11 @@ build.bat
 Результат: `dist\HomeLink.exe`. Перед повторним збиранням закрийте запущену програму.
 
 ## Випуски
+
+| Версія | Завантаження | Зміни |
+| --- | --- | --- |
+| Остання ![остання версія](https://img.shields.io/github/v/release/Alexsik76/homelink-tray?label=) | [HomeLink.exe](https://github.com/Alexsik76/homelink-tray/releases/latest/download/HomeLink.exe) | [Що нового](https://github.com/Alexsik76/homelink-tray/releases/latest) |
+| Попередні | [Усі випуски](https://github.com/Alexsik76/homelink-tray/releases) | |
 
 Готові файли `HomeLink.exe` публікуються на сторінці
 [Releases](https://github.com/Alexsik76/homelink-tray/releases) репозиторію. Позначка

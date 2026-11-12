@@ -1,6 +1,6 @@
 # HomeLink
 
-[![CI](https://github.com/Alexsik76/homelink-tray/actions/workflows/ci.yml/badge.svg)](https://github.com/Alexsik76/homelink-tray/actions/workflows/ci.yml)
+[![CI](https://github.com/Alexsik76/homelink-tray/actions/workflows/ci.yml/badge.svg)](https://github.com/Alexsik76/homelink-tray/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/Alexsik76/homelink-tray)](https://github.com/Alexsik76/homelink-tray/releases/latest)
 
 [Українською](README.uk.md)
 
@@ -76,6 +76,11 @@ build.bat
 The result is `dist\HomeLink.exe`. Exit a running copy before rebuilding.
 
 ## Releases
+
+| Version | Download | Changes |
+| --- | --- | --- |
+| Latest ![latest version](https://img.shields.io/github/v/release/Alexsik76/homelink-tray?label=) | [HomeLink.exe](https://github.com/Alexsik76/homelink-tray/releases/latest/download/HomeLink.exe) | [What is new](https://github.com/Alexsik76/homelink-tray/releases/latest) |
+| Earlier | [All releases](https://github.com/Alexsik76/homelink-tray/releases) | |
 
 Ready-made `HomeLink.exe` files are published on the
 [Releases](https://github.com/Alexsik76/homelink-tray/releases) page. Pushing a tag such
