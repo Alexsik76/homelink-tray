@@ -84,34 +84,24 @@ class TrayApp:
         def pc_online(_: object) -> bool:
             return status().pc is PcState.ONLINE
 
+        def can_wake(_: object) -> bool:
+            return status().pc not in (PcState.ONLINE, PcState.WAKING)
+
+        connect_and_wake = self._in_thread(self.controller.connect_and_wake)
+
         return Menu(
+            # pystray looks for the default item among the top-level items only (invisible
+            # ones included), so the left click gets its own hidden entry
+            Item(self.t("menu.wake"), connect_and_wake, default=True, visible=False),
             Item(
-                self.t("menu.connect_and_wake"),
-                self._in_thread(self.controller.connect_and_wake),
-                default=True,
-            ),
-            Menu.SEPARATOR,
-            Item(
-                lambda _: self.t(
-                    "menu.tunnel_connect"
-                    if status().tunnel is TunnelState.DOWN
-                    else "menu.tunnel_disconnect"
-                ),
+                lambda _: self.t("menu.tunnel", state=self.t(f"tunnel.{status().tunnel}")),
                 self._in_thread(self.controller.toggle_tunnel),
+                checked=lambda _: status().tunnel is TunnelState.UP,
             ),
             Item(
-                self.t("menu.wake"),
-                self._in_thread(self.controller.wake),
-                enabled=lambda _: status().tunnel is TunnelState.UP,
-            ),
-            Item(
-                self.t("menu.rdp"),
-                self._open_rdp,
-                enabled=pc_online,
-            ),
-            Item(
-                self.t("menu.power"),
+                lambda _: self.t("menu.pc", state=self.t(f"pc.{status().pc}")),
                 Menu(
+                    Item(self.t("menu.wake"), connect_and_wake, enabled=can_wake),
                     Item(
                         self.t("menu.suspend"),
                         self._confirmed("confirm.suspend", self.controller.suspend),
@@ -124,6 +114,7 @@ class TrayApp:
                     ),
                 ),
             ),
+            Item(self.t("menu.rdp"), self._open_rdp, enabled=pc_online),
             Menu.SEPARATOR,
             Item(self.t("menu.settings"), self._open_config),
             Item(self.t("menu.quit"), self._quit),

@@ -10,8 +10,9 @@ and of the PC in the tray icon.
 
 - **Left click** on the icon: bring the tunnel up, check the PC's ports and, when it is silent,
   send Wake-on-LAN. A notification appears once the PC answers.
-- **Right click**: connect or disconnect the tunnel, wake the PC, open RDP, put the PC to
-  sleep or shut it down (after a confirmation), open the settings file, quit.
+- **Right click**: three groups. *Tunnel* (checked while connected) connects or disconnects
+  the tunnel. *Home PC* (a submenu) wakes, puts to sleep or shuts down the PC; the last two
+  ask for a confirmation. *Open RDP* opens the remote desktop. Below: the settings file, quit.
 - **Icon**: the screen colour is the PC state (green: online, amber: waking, grey: off),
   the badge is the tunnel state (blue: connected, yellow: connecting, red: off).
 
@@ -42,9 +43,9 @@ of this computer:
 
 ## Remote power commands
 
-The "Turn off PC" submenu (enabled while the PC is online) runs `shutdown_command` or
-`suspend_command` on this computer after a confirmation. With the example settings that
-is an SSH call to the home PC, which needs the following there:
+The "Sleep" and "Shut down" entries of the "Home PC" submenu (enabled while the PC is
+online) run `suspend_command` or `shutdown_command` on this computer after a confirmation.
+With the example settings that is an SSH call to the home PC, which needs the following there:
 
 - Key authentication: with `BatchMode=yes` SSH never asks for a password.
 - The host key must already be accepted: connect once manually (`ssh user@<pc_ip>`).
