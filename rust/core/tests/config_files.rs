@@ -102,6 +102,12 @@ fn full_fixture_loads_with_every_value() {
     assert_eq!((address.to_string().as_str(), *port), ("10.0.0.7", 9));
 
     // One relay of each preset.
+    let sudo: Vec<bool> = c.relays.iter().map(|r| r.sudo).collect();
+    assert_eq!(
+        sudo,
+        [false, false, true],
+        "routeros has none; etherwake no, wakeonlan yes"
+    );
     let kinds: Vec<RelayKind> = c.relays.iter().map(|r| r.kind).collect();
     assert_eq!(
         kinds,

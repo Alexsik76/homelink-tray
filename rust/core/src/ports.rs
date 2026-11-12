@@ -173,13 +173,62 @@ pub trait PowerRunner: Send + Sync {
     fn run(&self, pc: &Pc, action: PowerAction) -> Result<(), PowerError>;
 }
 
+/// How an external program ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandOutcome {
+    /// It ran and exited with this code.
+    Exited(i32),
+    /// It was still running when the time ran out and was killed.
+    TimedOut,
+    /// It could not be started (not found, not executable, empty command line).
+    NotStarted,
+}
+
 /// The result of an external program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandOutput {
-    /// Exit code; non-zero also for a timeout or a program that could not start.
-    pub code: i32,
-    /// Combined standard error and output, or a readable reason.
+    /// How it ended.
+    pub outcome: CommandOutcome,
+    /// Standard error, then standard output (each trimmed, bounded in size), or for
+    /// [`CommandOutcome::NotStarted`] and [`CommandOutcome::TimedOut`] a readable reason.
     pub text: String,
+}
+
+impl CommandOutput {
+    /// A program that exited with `code`.
+    pub fn exited(code: i32, text: impl Into<String>) -> Self {
+        Self {
+            outcome: CommandOutcome::Exited(code),
+            text: text.into(),
+        }
+    }
+
+    /// A program that was killed after `timeout`; `partial` is what it had written.
+    pub fn timed_out(timeout: Duration, partial: &str) -> Self {
+        let reason = format!("timed out after {} s", timeout.as_secs_f64());
+        let text = if partial.trim().is_empty() {
+            reason
+        } else {
+            format!("{reason}: {}", partial.trim())
+        };
+        Self {
+            outcome: CommandOutcome::TimedOut,
+            text,
+        }
+    }
+
+    /// A program that could not be started.
+    pub fn not_started(reason: impl Into<String>) -> Self {
+        Self {
+            outcome: CommandOutcome::NotStarted,
+            text: reason.into(),
+        }
+    }
+
+    /// Whether the program ran and exited with code 0.
+    pub fn success(&self) -> bool {
+        self.outcome == CommandOutcome::Exited(0)
+    }
 }
 
 /// Runs an external program without a shell.

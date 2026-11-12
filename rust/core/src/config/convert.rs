@@ -89,6 +89,7 @@ fn raw_relay(r: &Relay) -> RawRelay {
         user: r.user.clone(),
         identity_file: r.identity_file.clone(),
         timeout: secs(r.timeout),
+        sudo: r.kind.supports_sudo().then_some(r.sudo),
     }
 }
 

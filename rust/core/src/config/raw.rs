@@ -110,6 +110,9 @@ pub struct RawRelay {
     pub user: String,
     pub identity_file: String,
     pub timeout: u64,
+    /// Required for presets that support it, rejected for the others.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sudo: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

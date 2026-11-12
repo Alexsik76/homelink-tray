@@ -40,6 +40,7 @@ port = 22
 user = "homelink"
 identity_file = 'C:\ProgramData\HomeLink\openwrt_ed25519'
 timeout = 8
+sudo = false
 
 [[relays]]
 id = "pi"
@@ -49,6 +50,7 @@ port = 2222
 user = "homelink"
 identity_file = '/home/alex/.ssh/id_pi'
 timeout = 10
+sudo = true
 
 [[pcs]]
 id = "desktop"

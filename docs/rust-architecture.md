@@ -57,8 +57,10 @@ rust/
       ports.rs          traits that isolate side effects (section 6)
       ssh.rs            the shared `ssh` argument list and the PC power commands
       wake.rs           wake sender that runs `ssh` through `CommandRunner` (argv building
-                        is pure); phase 3 adds the other portable senders
-      adapters/         (phase 3) portable adapters: tcp probe, magic packet, command runner
+                        is pure)
+      adapters/         portable adapters, std only: `tcp` (port probe), `magic` (magic
+                        packet), `command` (command runner, command wake), `power` (sleep and
+                        shutdown over SSH or by command)
       wizard.rs         wizard steps and draft-to-config conversion (pure logic)
       notice.rs, i18n.rs, rdp.rs
       testing.rs        fakes behind the `testing` feature
@@ -145,19 +147,25 @@ ssh -o BatchMode=yes -o PasswordAuthentication=no -o IdentitiesOnly=yes
     "<remote command>"
 ```
 
-| Preset | Remote command | `interface` in the wake method | `address` |
-| --- | --- | --- | --- |
-| `routeros` | `/tool wol mac=<MAC> interface=<interface>` | required | not used |
-| `etherwake` | `etherwake -i <interface> <MAC>` (typical for OpenWrt) | required | not used |
-| `wakeonlan` | `wakeonlan <MAC>`, or `wakeonlan -i <address> <MAC>` | not used | optional (IPv4) |
+| Preset | Remote command | `interface` in the wake method | `address` | `sudo` in the relay |
+| --- | --- | --- | --- | --- |
+| `routeros` | `/tool wol mac=<MAC> interface=<interface>` | required | not used | rejected |
+| `etherwake` | `[sudo -n ]etherwake -i <interface> <MAC>` (typical for OpenWrt) | required | not used | required |
+| `wakeonlan` | `[sudo -n ]wakeonlan <MAC>`, or `[sudo -n ]wakeonlan -i <address> <MAC>` | not used | optional (IPv4) | required |
+
+`sudo` is a boolean on the relay entry (`sudo = true`), with no default: `etherwake` and
+`wakeonlan` may need root on the relay, so the configuration must say so; RouterOS has no
+`sudo` and the key is rejected there. When it is true the remote command is prefixed with the
+fixed text `sudo -n ` (`-n`: never ask for a password, so a missing `sudoers` rule fails at once
+instead of hanging, in line with `BatchMode=yes`).
 
 Validation checks the wake method against the preset of the relay it names: a field the
 preset needs must be present and a field it does not use is rejected, each with the path
-(`pcs[0].wake.interface`). The destination `address` of `wakeonlan` reuses the same name and
-meaning as in the direct magic packet. Adding a preset is one new `RelayKind` variant plus an
-arm in each `match` on it (`code`, `uses_interface`, `uses_address` in `domain`, and
-`relay_command` in `core::wake`); the compiler lists every place, and the exact-argument test
-set gets one more case.
+(`pcs[0].wake.interface`, `relays[1].sudo`). The destination `address` of `wakeonlan` reuses
+the same name and meaning as in the direct magic packet. Adding a preset is one new
+`RelayKind` variant plus an arm in each `match` on it (`code`, `uses_interface`,
+`uses_address`, `supports_sudo` in `domain`, and `relay_command` in `core::wake`); the compiler
+lists every place, and the exact-argument test set gets one more case.
 
 `<MAC>` is a parsed MAC address rendered as six upper-case hex pairs; `<interface>` is an
 `InterfaceName` (`A-Za-z0-9_.-`, 1-64 characters, not starting with `-`); `<address>` is a
@@ -168,8 +176,15 @@ runs elevated and must not depend on which profile `ssh` would resolve); `Identi
 stops `ssh` from offering other keys. The host key must already be known
 (`StrictHostKeyChecking=yes`): the wizard is the only place that may accept a new one
 (section 4). Argument building is pure and unit-tested in `core::wake` and `core::ssh` (exact
-argument lists for every preset); the process itself is started by the `CommandRunner` adapter
-(phase 3).
+argument lists for every preset); the process itself is started by `StdCommandRunner`
+(`core::adapters::command`).
+
+*Failures are told apart* (`ssh::explain_ssh`), for wake and for SSH power actions alike, so
+the notice says what to fix: the OpenSSH client is missing or cannot start ("cannot run ssh (is
+the OpenSSH client installed?)"); `ssh` timed out; `ssh` itself failed with exit code 255
+(connection refused, host key or key authentication failure); or the command ran on the remote
+host and failed (any other non-zero code, with its output). Commands that are not `ssh` map to
+the same set without the `ssh` wording (`explain_command`).
 
 **Waking across a routed network or a VLAN (direct magic packet).** The direct method sends a
 UDP magic packet from this computer to a configurable destination `address` (any IPv4
@@ -339,10 +354,10 @@ disconnects and for PCs that were told to power off) is kept.
 | --- | --- | --- | --- |
 | `TunnelDriver` | `is_running`, `up`, `down` for a `Tunnel` | `app`: SCM query + `wireguard.exe /installtunnelservice` / `/uninstalltunnelservice` (replaces psutil; "already installed" still tolerated) | scripted fake |
 | `Pinger` | ICMP echo to a host with timeout | `app`: `IcmpSendEcho` (no console window, no locale parsing) | set of reachable hosts |
-| `PortProbe` | all ports of a host accept TCP, short-circuit on first failure | `core`: `TcpStream::connect_timeout` | local listener / fake |
-| `WakeSender` | send one wake request for a `Pc` | one impl per method: `RelayWake` (`ssh` through `CommandRunner`, `core::wake`, done), `MagicPacket` (UDP to any IPv4 address), `CommandWake`; selected through a `WakeRegistry` keyed by method kind | recording fake; real UDP socket on loopback |
-| `CommandRunner` | run argv without a shell, hidden window, timeout; returns `(code, text)` | `core`: `std::process` with `CREATE_NO_WINDOW` on Windows; `app` wraps it to decode OEM code page | recording fake |
-| `PowerRunner` | run `Sleep`/`Shutdown` for a `PowerMethod` | `core`: builds argv (SSH or command), uses `CommandRunner` | recording fake |
+| `PortProbe` | all ports of a host accept TCP | `core::adapters::tcp::TcpPortProbe` (done): ports tried concurrently under one shared deadline, names resolved in a helper thread, connect and close, nothing sent | local listeners, an unused port |
+| `WakeSender` | send one wake request for a `Pc` | one impl per method: `RelayWake` (`ssh` through `CommandRunner`, `core::wake`), `MagicPacketWake` (UDP to any IPv4 address; `SO_BROADCAST` only if the system refuses without it), `CommandWake` (all done, in `core::adapters`; `default_wake_registry` registers them); selected through a `WakeRegistry` keyed by method kind | recording fake; real UDP socket on loopback |
+| `CommandRunner` | run argv without a shell, timeout; returns a `CommandOutput` (outcome: exited with a code, timed out, not started; bounded stderr + stdout text) | `core::adapters::command::StdCommandRunner` (done): own process group killed on timeout on Unix (the group is killed with `kill -KILL -- -<pid>`, no dependency; only the program itself where `kill` is missing and on Windows), `CREATE_NO_WINDOW` on Windows, pluggable output decoder (`app` supplies the OEM code page one), `ETXTBSY` retried | recording fake; `sh`, `sleep`, a fake `ssh` script |
+| `PowerRunner` | run `Sleep`/`Shutdown` for a `PowerMethod` | `core::adapters::power::CommandPowerRunner` (done): SSH preset or configured command through `CommandRunner`, failures told apart (section 3) | recording fake; a fake `ssh` script |
 | `Clock` | monotonic `now()` | `std::time::Instant` | manual clock |
 | `Executor` | run a blocking job and deliver `JobDone` | small fixed worker pool | inline, deterministic |
 | `Sink` | receive `Snapshot` and `Notice` from the engine | `app`: Slint + tray | collector |
@@ -426,6 +441,8 @@ port = 22
 user = "homelink"            # a restricted user that may only run the wake command
 identity_file = 'C:\ProgramData\HomeLink\relay_ed25519'    # explicit absolute path, required
 timeout = 8                  # seconds, also the ssh connect timeout
+# sudo = true                # etherwake and wakeonlan: required (run as `sudo -n <command>`);
+                             # routeros: not allowed
 
 [[pcs]]
 id = "desktop"
@@ -618,11 +635,14 @@ any password.
     computer's address, import the public key for that user, and disable password login for
     SSH (`/ip ssh set always-allow-password-login=no`). To be verified on RouterOS 7 in
     phase 3.
-  - `etherwake`: install `etherwake`, create the SSH user, add the public key to its
-    `authorized_keys`, and allow that user to run the `etherwake` binary (path from
-    `which etherwake`) with `sudo` without a password, for that command only.
-  - `wakeonlan`: install `wakeonlan`, create the SSH user and add the public key to its
-    `authorized_keys`.
+  - `etherwake`: install `etherwake`, create the SSH user and add the public key to its
+    `authorized_keys`. The step asks "run the command with sudo" (`wizard.field.sudo`,
+    `wizard.hint.sudo`; there is no default, the user must choose). If yes, it also shows
+    the `sudoers` line that allows that user to run the `etherwake` binary (path from
+    `which etherwake`) with `sudo` without a password, for that command only; HomeLink runs
+    `sudo -n`, so a missing rule fails at once.
+  - `wakeonlan`: the same, for `wakeonlan`.
+  - `routeros`: no `sudo` question.
   The text of each set lives in one place in core so tests and the wizard share it.
 - *PC side.* For an SSH power method the wizard shows the line to add to `authorized_keys`
   and, for Linux, the `sudoers` line from the README.
@@ -669,8 +689,13 @@ tests prove only the thin adapters.
   `ssh` argument list and remote command built exactly as specified for every preset (RouterOS,
   etherwake, wakeonlan), with hostile MAC, interface and address values
   rejected before they reach the command (done in `core::wake`, with a fake
-  `CommandRunner`); TCP probe against a local listener; command runner exit codes, timeout and
-  output.
+  `CommandRunner`), with and without `sudo`; TCP probe against local listeners, an unused port
+  and `localhost`, and a check that nothing is sent; the magic packet against a known vector
+  and a local UDP socket; the command runner with `sh`, `sleep`, `true` and `false`: exit codes,
+  signals, output bounds, a pluggable decoder, the timeout kill including a background child
+  (checked by process id); a fake `ssh` script that records its arguments, used for wake and
+  power end to end including every failure class; and one test that runs the real engine, thread
+  pool and these adapters against local stand-ins (`tests/real_engine.rs`).
 - **Privacy checks:** a test that the configuration schema has no password, token or URL
   key, and a CI check (`cargo deny`, plus a grep gate on `http`/`tls` client crates in the
   dependency tree) that no HTTP or TLS client is ever added.
@@ -718,7 +743,8 @@ must equal `homelink.__version__`. Changes (the Python jobs stay until phase 7):
 | 2 Machine and engine (done) | `machine`, `engine`, `ports`, `testing` fakes; port all of `test_controller.py`; randomised invariants | every Python controller test has a Rust counterpart |
 | 2b SSH-only access (done, owner decision) | REST and every secret removed; relay hosts over SSH with a key; `core::wake` builds the `ssh` argv (pure, tested); locale keys updated | no password, URL or secret type left in core; tests green |
 | 2c Relay presets and routed wake (done, owner decision) | `[[relays]]` with a preset (`routeros`, `etherwake`, `wakeonlan`); `method = "relay"`; magic packet `address` (unicast or broadcast); per-preset validation and exact-argument tests | tests green; section 3 documents the unicast + static ARP setup |
-| 3 Adapters | Portable (TCP, UDP magic packet, `CommandRunner`, SSH power runner) with Linux integration tests; Windows (WireGuard service, ICMP, OEM decoding, OpenSSH detection); verify the RouterOS commands on RouterOS 7 | adapter tests green in both CI jobs; a real `/tool wol` over SSH works |
+| 3a Portable adapters (done) | `core::adapters`: TCP probe, magic packet, `StdCommandRunner`, command wake, SSH and command power runner, relay `sudo`; Linux integration tests against local stand-ins and a fake `ssh`; the real engine over them | tests green on Linux; the real-engine test passes |
+| 3b Windows adapters | WireGuard service, ICMP, OEM output decoder (plugs into `StdCommandRunner`), `mstsc` launch, OpenSSH detection (in the app crate); verify the RouterOS commands on RouterOS 7 | adapter tests green in the Windows CI job; a real `/tool wol` over SSH works |
 | 4 App shell | Panel on the real engine, tray with aggregate icon, notices, logging, single instance, elevation manifest, icons moved from `src/homelink/assets` | a single PC with a tunnel works end to end on Windows |
 | 5 Multi-PC and wizard | Groups, shared tunnel, PC without a tunnel, wizard (add/edit/delete), About with the Slint credit, config reload | tunnel groups, a shared tunnel and a PC without a tunnel work by hand |
 | 6 Hardening | Manual checklist on Windows 10 LTSC and 11 (Linux and Windows remote PCs), docs rewrite (`README*.md`, `design.md`, relay and router setup, SSH for Windows), size and licence check, `v1.0.0-rc.1` | no open defects; parity checklist complete |
