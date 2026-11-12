@@ -11,6 +11,8 @@ code that is ported; `docs/design.md` describes the Python-era UI and is revised
   executable stays small.
 - Several remote PCs, each optionally behind a tunnel. A tunnel may serve several PCs; PCs
   without a tunnel form their own group. Old `config.json` files are not migrated.
+- The configuration file is TOML (final): readable, with comments. The wizard rewrites the
+  file with the plain `toml` crate, so comments are not preserved when it saves.
 - One command raises the tunnel and wakes an inactive PC.
 - Wake methods per PC: a MikroTik router over SSH (`/tool wol`), direct magic packet,
   arbitrary command; more later. The MikroTik REST API is not used at all.
@@ -61,7 +63,7 @@ rust/
 ```
 
 Dependency rule: `app -> core`, never the reverse. `core` depends only on std, `serde`, a
-TOML/JSON parser, `thiserror` and `log` (plus `serde_json` for the locale catalogs). It has no
+`toml`, `thiserror` and `log` (plus `serde_json` for the locale catalogs). It has no
 HTTP or TLS client. It builds and tests on Linux; only `app` needs Windows. The prototype in
 `rust/src` and `rust/ui` moves into `rust/app` in phase 4 (tray, panel placement and
 focus-loss logic are reused, `model.rs` sample data is deleted).
@@ -330,11 +332,11 @@ processes; `app` contains everything that needs the `windows` crate.
 
 ## 8. Configuration
 
-One file, `config.<ext>`, next to the executable (as in v0.3) or `--config <path>`. Written
+One file, `config.toml`, next to the executable (as in v0.3) or `--config <path>`. Written
 by the wizard atomically (temp file + rename). `version = 1` is the schema version. Unlike
 v0.3 a required `[defaults]` table holds the shared timing, and a PC may override single keys
 in `[pcs.timing]`; there are no built-in values for user settings in code (only technical
-limits). Illustrative TOML (the format is an owner decision, section 12):
+limits). An example:
 
 ```toml
 version  = 1
@@ -548,20 +550,6 @@ any password.
    (only the toggle), when the last attached PC goes off or is told to sleep, after an idle
    timeout, or a per-tunnel setting. Until decided, the machine never drops a tunnel by
    itself, which is the v0.3 behaviour. The reference count of "wanted" PCs is not kept.
-5. **Config file format (owner decision).**
-
-   | | TOML | JSON |
-   | --- | --- | --- |
-   | Comments | yes | no |
-   | Windows paths | literal strings `'C:\x'`, no escaping | every `\` doubled |
-   | Hand editing in Notepad | friendly, no trailing-comma errors | stricter, easy to break |
-   | Lists of PCs/tunnels | `[[pcs]]` tables, flat and readable | nested arrays and objects |
-   | Wizard writes back | `toml_edit` keeps comments and layout (extra dependency, larger) or plain `toml` (comments lost) | `serde_json` pretty print, nothing to lose |
-   | Parse errors | line and column | line and column |
-   | Continuity | new format | same as v0.3 (no migration anyway) |
-   | Size | about 100-250 KB depending on the crate | smaller |
-
-   The schema in section 8 is format-neutral (serde); the leaning is TOML for comments and paths.
 
 ## 13. Testing strategy
 
@@ -627,7 +615,7 @@ must equal `homelink.__version__`. Changes (the Python jobs stay until phase 7):
 
 | Phase | Content | Exit criterion |
 | --- | --- | --- |
-| 0 Spike | Workspace skeleton, CI for `core` and `app`; on real Windows: panel focus/placement, tray notifications API (Slint's tray may not offer balloons, a `windows`-crate fallback may be needed), measured exe size; owner answers section 12 | questions 2 and 5 answered, size budget fixed, risks below closed or accepted |
+| 0 Spike | Workspace skeleton, CI for `core` and `app`; on real Windows: panel focus/placement, tray notifications API (Slint's tray may not offer balloons, a `windows`-crate fallback may be needed), measured exe size; owner answers section 12 | question 2 answered, size budget fixed, risks below closed or accepted |
 | 1 Core model (done) | `domain`, `config` (schema, validation, fixtures), `i18n` catalog, `notice` | config tests green on Linux; locale parity green |
 | 2 Machine and engine (done) | `machine`, `engine`, `ports`, `testing` fakes; port all of `test_controller.py`; randomised invariants | every Python controller test has a Rust counterpart |
 | 2b SSH-only access (done, owner decision) | MikroTik REST and every secret removed; router over SSH with a key; `core::wake` builds the `ssh` argv (pure, tested); locale keys updated | no password, URL or secret type left in core; tests green |

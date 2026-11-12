@@ -1,7 +1,8 @@
 //! The file format. This is the only module that knows the configuration is TOML.
 //!
-//! The format is provisional (the owner decides between TOML and JSON). Switching means
-//! rewriting `parse`, `render` and `FILE_NAME` here; the schema in `raw` is format-neutral.
+//! The format is TOML. The format code is kept in this one module and the schema in `raw`
+//! is format-neutral (serde), so a different format would touch only `parse`, `render` and
+//! `FILE_NAME` here.
 
 use super::raw::RawConfig;
 
