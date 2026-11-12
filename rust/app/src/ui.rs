@@ -171,7 +171,7 @@ impl Ui {
         };
         tray.set_pc_screen(view_state(snapshot.tray.pc));
         tray.set_badge(link_state(snapshot.tray.tunnel));
-        tray.set_tooltip(self.tooltip(snapshot).into());
+        tray.set_tip(self.tooltip(snapshot).into());
         let groups: Vec<GroupRow> = snapshot
             .groups
             .iter()

@@ -3,6 +3,8 @@
 //! other platforms get plain versions, so the crate also builds for checks on Linux.
 
 use crate::view::Panel;
+#[cfg(windows)]
+use slint::ComponentHandle;
 
 /// Width of the panel in logical pixels.
 #[cfg(windows)]

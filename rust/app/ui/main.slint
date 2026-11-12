@@ -278,6 +278,8 @@ export component Tray inherits SystemTrayIcon {
     // The PC screen and the tunnel badge of the tray icon (section 7 of the architecture).
     in property <ViewState> pc-screen: ViewState.unknown;
     in property <LinkState> badge: LinkState.down;
+    in property <string> tip;
+    tooltip: root.tip;
     callback quit-requested();
     callback toggle-panel();
     clicked => { root.toggle-panel(); }
