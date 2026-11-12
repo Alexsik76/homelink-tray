@@ -1,5 +1,7 @@
 # HomeLink
 
+[![CI](https://github.com/Alexsik76/homelink-tray/actions/workflows/ci.yml/badge.svg)](https://github.com/Alexsik76/homelink-tray/actions/workflows/ci.yml)
+
 [English](README.md)
 
 Програма для системного лотка Windows, яка відкриває доступ до домашнього ПК: підіймає тунель WireGuard, доручає маршрутизатору MikroTik надіслати
@@ -72,6 +74,15 @@ build.bat
 ```
 
 Результат: `dist\HomeLink.exe`. Перед повторним збиранням закрийте запущену програму.
+
+## Випуски
+
+Готові файли `HomeLink.exe` публікуються на сторінці
+[Releases](https://github.com/Alexsik76/homelink-tray/releases) репозиторію. Позначка
+(тег) на кшталт `v0.3.0`, номер якої збігається з версією пакета
+(`homelink.__version__`), запускає збірку програми та створює випуск. Виконуваний файл не
+має цифрового підпису, тому під час першого запуску Windows SmartScreen може показати
+попередження.
 
 ## Налаштування
 

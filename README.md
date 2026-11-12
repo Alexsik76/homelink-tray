@@ -1,5 +1,7 @@
 # HomeLink
 
+[![CI](https://github.com/Alexsik76/homelink-tray/actions/workflows/ci.yml/badge.svg)](https://github.com/Alexsik76/homelink-tray/actions/workflows/ci.yml)
+
 [Українською](README.uk.md)
 
 A Windows tray utility that gives access to a home PC: it brings up a WireGuard
@@ -72,6 +74,14 @@ build.bat
 ```
 
 The result is `dist\HomeLink.exe`. Exit a running copy before rebuilding.
+
+## Releases
+
+Ready-made `HomeLink.exe` files are published on the
+[Releases](https://github.com/Alexsik76/homelink-tray/releases) page. Pushing a tag such
+as `v0.3.0` whose number matches the package version (`homelink.__version__`) builds the
+program and creates a release. The executable is not code-signed, so Windows SmartScreen
+may show a warning on the first start.
 
 ## Settings
 
