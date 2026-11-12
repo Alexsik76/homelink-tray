@@ -58,6 +58,7 @@ class Controller:
         self._busy = threading.Lock()
         self._waking_until = 0.0
         self._pc_failures = 0
+        self._power_sent = False  # a power command succeeded since the PC was last seen online
         self.status = Status()
 
     # ---------- helpers ----------
@@ -73,6 +74,8 @@ class Controller:
 
     def _set(self, tunnel: TunnelState | None = None, pc: PcState | None = None) -> None:
         new = Status(tunnel=tunnel or self.status.tunnel, pc=pc or self.status.pc)
+        if new.pc is PcState.ONLINE and self.status.pc is not PcState.ONLINE:
+            self._power_sent = False
         if new != self.status:
             log.info(
                 "state: tunnel %s -> %s, pc %s -> %s",
@@ -162,7 +165,7 @@ class Controller:
                 self._start_tunnel()
             else:
                 self.tunnel.down()
-            self._refresh()
+            self._refresh(user_stopped=True)
         finally:
             self._busy.release()
 
@@ -189,6 +192,7 @@ class Controller:
             code, output = self._run_command(list(command), self.config.power_command_timeout)
             log.info("%s command exit code %s: %s", name, code, output)
             if code == 0:
+                self._power_sent = True
                 self._on_notify(sent_key, host=self.config.pc_ip)
             else:
                 self._on_notify("notify.power_failed", detail=output[:DETAIL_LIMIT])
@@ -201,11 +205,15 @@ class Controller:
         if not self.busy:
             self._refresh()
 
-    def _refresh(self) -> None:
+    def _refresh(self, user_stopped: bool = False) -> None:
         if not self.tunnel.is_running():
+            lost = self.status.tunnel is TunnelState.UP and not user_stopped
             self._waking_until = 0.0
             self._pc_failures = 0
             self._set(tunnel=TunnelState.DOWN, pc=PcState.UNKNOWN)
+            if lost:
+                log.warning("tunnel service stopped unexpectedly")
+                self._on_notify("notify.tunnel_lost")
             return
         if not self._router_reachable():
             self._pc_failures = 0
@@ -234,7 +242,11 @@ class Controller:
         elif was_waking and self._clock() < self._waking_until:
             self._set(tunnel=TunnelState.UP)
         else:
+            was_online = self.status.pc is PcState.ONLINE
             self._set(tunnel=TunnelState.UP, pc=PcState.OFFLINE)
+            if was_online and not self._power_sent:
+                log.warning("pc %s stopped responding", self.config.pc_ip)
+                self._on_notify("notify.pc_lost")
             if was_waking:
                 log.warning(
                     "pc %s did not answer within %s s after wake-on-lan",

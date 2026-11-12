@@ -11,10 +11,11 @@ import pystray
 from pystray import Menu
 from pystray import MenuItem as Item
 
+import homelink
 from homelink.config import Config
 from homelink.controller import Controller
 from homelink.i18n import Translator
-from homelink.icons import BUILTIN_DIR, IconSet
+from homelink.icons import IconSet, builtin_dir
 from homelink.net import ping, ports_open, run_command
 from homelink.rdp import ensure_rdp_file, open_rdp
 from homelink.router import MikroTikRouter
@@ -30,8 +31,24 @@ MB_DEFBUTTON2 = 0x00000100
 MB_SETFOREGROUND = 0x00010000
 MB_TOPMOST = 0x00040000
 IDYES = 6
+MB_OK = 0x00000000
+MB_ICONINFORMATION = 0x00000040
+
+PERSONALIZE_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
 
 log = logging.getLogger(__name__)
+
+
+def taskbar_theme() -> str:
+    """``light`` when Windows uses a light taskbar, otherwise ``dark``."""
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, PERSONALIZE_KEY) as key:
+            value, kind = winreg.QueryValueEx(key, "SystemUsesLightTheme")
+    except OSError:
+        return "dark"
+    return "light" if kind == winreg.REG_DWORD and value == 1 else "dark"
 
 
 class TrayApp:
@@ -39,7 +56,9 @@ class TrayApp:
         self.config = config
         self.config_path = config_path
         self.t = translate
-        self.icons = IconSet(Path(config.icons_dir) if config.icons_dir else BUILTIN_DIR)
+        self.icons = IconSet(
+            Path(config.icons_dir) if config.icons_dir else builtin_dir(taskbar_theme())
+        )
         self.controller = Controller(
             config=config,
             tunnel=WireGuardTunnel(config.wireguard_exe, config.tunnel_conf),
@@ -90,18 +109,20 @@ class TrayApp:
         connect_and_wake = self._in_thread(self.controller.connect_and_wake)
 
         return Menu(
-            # pystray looks for the default item among the top-level items only (invisible
-            # ones included), so the left click gets its own hidden entry
-            Item(self.t("menu.wake"), connect_and_wake, default=True, visible=False),
+            Item(self.t("menu.status"), self._in_thread(self._show_status), default=True),
+            Menu.SEPARATOR,
             Item(
                 lambda _: self.t("menu.tunnel", state=self.t(f"tunnel.{status().tunnel}")),
                 self._in_thread(self.controller.toggle_tunnel),
                 checked=lambda _: status().tunnel is TunnelState.UP,
+                enabled=lambda _: not self.controller.busy,
             ),
+            Menu.SEPARATOR,
             Item(
                 lambda _: self.t("menu.pc", state=self.t(f"pc.{status().pc}")),
                 Menu(
                     Item(self.t("menu.wake"), connect_and_wake, enabled=can_wake),
+                    Menu.SEPARATOR,
                     Item(
                         self.t("menu.suspend"),
                         self._confirmed("confirm.suspend", self.controller.suspend),
@@ -114,6 +135,7 @@ class TrayApp:
                     ),
                 ),
             ),
+            Menu.SEPARATOR,
             Item(self.t("menu.rdp"), self._open_rdp, enabled=pc_online),
             Menu.SEPARATOR,
             Item(self.t("menu.settings"), self._open_config),
@@ -149,6 +171,17 @@ class TrayApp:
         flags = MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND | MB_TOPMOST
         answer = ctypes.windll.user32.MessageBoxW(None, question, self.t("confirm.title"), flags)
         return answer == IDYES
+
+    def _show_status(self) -> None:
+        status = self.controller.status
+        text = self.t(
+            "status.text",
+            version=homelink.__version__,
+            tunnel=self.t(f"tunnel.{status.tunnel}"),
+            pc=self.t(f"pc.{status.pc}"),
+        )
+        flags = MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST
+        ctypes.windll.user32.MessageBoxW(None, text, self.t("confirm.title"), flags)
 
     def _open_rdp(self, *_: object) -> None:
         path = self.config_path.parent / self.config.rdp_file

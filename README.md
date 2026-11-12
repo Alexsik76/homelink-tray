@@ -8,13 +8,18 @@ and of the PC in the tray icon.
 
 ## How it works
 
-- **Left click** on the icon: bring the tunnel up, check the PC's ports and, when it is silent,
-  send Wake-on-LAN. A notification appears once the PC answers.
-- **Right click**: three groups. *Tunnel* (checked while connected) connects or disconnects
-  the tunnel. *Home PC* (a submenu) wakes, puts to sleep or shuts down the PC; the last two
-  ask for a confirmation. *Open RDP* opens the remote desktop. Below: the settings file, quit.
-- **Icon**: the screen colour is the PC state (green: online, amber: waking, grey: off),
-  the badge is the tunnel state (blue: connected, yellow: connecting, red: off).
+- **Left click** on the icon: a box with the program version and the state of the tunnel
+  and of the PC. It only displays information.
+- **Right click**: *Status* (the same box), then *Tunnel* (checked while connected), which
+  connects or disconnects the tunnel. *Home PC* (a submenu that shows the PC state) wakes,
+  puts to sleep or shuts down the PC; the last two ask for a confirmation. *Open RDP*
+  opens the remote desktop. Below: the settings file, quit.
+- **Icon**: the screen colour and glyph show the PC (green check: online, amber dots:
+  waking, grey power symbol: off, dark "?": unknown), the badge shows the tunnel (blue:
+  connected, yellow: connecting, red and crossed: off). The PC is only shown while the
+  tunnel is up.
+- **Notifications**: when the PC answers after waking, and when the tunnel or the PC is
+  lost without being asked to.
 
 The magic packet is sent by the router, not by this computer: a broadcast frame does
 not travel through a routed tunnel. The program calls the router's REST API
@@ -132,10 +137,16 @@ reg add "HKLM\Software\Policies\Microsoft\Windows NT\Terminal Services" `
 
 ## Custom icons
 
-An icon set is twelve PNG files named `<pc state>_<tunnel state>.png`, where the PC
-state is `unknown`, `offline`, `waking` or `online` and the tunnel state is `down`,
-`starting` or `up`. Put them in a folder and point `icons_dir` at it. The built-in set
-is produced by `python tools/generate_icons.py`.
+There are two built-in sets: `light` (a dark monitor, for a light taskbar) and `dark` (a
+light monitor, for a dark taskbar). When `icons_dir` is empty, the program picks one at
+start-up from the Windows taskbar theme (`SystemUsesLightTheme`; anything but a light
+taskbar means `dark`). Restart the program after changing the theme.
+
+A custom set is still twelve PNG files in one folder, named `<pc state>_<tunnel state>.png`,
+where the PC state is `unknown`, `offline`, `waking` or `online` and the tunnel state is
+`down`, `starting` or `up`. Point `icons_dir` at that folder; it overrides the automatic
+choice. The built-in sets are produced by `python tools/generate_icons.py`, which also
+writes a contact sheet to `build\icon-preview.png`.
 
 ## Development
 

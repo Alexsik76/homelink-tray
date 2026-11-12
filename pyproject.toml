@@ -28,7 +28,7 @@ homelink = "homelink.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-homelink = ["assets/*.ico", "assets/icons/*.png", "locales/*.json", "config.example.json"]
+homelink = ["assets/*.ico", "assets/icons/light/*.png", "assets/icons/dark/*.png", "locales/*.json", "config.example.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

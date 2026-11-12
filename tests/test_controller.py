@@ -252,3 +252,74 @@ def test_power_action_is_skipped_while_busy(online):
     online.controller.shutdown()
     assert online.commands == []
     assert online.notes == []
+
+
+# ---------- loss notifications ----------
+def test_tunnel_lost_is_notified_once(online):
+    online.tunnel.running = False  # the service stopped without being asked to
+    online.controller.refresh()
+    online.controller.refresh()
+    assert online.status == Status(TunnelState.DOWN, PcState.UNKNOWN)
+    assert online.notes == [("notify.tunnel_lost", {})]
+
+
+def test_user_disconnect_is_not_reported_as_lost(online):
+    online.controller.toggle_tunnel()
+    online.controller.refresh()
+    assert online.status == Status(TunnelState.DOWN, PcState.UNKNOWN)
+    assert online.notes == []
+
+
+def test_pc_lost_is_notified_after_configured_failures(online):
+    online.reachable.discard(online.config.pc_ip)
+    for _ in range(online.config.offline_after_failures - 1):
+        online.controller.refresh()
+        assert online.notes == []
+    online.controller.refresh()
+    assert online.status.pc is PcState.OFFLINE
+    assert online.notes == [("notify.pc_lost", {})]
+    online.controller.refresh()
+    assert online.notes == [("notify.pc_lost", {})]
+
+
+@pytest.mark.parametrize("action", ["shutdown", "suspend"])
+def test_pc_going_down_after_power_command_is_silent(online, action):
+    getattr(online.controller, action)()
+    online.notes.clear()
+    online.reachable.discard(online.config.pc_ip)
+    for _ in range(online.config.offline_after_failures):
+        online.controller.refresh()
+    assert online.status.pc is PcState.OFFLINE
+    assert online.notes == []
+
+
+def test_pc_lost_is_notified_again_after_it_was_seen_online(online):
+    online.controller.suspend()
+    online.reachable.discard(online.config.pc_ip)
+    for _ in range(online.config.offline_after_failures):
+        online.controller.refresh()
+    online.reachable.add(online.config.pc_ip)  # woken up by hand
+    online.controller.refresh()
+    online.notes.clear()
+    online.reachable.discard(online.config.pc_ip)
+    for _ in range(online.config.offline_after_failures):
+        online.controller.refresh()
+    assert online.notes == [("notify.pc_lost", {})]
+
+
+def test_failed_power_command_does_not_silence_pc_lost(online):
+    online.command_result = (255, "Permission denied")
+    online.controller.shutdown()
+    online.notes.clear()
+    online.reachable.discard(online.config.pc_ip)
+    for _ in range(online.config.offline_after_failures):
+        online.controller.refresh()
+    assert online.notes == [("notify.pc_lost", {})]
+
+
+def test_pc_lost_is_silent_when_tunnel_goes_down(online):
+    online.tunnel.running = False
+    online.reachable.discard(online.config.pc_ip)
+    online.controller.refresh()
+    assert online.status == Status(TunnelState.DOWN, PcState.UNKNOWN)
+    assert ("notify.pc_lost", {}) not in online.notes
