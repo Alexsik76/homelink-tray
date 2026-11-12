@@ -15,6 +15,7 @@
   "panel.add_pc": "Add PC",
   "panel.settings": "Settings",
   "panel.about": "About",
+  "panel.show": "Show panel",
   "panel.quit": "Quit",
   "action.tunnel_connect": "Connect",
   "action.tunnel_disconnect": "Disconnect",

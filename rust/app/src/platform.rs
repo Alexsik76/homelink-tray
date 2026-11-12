@@ -2,16 +2,27 @@
 //! for startup errors. The Windows calls are in the `win32` module behind `cfg(windows)`;
 //! other platforms get plain versions, so the crate also builds for checks on Linux.
 
-use crate::view::Panel;
-#[cfg(windows)]
+use std::time::Duration;
+
 use slint::ComponentHandle;
 
+use crate::view::Panel;
+#[cfg(not(windows))]
+use slint::winit_030::WinitWindowAccessor;
+
 /// Width of the panel in logical pixels.
-#[cfg(windows)]
 const PANEL_WIDTH: f32 = 420.0;
 /// Gap between the panel and the corner of the work area, in logical pixels.
-#[cfg(windows)]
 const MARGIN: f32 = 8.0;
+
+/// After the panel is shown, a focus loss within this time does not hide it. Some desktops
+/// move the focus once more right after a tray menu closes, which would hide a panel that was
+/// just opened from that menu. Windows has no such pass and keeps the plain focus-loss rule.
+pub(crate) const SHOW_FOCUS_GRACE: Duration = if cfg!(windows) {
+    Duration::ZERO
+} else {
+    Duration::from_millis(500)
+};
 
 /// Selects the winit backend with the software renderer, as the prototype did. On Windows the
 /// panel is kept off the taskbar.
@@ -41,9 +52,33 @@ pub(crate) fn place_panel(panel: &Panel) {
     ));
 }
 
-/// Other platforms have no work area to anchor to; the window manager places the panel.
+/// Puts the panel in the bottom-right corner of the monitor it is on (or of the primary
+/// monitor). Unlike the Windows version it does not leave room for a taskbar, which this
+/// code cannot see. Does nothing while the window does not exist yet, so it is called again
+/// after the panel is shown; Wayland ignores positions and keeps the compositor's placement.
 #[cfg(not(windows))]
-pub(crate) fn place_panel(_panel: &Panel) {}
+pub(crate) fn place_panel(panel: &Panel) {
+    let scale = panel.window().scale_factor();
+    let w = (PANEL_WIDTH * scale).round() as i32;
+    let h = (panel.get_content_height() * scale).round() as i32;
+    let m = (MARGIN * scale).round() as i32;
+    let corner = panel
+        .window()
+        .with_winit_window(|window| {
+            let monitor = window
+                .current_monitor()
+                .or_else(|| window.primary_monitor())?;
+            let origin = monitor.position();
+            let size = monitor.size();
+            Some((origin.x + size.width as i32, origin.y + size.height as i32))
+        })
+        .flatten();
+    if let Some((right, bottom)) = corner {
+        panel
+            .window()
+            .set_position(slint::PhysicalPosition::new(right - w - m, bottom - h - m));
+    }
+}
 
 /// Shows an error the user must see before the program exits. The Windows build has no
 /// console, so this is a message box there and standard error elsewhere.

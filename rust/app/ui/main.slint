@@ -17,6 +17,7 @@ export global Strings {
     in-out property <string> rdp;
     in-out property <string> yes;
     in-out property <string> no;
+    in-out property <string> show-panel;
     in-out property <string> quit;
 }
 
@@ -299,6 +300,11 @@ export component Tray inherits SystemTrayIcon {
                 : root.badge == LinkState.starting ? @image-url("../../../src/homelink/assets/icons/dark/unknown_starting.png")
                 : @image-url("../../../src/homelink/assets/icons/dark/unknown_down.png"));
     Menu {
+        // The same action as a click on the icon, for desktops that do not deliver that click.
+        MenuItem {
+            title: Strings.show-panel;
+            activated => { root.toggle-panel(); }
+        }
         MenuItem {
             title: Strings.quit;
             activated => { root.quit-requested(); }

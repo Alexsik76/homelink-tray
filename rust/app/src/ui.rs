@@ -65,6 +65,8 @@ pub(crate) struct Ui {
     state: RefCell<State>,
     /// When the panel last lost focus (see [`REOPEN_GUARD`]).
     blurred_at: Cell<Option<Instant>>,
+    /// When the panel was last shown (see [`platform::SHOW_FOCUS_GRACE`]).
+    shown_at: Cell<Option<Instant>>,
 }
 
 #[derive(Default)]
@@ -86,6 +88,7 @@ pub(crate) fn install(panel: &Panel, tray: &Tray, tr: Translator, handle: Handle
         handle,
         state: RefCell::default(),
         blurred_at: Cell::new(None),
+        shown_at: Cell::new(None),
     });
     wire(panel, tray, &ui);
     UI.with(|slot| *slot.borrow_mut() = Some(ui));
@@ -101,8 +104,9 @@ fn fill_strings(panel: &Panel, tray: &Tray, tr: &Translator) {
     s.set_rdp(tr.t("action.rdp", &[]).into());
     s.set_yes(tr.t("confirm.yes", &[]).into());
     s.set_no(tr.t("confirm.no", &[]).into());
-    tray.global::<Strings>()
-        .set_quit(tr.t("panel.quit", &[]).into());
+    let menu = tray.global::<Strings>();
+    menu.set_show_panel(tr.t("panel.show", &[]).into());
+    menu.set_quit(tr.t("panel.quit", &[]).into());
 }
 
 fn wire(panel: &Panel, tray: &Tray, ui: &Rc<Ui>) {
@@ -330,13 +334,24 @@ impl Ui {
         {
             return;
         }
+        // Placed before showing (Windows) and again after (other platforms, where the window
+        // exists only once it is shown).
         platform::place_panel(&panel);
         let _ = panel.show();
+        self.shown_at.set(Some(Instant::now()));
+        platform::place_panel(&panel);
         panel.invoke_focus_panel();
         let _ = panel.window().with_winit_window(|w| w.focus_window());
     }
 
     fn focus_lost(&self) {
+        if self
+            .shown_at
+            .get()
+            .is_some_and(|t| t.elapsed() < platform::SHOW_FOCUS_GRACE)
+        {
+            return;
+        }
         self.blurred_at.set(Some(Instant::now()));
         self.hide();
     }

@@ -15,6 +15,7 @@
   "panel.add_pc": "Додати ПК",
   "panel.settings": "Налаштування",
   "panel.about": "Про програму",
+  "panel.show": "Показати панель",
   "panel.quit": "Вийти",
   "action.tunnel_connect": "Підключити",
   "action.tunnel_disconnect": "Відключити",
