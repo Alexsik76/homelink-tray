@@ -588,15 +588,11 @@ fn validate_power(ctx: &mut Ctx, path: &str, raw: &RawPower) -> Option<PowerMeth
         } => {
             let user_ok = check_ssh_user(ctx, &format!("{path}.user"), user);
             let port = ctx.port(&format!("{path}.port"), *port);
-            let identity_ok = match identity_file {
-                Some(f) => ctx.non_empty(&format!("{path}.identity_file"), f),
-                None => true,
-            };
-            identity_ok.then_some(())?;
+            let key_ok = check_absolute_path(ctx, &format!("{path}.identity_file"), identity_file);
             Some(PowerMethod::Ssh {
                 user: user_ok.then(|| user.clone())?,
                 port: port?,
-                identity_file: identity_file.clone(),
+                identity_file: key_ok.then(|| identity_file.clone())?,
             })
         }
         RawPower::Command { sleep, shutdown } => {

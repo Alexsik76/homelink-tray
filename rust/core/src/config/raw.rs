@@ -165,8 +165,7 @@ pub enum RawPower {
     Ssh {
         user: String,
         port: i64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        identity_file: Option<String>,
+        identity_file: String,
     },
     Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]

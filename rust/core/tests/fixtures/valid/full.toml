@@ -50,6 +50,7 @@ interface = "bridge"
 method = "ssh"
 user = "alex"
 port = 22
+identity_file = 'C:\ProgramData\HomeLink\desktop_ed25519'
 
 [pcs.rdp]
 user = "alex"

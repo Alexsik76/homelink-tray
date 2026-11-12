@@ -381,6 +381,7 @@ interface = "bridge"
 method = "ssh"
 user = "alex"
 port = 22
+identity_file = 'C:\HomeLink\pc_key'
 
 [pcs.rdp]
 user = "alex"
@@ -446,6 +447,7 @@ port = 9
 method = "ssh"
 user = "admin"
 port = 22
+identity_file = 'C:\HomeLink\pc_key'
 "#;
 
 /// One tunnel (`home`, probe host `192.168.88.1`) and one PC (`desktop`, `192.168.88.10`):

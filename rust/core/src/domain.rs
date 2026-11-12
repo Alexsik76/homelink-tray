@@ -475,8 +475,9 @@ pub enum PowerMethod {
         user: String,
         /// Remote port.
         port: u16,
-        /// Private key file; `None` leaves the choice to `ssh`.
-        identity_file: Option<String>,
+        /// Absolute path of the private key file. Explicit on purpose: the program runs
+        /// elevated and must not depend on which profile `ssh` resolves.
+        identity_file: String,
     },
     /// Arbitrary commands run on this computer; an action without a command is unavailable.
     Command {

@@ -12,9 +12,7 @@ use std::time::Duration;
 
 use crate::domain::{InterfaceName, MacAddr, Router, WakeMethod};
 use crate::ports::{CommandRunner, WakeError, WakeRequest, WakeSender};
-
-/// The program that is run; resolved through `PATH` by the runner.
-pub const SSH_PROGRAM: &str = "ssh";
+use crate::ssh::{SshTarget, ssh_argv};
 
 /// The RouterOS command that sends the magic packet.
 ///
@@ -24,39 +22,16 @@ pub fn routeros_wol_command(mac: &MacAddr, interface: &InterfaceName) -> String 
     format!("/tool wol mac={mac} interface={interface}")
 }
 
-/// The `ssh` command line that runs `remote_command` on a router.
-///
-/// Options, in order: key authentication only, the key given explicitly and no other
-/// (`IdentitiesOnly`), the host key must already be known (`StrictHostKeyChecking=yes`),
-/// the connection timeout, port and user as separate arguments, then `--`, the host and the
-/// remote command as a single argument.
+/// The `ssh` command line that runs `remote_command` on a router (see [`crate::ssh`]).
 pub fn router_ssh_argv(router: &Router, remote_command: &str) -> Vec<String> {
-    let connect_timeout = router.timeout.as_secs().max(1);
-    let mut argv: Vec<String> = [
-        crate::wake::SSH_PROGRAM,
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "PasswordAuthentication=no",
-        "-o",
-        "IdentitiesOnly=yes",
-        "-o",
-        "StrictHostKeyChecking=yes",
-    ]
-    .map(str::to_owned)
-    .into();
-    argv.push("-o".into());
-    argv.push(format!("ConnectTimeout={connect_timeout}"));
-    argv.push("-i".into());
-    argv.push(router.identity_file.clone());
-    argv.push("-p".into());
-    argv.push(router.port.to_string());
-    argv.push("-l".into());
-    argv.push(router.user.clone());
-    argv.push("--".into());
-    argv.push(router.host.to_string());
-    argv.push(remote_command.to_owned());
-    argv
+    let target = SshTarget {
+        host: &router.host,
+        port: router.port,
+        user: &router.user,
+        identity_file: &router.identity_file,
+        timeout: router.timeout,
+    };
+    ssh_argv(&target, remote_command)
 }
 
 /// Wakes a PC through a MikroTik router over SSH.

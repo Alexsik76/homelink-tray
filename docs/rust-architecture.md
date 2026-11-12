@@ -41,6 +41,7 @@ rust/
       engine.rs         event loop, job executor, snapshot publishing
       snapshot.rs       what the engine publishes to the UI
       ports.rs          traits that isolate side effects (section 6)
+      ssh.rs            the shared `ssh` argument list and the PC power commands
       wake.rs           wake sender that runs `ssh` through `CommandRunner` (argv building
                         is pure); phase 3 adds the other portable senders
       adapters/         (phase 3) portable adapters: tcp probe, magic packet, command runner
@@ -89,7 +90,7 @@ WakeMethod  = MikrotikSsh  { router, mac, interface: InterfaceName }   // #[non_
             | MagicPacket  { mac, broadcast, port }          // UDP, default 255.255.255.255:9
             | Command      { argv, mac: Option<Mac>, timeout }
 PowerAction = Sleep | Shutdown
-PowerMethod = Ssh     { user, port, identity_file: Option<path> }   // system ssh client
+PowerMethod = Ssh     { user, port, identity_file }   // system ssh client, key required
             | Command { sleep: Option<argv>, shutdown: Option<argv> }
 Rdp         { user, options }
 Timing      { poll, wake_poll, port_timeout, offline_after_failures, wake_timeout,
@@ -108,6 +109,13 @@ element. SSH presets by `Os`:
 Windows sleep through `SetSuspendState` hibernates when hibernation is enabled; the wizard
 says so. A `Command` power method covers anything else.
 
+An SSH power action runs the same kind of argument list as the router wake below, built by
+`core::ssh::power_ssh_argv` from the PC's `user`, `port`, `identity_file` and `host`, with
+the remote command from the table above as one argument and `ConnectTimeout` taken from
+`power_timeout`. The key is always passed with `-i <identity_file>` and `IdentitiesOnly=yes`
+(an explicit absolute path: the program runs elevated and must not depend on which profile
+`ssh` resolves), exactly as for routers; there is no mode in which `ssh` chooses the key.
+
 **Waking through a MikroTik router.** The sender runs, through `CommandRunner`, the system
 client with this argument list (never a shell string):
 
@@ -125,8 +133,8 @@ syntax. The remote command is one argument. The key is an explicit absolute path
 runs elevated and must not depend on which profile `ssh` would resolve); `IdentitiesOnly`
 stops `ssh` from offering other keys. The host key must already be known
 (`StrictHostKeyChecking=yes`): the wizard is the only place that may accept a new one
-(section 4). Argument building is pure and unit-tested in `core::wake`; the process itself is
-started by the `CommandRunner` adapter (phase 3).
+(section 4). Argument building is pure and unit-tested in `core::wake` and `core::ssh`; the
+process itself is started by the `CommandRunner` adapter (phase 3).
 
 States (as in `state.py`, now per entity):
 
@@ -383,7 +391,7 @@ ports = [3389]
   method = "ssh"             # or "command" with sleep = [...], shutdown = [...]
   user = "user"
   port = 22
-  # identity_file = '...'    # optional; without it ssh chooses the key
+  identity_file = 'C:\ProgramData\HomeLink\desktop_ed25519'   # required, absolute path
 
   [pcs.rdp]                  # omit to hide the RDP action
   user = "user"
@@ -412,11 +420,13 @@ Validation (all problems are collected and reported together, each with its path
    and, when the wake command has a `mac`, `{mac}`; no shell strings.
 10. WireGuard: `conf` file name ends with `.conf` or `.conf.dpapi`; the derived tunnel name
     matches WireGuard's `[A-Za-z0-9_=+.-]{1,32}`.
-11. `power.method = "ssh"` needs `user`; `"command"` needs at least one of sleep/shutdown.
-    An SSH user (power and router) has no blanks or `@` and does not start with `-`.
-12. Router access: `port` 1-65535; `identity_file` is required and must be an absolute path
-    (`C:\...`, `C:/...`, `\\server\...` or `/...`), so the elevated program never depends on
-    which profile `ssh` resolves. Keys that held REST or password settings (`api_url`,
+11. `power.method = "ssh"` needs `user`, `port` and `identity_file`; `"command"` needs at least
+    one of sleep/shutdown. An SSH user (power and router) has no blanks or `@` and does not
+    start with `-`.
+12. SSH access (routers and SSH power methods): `port` 1-65535; `identity_file` is required and
+    must be an absolute path (`C:\...`, `C:/...`, `\\server\...` or `/...`), so the elevated
+    program never depends on which profile `ssh` resolves; the error names the path, for
+    example `pcs[0].power.identity_file`. Keys that held REST or password settings (`api_url`,
     `password_ref`, `verify_tls`, `password`) are unknown keys and rejected. The file is not
     opened at load; a missing key file surfaces as an `ssh` error in a notice.
 13. `log.file` and `rdp` paths stay inside the config directory (no `..`, no absolute paths).
@@ -499,7 +509,9 @@ any password.
   with an empty passphrase into a dedicated file, so the elevated program can use it
   unattended; the file's location is a per-machine folder chosen in phase 4, restricted to
   the user and administrators) or "use an existing key" (a file picker). The configuration
-  stores only the absolute path. The wizard shows the public key for the user to install.
+  stores only the absolute path. A key is required for every SSH router and every SSH power
+  method; the wizard does not offer "let ssh choose". The wizard shows the public key for the
+  user to install.
 - *Router side.* For a MikroTik router the wizard displays the RouterOS commands to run on
   the router, with the user name, key file name and the address of this computer filled in:
   create a group that can only log in over SSH and run `/tool wol` (policies `ssh`, `read`,
@@ -509,7 +521,8 @@ any password.
   and kept in one place in core so tests and the wizard share them.
 - *PC side.* For an SSH power method the wizard shows the line to add to `authorized_keys`
   and, for Linux, the `sudoers` line from the README.
-- *Test connection.* Runs `ssh` with `BatchMode=yes` and `StrictHostKeyChecking=yes`. If the
+- *Test connection.* Runs `ssh` with the same options as at run time (`BatchMode=yes`,
+  `IdentitiesOnly=yes`, `-i <key>`, `StrictHostKeyChecking=yes`). If the
   host key is unknown, the wizard shows its fingerprint and asks for explicit consent
   (`wizard.ssh.host_key_unknown`, `wizard.ssh.trust`); only on consent does it repeat the test
   with `StrictHostKeyChecking=accept-new`. This replaces the manual first `ssh` from the

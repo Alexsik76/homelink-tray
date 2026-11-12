@@ -636,12 +636,53 @@ fn ssh_needs_a_safe_user_and_a_port() {
         "pcs[0].power.port",
         "1 to 65535",
     );
+}
+
+#[test]
+fn ssh_power_key_must_be_an_explicit_absolute_path() {
+    let key = r"identity_file = 'C:\ProgramData\HomeLink\desktop_ed25519'";
+    for bad in [
+        "",
+        "id_ed25519",
+        r"..\id_ed25519",
+        r"~/.ssh/id_ed25519",
+        r"C:id_ed25519",
+        r"keys\id_ed25519",
+    ] {
+        rejected(
+            &change(key, &format!("identity_file = '{bad}'")),
+            "pcs[0].power.identity_file",
+            "",
+        );
+    }
+    // The second SSH PC (the NAS) is reported under its own index.
     rejected(
-        &change("port = 2222", "port = 2222\nidentity_file = ''")
-            .replace("identity_file = '/home/alex/.ssh/id_nas'\n", ""),
+        &change(
+            "identity_file = '/home/alex/.ssh/id_nas'",
+            "identity_file = 'id_nas'",
+        ),
         "pcs[2].power.identity_file",
-        "must not be empty",
+        "absolute path",
     );
+    for good in [
+        r"C:\Users\me\.ssh\desktop",
+        "C:/Users/me/.ssh/desktop",
+        r"\\server\share\desktop",
+        "/home/me/.ssh/desktop",
+    ] {
+        accepted(&change(key, &format!("identity_file = '{good}'")));
+    }
+}
+
+#[test]
+fn ssh_power_without_a_key_is_an_error() {
+    let text = without_line("identity_file = 'C:\\ProgramData\\HomeLink\\desktop_ed25519'");
+    match config::parse(&text) {
+        Err(ConfigError::Syntax(e)) => {
+            assert!(e.message.contains("identity_file"), "{e}");
+        }
+        other => panic!("expected a missing-field error, got {other:?}"),
+    }
 }
 
 #[test]

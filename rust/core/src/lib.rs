@@ -14,6 +14,7 @@ pub mod machine;
 pub mod notice;
 pub mod ports;
 pub mod snapshot;
+pub mod ssh;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod wake;
