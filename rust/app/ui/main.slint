@@ -84,12 +84,13 @@ component TunnelButton inherits Rectangle {
 component ActionButton inherits Rectangle {
     in property <string> label;
     in property <bool> active: true;
+    in property <length> text-padding: 6px;
     callback clicked();
     height: 26px;
     background: (root.active && ta.has-hover) ? #e6e6e6 : transparent;
     HorizontalLayout {
-        padding-left: 6px;
-        padding-right: 6px;
+        padding-left: root.text-padding;
+        padding-right: root.text-padding;
         Text {
             text: root.label;
             color: root.active ? #1a1a1a : #9a9a9a;
@@ -150,24 +151,33 @@ component PcRowView inherits VerticalLayout {
     }
     if !root.pc.asking : HorizontalLayout {
         spacing: 2px;
+        // Four equal cells across the row, so the short labels fit without elision.
         ActionButton {
             label: Strings.wake;
             active: root.pc.can-wake;
+            text-padding: 2px;
+            horizontal-stretch: 1;
             clicked => { root.wake-clicked(); }
         }
         ActionButton {
             label: Strings.sleep;
             active: root.pc.can-sleep;
+            text-padding: 2px;
+            horizontal-stretch: 1;
             clicked => { root.ask-power(PowerKind.sleep); }
         }
         ActionButton {
             label: Strings.shutdown;
             active: root.pc.can-shutdown;
+            text-padding: 2px;
+            horizontal-stretch: 1;
             clicked => { root.ask-power(PowerKind.shutdown); }
         }
         ActionButton {
             label: Strings.rdp;
             active: root.pc.can-rdp;
+            text-padding: 2px;
+            horizontal-stretch: 1;
             clicked => { root.rdp-clicked(); }
         }
     }
@@ -239,7 +249,7 @@ export component Panel inherits Window {
                 for g in root.groups : HorizontalLayout {
                     spacing: 8px;
                     VerticalLayout {
-                        width: 110px;
+                        width: 96px;
                         alignment: start;
                         if g.has-tunnel : TunnelButton {
                             label: g.tunnel-name;

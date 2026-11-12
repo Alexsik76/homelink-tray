@@ -22,7 +22,7 @@
   "action.wake": "Wake",
   "action.sleep": "Sleep",
   "action.shutdown": "Shut down",
-  "action.rdp": "Open RDP",
+  "action.rdp": "RDP",
   "action.edit": "Edit",
   "action.delete": "Delete",
   "confirm.title": "HomeLink",
