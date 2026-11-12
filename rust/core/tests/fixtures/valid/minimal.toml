@@ -1,0 +1,14 @@
+version = 1
+language = "en"
+
+[log]
+file = "homelink.log"
+level = "warn"
+
+[defaults]
+poll_seconds = 5
+wake_poll_seconds = 2
+port_timeout_ms = 1000
+offline_after_failures = 1
+wake_timeout = 60
+power_timeout = 10

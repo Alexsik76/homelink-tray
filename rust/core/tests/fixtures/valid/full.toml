@@ -1,0 +1,96 @@
+version = 1
+language = "auto"
+
+[log]
+file = "homelink.log"
+level = "info"
+
+[defaults]
+poll_seconds = 5
+wake_poll_seconds = 2
+port_timeout_ms = 1000
+offline_after_failures = 3
+wake_timeout = 180
+power_timeout = 15
+
+[[tunnels]]
+id = "home"
+name = "Home"
+kind = "wireguard"
+conf = 'C:\Program Files\WireGuard\Data\Configurations\home.conf.dpapi'
+wireguard_exe = 'C:\Program Files\WireGuard\wireguard.exe'
+probe_host = "192.168.88.1"
+timeout = 20
+ping_timeout_ms = 1000
+
+[[routers]]
+id = "mikrotik"
+kind = "mikrotik"
+api_url = "http://192.168.88.1"
+user = "homelink"
+password_ref = "HomeLink/router/mikrotik"
+verify_tls = false
+timeout = 8
+
+[[pcs]]
+id = "desktop"
+name = "Desktop"
+os = "linux"
+host = "192.168.88.10"
+tunnel = "home"
+ports = [3389]
+
+[pcs.wake]
+method = "mikrotik"
+router = "mikrotik"
+mac = "AA:BB:CC:DD:EE:FF"
+interface = "bridge"
+
+[pcs.power]
+method = "ssh"
+user = "alex"
+port = 22
+
+[pcs.rdp]
+user = "alex"
+options = ["use redirection server name:i:1", "screen mode id:i:2"]
+
+[pcs.timing]
+poll_seconds = 10
+
+[[pcs]]
+id = "laptop"
+name = "Laptop"
+os = "windows"
+host = "laptop.home.lan"
+tunnel = "home"
+ports = [3389, 445]
+
+[pcs.wake]
+method = "command"
+command = ["wakeonlan", "{mac}"]
+mac = "11-22-33-44-55-66"
+timeout = 15
+
+[pcs.power]
+method = "command"
+sleep = ["ssh", "-o", "BatchMode=yes", "alex@{host}", "rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"]
+
+[[pcs]]
+id = "nas"
+name = "NAS"
+os = "linux"
+host = "10.0.0.7"
+ports = [22]
+
+[pcs.wake]
+method = "magic_packet"
+mac = "AA:BB:CC:00:00:07"
+broadcast = "10.0.0.255"
+port = 9
+
+[pcs.power]
+method = "ssh"
+user = "admin"
+port = 2222
+identity_file = '/home/alex/.ssh/id_nas'
