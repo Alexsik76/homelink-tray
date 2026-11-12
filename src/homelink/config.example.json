@@ -1,0 +1,40 @@
+{
+  "language": "uk",
+
+  "wireguard_exe": "C:\\Program Files\\WireGuard\\wireguard.exe",
+  "tunnel_conf": "C:\\Program Files\\WireGuard\\Data\\Configurations\\home.conf.dpapi",
+  "tunnel_timeout": 20,
+
+  "router_ip": "192.168.88.1",
+  "router_api": "http://192.168.88.1",
+  "router_user": "homelink",
+  "router_password": "",
+  "router_verify_tls": false,
+  "router_timeout": 8,
+
+  "wol_mac": "AA:BB:CC:DD:EE:FF",
+  "wol_interface": "bridge",
+
+  "pc_ip": "192.168.88.10",
+  "pc_ports": [3389],
+  "port_timeout_ms": 1000,
+  "offline_after_failures": 3,
+  "ping_timeout_ms": 1000,
+  "poll_seconds": 5,
+  "wake_poll_seconds": 2,
+  "wake_timeout": 180,
+
+  "rdp_user": "user",
+  "rdp_file": "home.rdp",
+  "rdp_options": [
+    "use redirection server name:i:1",
+    "prompt for credentials:i:0",
+    "authentication level:i:2",
+    "screen mode id:i:2"
+  ],
+
+  "icons_dir": "",
+
+  "log_file": "homelink.log",
+  "log_level": "INFO"
+}
