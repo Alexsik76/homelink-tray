@@ -37,6 +37,7 @@ rust/
       config/           schema (serde), defaults, validation, load/save
       machine/          sans-IO state machine (section 5)
       engine.rs         event loop, job executor, snapshot publishing
+      snapshot.rs       what the engine publishes to the UI
       ports.rs          traits that isolate side effects (section 6)
       adapters/         portable adapters: tcp probe, magic packet, command runner,
                         MikroTik REST client
@@ -112,8 +113,9 @@ PcState     = Unknown | Offline | Waking | Online
 A PC with a tunnel is `Unknown` whenever its tunnel is not `Up`. A PC without a tunnel is
 probed directly and is `Unknown` only until its first probe.
 
-Commands (UI to engine): `ToggleTunnel(id)`, `Wake(pc)`, `Power(pc, action)`,
-`OpenRdp(pc)`, `Reload(config)`, `Shutdown`. Semantics of `Wake(pc)`: tunnel PC with the
+Commands (UI to engine): `ToggleTunnel(id)`, `Wake(pc)`, `Power(pc, action)` are machine
+commands; stopping is `Handle::stop`; `OpenRdp(pc)` is handled by the app (it only launches
+`mstsc`) and `Reload(config)` arrives with phase 5. Semantics of `Wake(pc)`: tunnel PC with the
 tunnel not `Up` means connect-and-wake (the old `connect_and_wake`); otherwise send the
 wake request. Ignored while the PC is `Online` or `Waking`.
 
@@ -152,8 +154,11 @@ an `Online` PC and the matching configuration (same rules as `app.py` `can_wake`
 Waiting for the tunnel (the `_start_tunnel` loop) is a deadline stored in state plus
 1 s probes, not a blocked thread. Consequences: no global lock; a tunnel stuck in
 `Starting` can always be toggled off (the intent of design.md "Tunnel item while connecting");
-operations are serialised per entity: at most one in-flight job per tunnel and per PC, a
-second command for the same entity is dropped with a log line (as `busy.acquire(blocking=False)`).
+operations are serialised per entity: at most one in-flight *action* (tunnel start or stop;
+PC connect check, wake or power command) per tunnel and per PC, a second command for the same
+entity is dropped with a log line (as `busy.acquire(blocking=False)`). A passive probe may run
+alongside an action so that a click is never lost behind a slow probe; its result is ignored
+while the action runs (as `refresh()` was skipped while `busy`).
 
 ### 5.2 Tunnel transitions
 

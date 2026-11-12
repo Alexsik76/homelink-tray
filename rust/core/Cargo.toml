@@ -18,3 +18,15 @@ toml = "0.9"
 
 [lints]
 workspace = true
+
+[[test]]
+name = "controller_parity"
+required-features = ["testing"]
+
+[[test]]
+name = "multi_pc"
+required-features = ["testing"]
+
+[[test]]
+name = "engine"
+required-features = ["testing"]

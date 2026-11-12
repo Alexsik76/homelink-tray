@@ -456,6 +456,28 @@ pub enum WakeMethod {
     },
 }
 
+/// The kind of a [`WakeMethod`], used to pick the sender that implements it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WakeKind {
+    /// [`WakeMethod::MikrotikRest`].
+    MikrotikRest,
+    /// [`WakeMethod::MagicPacket`].
+    MagicPacket,
+    /// [`WakeMethod::Command`].
+    Command,
+}
+
+impl WakeMethod {
+    /// The kind of this method.
+    pub fn kind(&self) -> WakeKind {
+        match self {
+            Self::MikrotikRest { .. } => WakeKind::MikrotikRest,
+            Self::MagicPacket { .. } => WakeKind::MagicPacket,
+            Self::Command { .. } => WakeKind::Command,
+        }
+    }
+}
+
 /// An action that changes the power state of a PC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PowerAction {
