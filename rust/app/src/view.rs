@@ -13,7 +13,9 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::indexing_slicing,
-    clippy::panic
+    clippy::panic,
+    clippy::todo,
+    clippy::dbg_macro
 )]
 
 slint::include_modules!();
