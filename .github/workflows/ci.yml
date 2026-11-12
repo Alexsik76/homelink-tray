@@ -53,3 +53,31 @@ jobs:
           path: dist/HomeLink.exe
           retention-days: 14
           if-no-files-found: error
+
+  rust-core:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-core-${{ hashFiles('rust/Cargo.lock') }}
+
+      - name: Format check
+        run: cargo fmt -p homelink-core --check
+
+      - name: Lint
+        run: cargo clippy -p homelink-core --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test -p homelink-core --all-features

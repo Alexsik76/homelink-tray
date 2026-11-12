@@ -1,0 +1,143 @@
+version = 1
+language = "auto"
+
+[log]
+file = "homelink.log"
+level = "info"
+
+[defaults]
+poll_seconds = 5
+wake_poll_seconds = 2
+port_timeout_ms = 1000
+offline_after_failures = 3
+wake_timeout = 180
+power_timeout = 15
+
+[[tunnels]]
+id = "home"
+name = "Home"
+kind = "wireguard"
+conf = 'C:\Program Files\WireGuard\Data\Configurations\home.conf.dpapi'
+wireguard_exe = 'C:\Program Files\WireGuard\wireguard.exe'
+probe_host = "192.168.88.1"
+timeout = 20
+ping_timeout_ms = 1000
+
+[[relays]]
+id = "gateway"
+kind = "routeros"
+host = "192.168.88.1"
+port = 22
+user = "homelink"
+identity_file = 'C:\ProgramData\HomeLink\relay_ed25519'
+timeout = 8
+
+[[relays]]
+id = "openwrt"
+kind = "etherwake"
+host = "192.168.10.1"
+port = 22
+user = "homelink"
+identity_file = 'C:\ProgramData\HomeLink\openwrt_ed25519'
+timeout = 8
+sudo = false
+
+[[relays]]
+id = "pi"
+kind = "wakeonlan"
+host = "10.0.5.2"
+port = 2222
+user = "homelink"
+identity_file = '/home/alex/.ssh/id_pi'
+timeout = 10
+sudo = true
+
+[[pcs]]
+id = "desktop"
+name = "Desktop"
+os = "linux"
+host = "192.168.88.10"
+tunnel = "home"
+ports = [3389]
+
+[pcs.wake]
+method = "relay"
+relay = "gateway"
+mac = "AA:BB:CC:DD:EE:FF"
+interface = "bridge"
+
+[pcs.power]
+method = "ssh"
+user = "alex"
+port = 22
+identity_file = 'C:\ProgramData\HomeLink\desktop_ed25519'
+
+[pcs.rdp]
+user = "alex"
+options = ["use redirection server name:i:1", "screen mode id:i:2"]
+
+[pcs.timing]
+poll_seconds = 10
+
+[[pcs]]
+id = "laptop"
+name = "Laptop"
+os = "windows"
+host = "laptop.home.lan"
+tunnel = "home"
+ports = [3389, 445]
+
+[pcs.wake]
+method = "command"
+command = ["wakeonlan", "{mac}"]
+mac = "11-22-33-44-55-66"
+timeout = 15
+
+[pcs.power]
+method = "command"
+sleep = ["ssh", "-o", "BatchMode=yes", "alex@{host}", "rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"]
+
+[[pcs]]
+id = "nas"
+name = "NAS"
+os = "linux"
+host = "10.0.0.7"
+ports = [22]
+
+[pcs.wake]
+method = "magic_packet"
+mac = "AA:BB:CC:00:00:07"
+address = "10.0.0.7"
+port = 9
+
+[pcs.power]
+method = "ssh"
+user = "admin"
+port = 2222
+identity_file = '/home/alex/.ssh/id_nas'
+
+[[pcs]]
+id = "media"
+name = "Media PC"
+os = "linux"
+host = "10.0.6.30"
+ports = [22]
+
+[pcs.wake]
+method = "relay"
+relay = "openwrt"
+mac = "00:11:22:33:44:55"
+interface = "br-lan"
+
+[[pcs]]
+id = "kiosk"
+name = "Kiosk"
+os = "linux"
+host = "10.0.5.30"
+ports = [22]
+
+[pcs.wake]
+method = "relay"
+relay = "pi"
+mac = "00:11:22:33:44:66"
+address = "10.0.5.255"

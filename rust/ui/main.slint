@@ -1,0 +1,215 @@
+// HomeLink prototype UI: a tray icon and a small two-column panel.
+
+import "./fonts/Inter-Regular.ttf";
+import "./fonts/Inter-SemiBold.ttf";
+
+export enum ViewState { online, waking, off, unknown }
+
+export struct PcView {
+    name: string,
+    state: ViewState,
+    state-text: string,
+    expanded: bool,
+    can-wake: bool,
+    can-other: bool,
+}
+
+export struct GroupView {
+    tunnel: string,
+    has-tunnel: bool,
+    connected: bool,
+    pcs: [PcView],
+}
+
+component TunnelButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> connected;
+    callback clicked();
+    height: 28px;
+    background: root.connected
+        ? (ta.has-hover ? #1d4ed8 : #2563eb)
+        : (ta.has-hover ? #d1d5db : #e5e7eb);
+    Text {
+        text: root.label;
+        color: root.connected ? #ffffff : #1a1a1a;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component ActionButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: true;
+    callback clicked();
+    height: 26px;
+    background: (root.active && ta.has-hover) ? #e6e6e6 : transparent;
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        Text {
+            text: root.label;
+            color: root.active ? #1a1a1a : #9a9a9a;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.active;
+        clicked => { root.clicked(); }
+    }
+}
+
+component PcRowView inherits Rectangle {
+    in property <PcView> pc;
+    callback clicked();
+    height: 28px;
+    background: ta.has-hover ? #e6e6e6 : transparent;
+
+    pure function dot-color(s: ViewState) -> color {
+        s == ViewState.online ? #22c55e
+            : s == ViewState.waking ? #f59e0b
+            : s == ViewState.off ? #a3a3a3
+            : #52525b
+    }
+
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        spacing: 8px;
+        Text {
+            text: root.pc.name;
+            color: #1a1a1a;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        Rectangle {
+            width: 10px;
+            Rectangle {
+                width: 10px;
+                height: 10px;
+                y: (parent.height - self.height) / 2;
+                background: root.dot-color(root.pc.state);
+            }
+        }
+        Text {
+            text: root.pc.state-text;
+            color: #1a1a1a;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            min-width: 80px;
+        }
+    }
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Panel inherits Window {
+    in property <[GroupView]> groups;
+    out property <length> content-height: inner.preferred-height;
+    callback tunnel-clicked(int);
+    callback pc-clicked(int, int);
+    // group index, pc index, action: 0 connect, 1 wake, 2 sleep, 3 shut down
+    callback action-clicked(int, int, int);
+    callback hide-requested();
+    public function focus-panel() { fs.focus(); }
+
+    no-frame: true;
+    always-on-top: true;
+    background: #f9f9f9;
+    default-font-family: "Inter";
+    default-font-size: 13px;
+    width: 420px;
+    height: root.content-height;
+
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.hide-requested();
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            background: #f9f9f9;
+            border-width: 1px;
+            border-color: #d4d4d4;
+
+            inner := VerticalLayout {
+                padding: 12px;
+                spacing: 10px;
+                alignment: start;
+                for g[gi] in root.groups : HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        width: 90px;
+                        alignment: start;
+                        if g.has-tunnel : TunnelButton {
+                            label: g.tunnel;
+                            connected: g.connected;
+                            clicked => { root.tunnel-clicked(gi); }
+                        }
+                        if !g.has-tunnel : Text {
+                            height: 28px;
+                            text: "без тунелю";
+                            color: #1a1a1a;
+                            vertical-alignment: center;
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 2px;
+                        alignment: start;
+                        for pc[pi] in g.pcs : VerticalLayout {
+                            spacing: 2px;
+                            PcRowView {
+                                pc: pc;
+                                clicked => { root.pc-clicked(gi, pi); }
+                            }
+                            if pc.expanded : HorizontalLayout {
+                                spacing: 2px;
+                                ActionButton {
+                                    label: "Підключити";
+                                    active: pc.can-other;
+                                    clicked => { root.action-clicked(gi, pi, 0); }
+                                }
+                                ActionButton {
+                                    label: "Розбудити";
+                                    active: pc.can-wake;
+                                    clicked => { root.action-clicked(gi, pi, 1); }
+                                }
+                                ActionButton {
+                                    label: "Сон";
+                                    active: pc.can-other;
+                                    clicked => { root.action-clicked(gi, pi, 2); }
+                                }
+                                ActionButton {
+                                    label: "Вимкнути";
+                                    active: pc.can-other;
+                                    clicked => { root.action-clicked(gi, pi, 3); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component Tray inherits SystemTrayIcon {
+    callback quit-requested();
+    callback toggle-panel();
+    clicked => { root.toggle-panel(); }
+    icon: @image-url("../../src/homelink/assets/icons/dark/online_up.png");
+    tooltip: "HomeLink";
+    Menu {
+        MenuItem {
+            title: "Quit";
+            activated => { root.quit-requested(); }
+        }
+    }
+}
