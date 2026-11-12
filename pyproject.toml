@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "homelink"
-version = "0.2.0"
+version = "0.3.0"
 description = "Windows tray utility: WireGuard tunnel, Wake-on-LAN via MikroTik and status of a home PC"
 readme = "README.md"
 license = "MIT"
@@ -28,7 +28,7 @@ homelink = "homelink.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-homelink = ["assets/*.ico", "assets/icons/*.png", "locales/*.json", "config.example.json"]
+homelink = ["assets/*.ico", "assets/icons/light/*.png", "assets/icons/dark/*.png", "locales/*.json", "config.example.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

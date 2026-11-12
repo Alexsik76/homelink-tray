@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+          allow-prereleases: true
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: python -m pip install -e ".[dev,build]"
+
+      - name: Check tag against package version
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME -replace '^v', ''
+          $version = python -c "import homelink; print(homelink.__version__)"
+          if ($tag -ne $version) {
+            Write-Error "Tag '$env:GITHUB_REF_NAME' does not match homelink.__version__ '$version'. Fix the version or the tag."
+            exit 1
+          }
+
+      - name: Lint
+        run: python -m ruff check .
+
+      - name: Format check
+        run: python -m ruff format --check .
+
+      - name: Test
+        run: python -m pytest -q
+
+      - name: Build executable
+        run: >
+          python -m PyInstaller --noconfirm --onefile --noconsole --name HomeLink
+          --icon src\homelink\assets\app.ico --uac-admin --paths src
+          --add-data "src\homelink\assets;homelink\assets"
+          --add-data "src\homelink\locales;homelink\locales"
+          --add-data "src\homelink\config.example.json;homelink"
+          run_homelink.pyw
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$env:GITHUB_REF_NAME" dist/HomeLink.exe --title "$env:GITHUB_REF_NAME" --generate-notes --verify-tag

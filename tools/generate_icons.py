@@ -1,127 +1,243 @@
-"""Generate the built-in tray icons and app.ico.
+"""Generate the built-in tray icons, app.ico and a contact sheet for review.
 
 A development tool: the program itself only loads the resulting PNG files.
 Usage: python tools/generate_icons.py
+
+The artwork is drawn on a 64x64 grid (SVG conventions, y grows downwards) at
+SS times the final size and downscaled with LANCZOS.
 """
 
+import math
+import shutil
+from collections.abc import Sequence
+from itertools import pairwise
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFont
 
-ASSETS = Path(__file__).resolve().parent.parent / "src" / "homelink" / "assets"
+ROOT = Path(__file__).resolve().parent.parent
+ASSETS = ROOT / "src" / "homelink" / "assets"
+PREVIEW = ROOT / "build" / "icon-preview.png"
 ICON_SIZE = 64
 ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+FONT_PATH = Path(r"C:\Windows\Fonts\segoeuib.ttf")
 
-SS = 4  # supersampling factor
+SS = 8  # supersampling factor
 
-PC_COLORS = {
-    "online": ((52, 211, 153), (16, 150, 100)),
-    "waking": ((251, 191, 36), (217, 119, 6)),
-    "offline": ((100, 116, 139), (51, 65, 85)),
-    "unknown": ((71, 85, 105), (30, 41, 59)),
+Point = tuple[float, float]
+
+WHITE = "#ffffff"
+DARK_GLYPH = "#1e293b"
+
+# colour of the screen by PC state
+SCREEN_COLORS = {
+    "online": "#22c55e",
+    "waking": "#f59e0b",
+    "offline": "#a3a3a3",
+    "unknown": "#52525b",
 }
+UNKNOWN_GLYPH = "#f1f5f9"
+# (badge, arrow) colours by tunnel state
 TUNNEL_COLORS = {
-    "up": (56, 189, 248),
-    "starting": (251, 191, 36),
-    "down": (239, 68, 68),
+    "up": ("#2563eb", WHITE),
+    "starting": ("#facc15", DARK_GLYPH),
+    "down": ("#dc2626", WHITE),
 }
+# (body, ring) colours by theme: "light" is for a light taskbar, "dark" for a dark one
+THEMES = {
+    "light": ("#1e293b", "#ffffff"),
+    "dark": ("#e5e7eb", "#1c1c1c"),
+}
+TASKBAR_BACKGROUNDS = {"light": "#f3f3f3", "dark": "#1c1c1c"}
+
+APP_BLUE = "#2563eb"
+
+# two opposing arrows in a local frame centred on the badge (or on the app icon):
+# (stroke width, lines, triangles)
+BADGE_ARROWS = (
+    3.0,
+    [((-9, -4), (3, -4)), ((9, 4), (-3, 4))],
+    [[(2, -9), (10, -4), (2, 1)], [(-2, -1), (-10, 4), (-2, 9)]],
+)
+APP_ARROWS = (
+    5.5,
+    [((-17, -7), (6, -7)), ((17, 7), (-6, 7))],
+    [[(4, -16), (19, -7), (4, 2)], [(-4, -2), (-19, 7), (-4, 16)]],
+)
 
 
-def _vgrad(size, top, bottom):
-    w, h = size
-    grad = Image.new("RGBA", (1, h))
-    for y in range(h):
-        t = y / max(h - 1, 1)
-        grad.putpixel((0, y), (*(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3)), 255))
-    return grad.resize((w, h))
+# ---------- drawing helpers (coordinates in 64-unit space, u = pixels per unit) ----------
+def _stroke(d: ImageDraw.ImageDraw, points: Sequence[Point], width: float, color: str, u: float):
+    """A polyline with round caps and joins."""
+    r = width * u / 2
+    scaled = [(x * u, y * u) for x, y in points]
+    for (x0, y0), (x1, y1) in pairwise(scaled):
+        steps = max(int(math.hypot(x1 - x0, y1 - y0)), 1)
+        for i in range(steps + 1):
+            t = i / steps
+            x, y = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
+            d.ellipse((x - r, y - r, x + r, y + r), fill=color)
 
 
-def render(pc_state: str, tunnel_state: str, size: int = 64) -> Image.Image:
-    S = size * SS
-    u = S / 64.0
-    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+def _flat_line(d: ImageDraw.ImageDraw, p0: Point, p1: Point, width: float, color: str, u: float):
+    """A straight line with butt caps."""
+    (x0, y0), (x1, y1) = p0, p1
+    length = math.hypot(x1 - x0, y1 - y0)
+    nx, ny = -(y1 - y0) / length * width / 2, (x1 - x0) / length * width / 2
+    corners = [(x0 + nx, y0 + ny), (x1 + nx, y1 + ny), (x1 - nx, y1 - ny), (x0 - nx, y0 - ny)]
+    d.polygon([(x * u, y * u) for x, y in corners], fill=color)
 
-    # monitor body
-    body = (4 * u, 8 * u, 60 * u, 46 * u)
-    shadow = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).rounded_rectangle(
-        (body[0], body[1] + 2 * u, body[2], body[3] + 2 * u), radius=7 * u, fill=(0, 0, 0, 110)
-    )
-    img = Image.alpha_composite(img, shadow.filter(ImageFilter.GaussianBlur(2 * u)))
 
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle(
-        body, radius=7 * u, fill=(30, 35, 45, 255), outline=(120, 132, 150, 255), width=int(1.6 * u)
-    )
+def _circle(d: ImageDraw.ImageDraw, center: Point, radius: float, color: str, u: float):
+    (cx, cy), r = center, radius
+    d.ellipse(((cx - r) * u, (cy - r) * u, (cx + r) * u, (cy + r) * u), fill=color)
 
-    # screen with gradient
-    top, bottom = PC_COLORS.get(pc_state, PC_COLORS["unknown"])
-    scr = (9 * u, 13 * u, 55 * u, 41 * u)
-    sw, sh = int(scr[2] - scr[0]), int(scr[3] - scr[1])
-    grad = _vgrad((sw, sh), top, bottom)
-    mask = Image.new("L", (sw, sh), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, sw - 1, sh - 1), radius=4 * u, fill=255)
-    img.paste(grad, (int(scr[0]), int(scr[1])), mask)
 
-    # glossy highlight
-    gloss = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
-    ImageDraw.Draw(gloss).polygon(
-        [(0, 0), (sw * 0.65, 0), (sw * 0.25, sh), (0, sh)], fill=(255, 255, 255, 38)
-    )
-    gl_mask = Image.new("L", (sw, sh), 0)
-    ImageDraw.Draw(gl_mask).rounded_rectangle((0, 0, sw - 1, sh - 1), radius=4 * u, fill=255)
-    layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    layer.paste(gloss, (int(scr[0]), int(scr[1])), gl_mask)
-    img = Image.alpha_composite(img, layer)
-    d = ImageDraw.Draw(img)
+def _rect(d: ImageDraw.ImageDraw, x: float, y: float, w: float, h: float, r: float, color, u):
+    d.rounded_rectangle((x * u, y * u, (x + w) * u, (y + h) * u), radius=r * u, fill=color)
 
-    # power glyph on the screen
-    cx, cy, r = 32 * u, 27 * u, 7.5 * u
-    glyph = (255, 255, 255, 235) if pc_state != "unknown" else (255, 255, 255, 120)
-    d.arc((cx - r, cy - r, cx + r, cy + r), start=-60, end=240, fill=glyph, width=int(2.6 * u))
-    d.line((cx, cy - r - 1.5 * u, cx, cy - 1 * u), fill=glyph, width=int(2.6 * u))
 
-    # stand
-    d.polygon(
-        [(27 * u, 46 * u), (37 * u, 46 * u), (39 * u, 53 * u), (25 * u, 53 * u)],
-        fill=(30, 35, 45, 255),
-    )
-    d.rounded_rectangle((18 * u, 52 * u, 46 * u, 57 * u), radius=2.5 * u, fill=(30, 35, 45, 255))
+def _rotated(points: Sequence[Point], center: Point, degrees: float = -45.0) -> list[Point]:
+    """Rotate local-frame points about the frame origin placed at ``center`` (SVG rotate())."""
+    a = math.radians(degrees)
+    cos, sin = math.cos(a), math.sin(a)
+    cx, cy = center
+    return [(cx + x * cos - y * sin, cy + x * sin + y * cos) for x, y in points]
 
-    # tunnel badge
-    bc = TUNNEL_COLORS.get(tunnel_state, TUNNEL_COLORS["down"])
-    bx, by, br = 50 * u, 50 * u, 12 * u
-    d.ellipse(
-        (bx - br - 2 * u, by - br - 2 * u, bx + br + 2 * u, by + br + 2 * u), fill=(15, 18, 24, 255)
-    )
-    d.ellipse((bx - br, by - br, bx + br, by + br), fill=(*bc, 255))
-    # badge glyph: two arrows (up), three dots (starting), cross (down)
-    w = int(2.4 * u)
-    if tunnel_state == "up":
-        d.line((bx - 6 * u, by - 2.5 * u, bx + 6 * u, by - 2.5 * u), fill="white", width=w)
-        d.line((bx + 2.5 * u, by - 6 * u, bx + 6.2 * u, by - 2.5 * u), fill="white", width=w)
-        d.line((bx - 6 * u, by + 3 * u, bx + 6 * u, by + 3 * u), fill="white", width=w)
-        d.line((bx - 2.5 * u, by + 6.5 * u, bx - 6.2 * u, by + 3 * u), fill="white", width=w)
-    elif tunnel_state == "starting":
-        for dx in (-5, 0, 5):
-            d.ellipse(
-                (bx + dx * u - 1.8 * u, by - 1.8 * u, bx + dx * u + 1.8 * u, by + 1.8 * u),
-                fill="white",
+
+def _arrows(d: ImageDraw.ImageDraw, u: float, center: Point, spec, color: str) -> None:
+    width, lines, triangles = spec
+    for line in lines:
+        _stroke(d, _rotated(line, center), width, color, u)
+    for triangle in triangles:
+        d.polygon([(x * u, y * u) for x, y in _rotated(triangle, center)], fill=color)
+
+
+def _unknown_glyph(d: ImageDraw.ImageDraw, u: float) -> None:
+    size = round(20 * u)
+    try:
+        font = ImageFont.truetype(str(FONT_PATH), size)
+    except OSError:
+        font = ImageFont.load_default(size=size)
+    d.text((22 * u, 30 * u), "?", font=font, fill=UNKNOWN_GLYPH, anchor="ms")
+
+
+def _pc_glyph(d: ImageDraw.ImageDraw, pc_state: str, u: float) -> None:
+    if pc_state == "online":
+        _stroke(d, [(14, 22), (20, 28), (31, 16)], 4, WHITE, u)
+    elif pc_state == "waking":
+        for x in (14, 22, 30):
+            _circle(d, (x, 23), 2.6, DARK_GLYPH, u)
+    elif pc_state == "offline":
+        centre, radius = (22, 23), 7
+        start = math.atan2(17.5 - 23, 17.5 - 22)  # upper left, the long way round to upper right
+        end = math.atan2(17.5 - 23, 26.5 - 22) - 2 * math.pi
+        steps = 90
+        arc = [
+            (
+                centre[0] + radius * math.cos(start + (end - start) * i / steps),
+                centre[1] + radius * math.sin(start + (end - start) * i / steps),
             )
+            for i in range(steps + 1)
+        ]
+        _stroke(d, arc, 3.2, DARK_GLYPH, u)
+        _stroke(d, [(22, 13), (22, 21)], 3.2, DARK_GLYPH, u)
     else:
-        d.line((bx - 5 * u, by - 5 * u, bx + 5 * u, by + 5 * u), fill="white", width=w)
-        d.line((bx - 5 * u, by + 5 * u, bx + 5 * u, by - 5 * u), fill="white", width=w)
+        _unknown_glyph(d, u)
+
+
+def render(pc_state: str, tunnel_state: str, theme: str, size: int = ICON_SIZE) -> Image.Image:
+    body, ring = THEMES[theme]
+    badge, arrow = TUNNEL_COLORS[tunnel_state]
+    s = size * SS
+    u = s / 64.0
+    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+
+    _rect(d, 3, 5, 46, 35, 5, body, u)  # monitor body
+    _rect(d, 7, 9, 38, 27, 2, SCREEN_COLORS[pc_state], u)  # screen
+    d.rectangle((21 * u, 40 * u, 31 * u, 46 * u), fill=body)  # neck
+    _rect(d, 13, 45, 26, 5, 2.5, body, u)  # base
+    _pc_glyph(d, pc_state, u)
+
+    # tunnel badge: the outline is centred on the circle's edge, as an SVG stroke is
+    centre = (46, 46)
+    _circle(d, centre, 16 + 1.5, ring, u)
+    _circle(d, centre, 16 - 1.5, badge, u)
+    _arrows(d, u, centre, BADGE_ARROWS, arrow)
+    if tunnel_state == "down":
+        _flat_line(d, *_rotated([(0, -13), (0, 13)], centre), 6.5, badge, u)
+        _stroke(d, _rotated([(0, -12), (0, 12)], centre), 2.6, WHITE, u)
 
     return img.resize((size, size), Image.LANCZOS)
 
 
+def render_app_icon(size: int) -> Image.Image:
+    s = size * SS
+    u = s / 64.0
+    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    _rect(d, 2, 2, 60, 60, 14, APP_BLUE, u)
+    _arrows(d, u, (32, 32), APP_ARROWS, WHITE)
+    return img.resize((size, size), Image.LANCZOS)
+
+
+# ---------- contact sheet ----------
+SHEET_ICONS = [
+    ("unknown", "down"),
+    ("unknown", "starting"),
+    ("unknown", "up"),
+    ("offline", "up"),
+    ("waking", "up"),
+    ("online", "up"),
+]
+
+
+def contact_sheet(app_icon: Image.Image) -> Image.Image:
+    margin, gap, inner, row_height = 24, 24, 12, 112
+    group_width = 64 + inner + 32 + inner + 16
+    columns = len(SHEET_ICONS) + 1
+    width = 2 * margin + columns * group_width + (columns - 1) * gap
+    sheet = Image.new("RGBA", (width, row_height * len(THEMES)), (0, 0, 0, 0))
+
+    for row, theme in enumerate(THEMES):
+        top = row * row_height
+        sheet.paste(Image.new("RGBA", (width, row_height), TASKBAR_BACKGROUNDS[theme]), (0, top))
+        images = [
+            Image.open(ASSETS / "icons" / theme / f"{pc}_{tunnel}.png").convert("RGBA")
+            for pc, tunnel in SHEET_ICONS
+        ]
+        if row == 0:
+            images.append(app_icon)
+        for column, image in enumerate(images):
+            x = margin + column * (group_width + gap)
+            for shown, size in ((64, 64), (32, 32), (16, 16)):
+                small = image.resize((size, size), Image.LANCZOS)
+                y = top + (row_height - shown) // 2
+                sheet.alpha_composite(small, (x, y))
+                x += size + inner
+    return sheet
+
+
 def main() -> None:
-    icons = ASSETS / "icons"
-    icons.mkdir(parents=True, exist_ok=True)
-    for pc in PC_COLORS:
+    for theme in THEMES:
+        folder = ASSETS / "icons" / theme
+        folder.mkdir(parents=True, exist_ok=True)
         for tunnel in TUNNEL_COLORS:
-            render(pc, tunnel, ICON_SIZE).save(icons / f"{pc}_{tunnel}.png")
-    render("online", "up", 256).save(ASSETS / "app.ico", sizes=ICO_SIZES)
+            # the PC state is only shown while the tunnel is up
+            pcs = SCREEN_COLORS if tunnel == "up" else ["unknown"]
+            for pc in pcs:
+                render(pc, tunnel, theme).save(folder / f"{pc}_{tunnel}.png")
+            if tunnel != "up":
+                reference = folder / f"unknown_{tunnel}.png"
+                for pc in SCREEN_COLORS:
+                    if pc != "unknown":
+                        shutil.copyfile(reference, folder / f"{pc}_{tunnel}.png")
+
+    render_app_icon(256).save(ASSETS / "app.ico", sizes=ICO_SIZES)
+
+    PREVIEW.parent.mkdir(parents=True, exist_ok=True)
+    contact_sheet(render_app_icon(64)).save(PREVIEW)
 
 
 if __name__ == "__main__":

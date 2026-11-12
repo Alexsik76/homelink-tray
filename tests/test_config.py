@@ -31,6 +31,13 @@ def test_missing_keys_are_listed(raw_config):
         ("pc_ports", 3389),
         ("pc_ports", []),
         ("offline_after_failures", 0),
+        ("shutdown_command", "poweroff"),
+        ("shutdown_command", [1]),
+        ("shutdown_command", []),
+        ("suspend_command", ["ssh", 1]),
+        ("suspend_command", []),
+        ("power_command_timeout", "15"),
+        ("power_command_timeout", True),
     ],
 )
 def test_wrong_type_is_rejected(raw_config, key, value):

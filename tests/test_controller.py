@@ -1,6 +1,6 @@
 import pytest
 
-from homelink.controller import Controller
+from homelink.controller import DETAIL_LIMIT, Controller
 from homelink.router import RouterError
 from homelink.state import PcState, Status, TunnelState
 from homelink.tunnel import TunnelError
@@ -45,17 +45,24 @@ class Env:
         self.now = 0.0
         self.changes = []
         self.notes = []
+        self.commands = []
+        self.command_result = (0, "")
         self.controller = Controller(
             config=config,
             tunnel=self.tunnel,
             router=self.router,
             ping=lambda host, _timeout: host in self.reachable,
             ports_open=lambda host, _ports, _timeout: host in self.reachable,
+            run_command=self.run_command,
             on_change=self.changes.append,
             on_notify=lambda key, **params: self.notes.append((key, params)),
             clock=lambda: self.now,
             sleep=self.advance,
         )
+
+    def run_command(self, command, timeout):
+        self.commands.append((command, timeout))
+        return self.command_result
 
     def advance(self, seconds):
         self.now += seconds
@@ -185,3 +192,134 @@ def test_one_successful_check_is_enough_for_online(env):
     env.reachable.add(env.config.pc_ip)
     env.controller.refresh()
     assert env.status.pc is PcState.ONLINE
+
+
+# ---------- power commands ----------
+@pytest.fixture
+def online(env):
+    env.reachable = {env.config.router_ip, env.config.pc_ip}
+    env.controller.connect_and_wake()
+    assert env.status == Status(TunnelState.UP, PcState.ONLINE)
+    return env
+
+
+@pytest.mark.parametrize(
+    ("action", "command_key", "note"),
+    [
+        ("shutdown", "shutdown_command", "notify.shutdown_sent"),
+        ("suspend", "suspend_command", "notify.suspend_sent"),
+    ],
+)
+def test_power_action_runs_configured_command(online, action, command_key, note):
+    getattr(online.controller, action)()
+    command = list(getattr(online.config, command_key))
+    assert online.commands == [(command, online.config.power_command_timeout)]
+    assert online.notes == [(note, {"host": online.config.pc_ip})]
+
+
+@pytest.mark.parametrize("action", ["shutdown", "suspend"])
+def test_power_action_does_not_change_state(online, action):
+    changes = list(online.changes)
+    getattr(online.controller, action)()
+    assert online.status == Status(TunnelState.UP, PcState.ONLINE)
+    assert online.changes == changes
+
+
+@pytest.mark.parametrize("action", ["shutdown", "suspend"])
+def test_power_failure_is_reported(online, action):
+    online.command_result = (255, "Permission denied")
+    getattr(online.controller, action)()
+    assert online.notes == [("notify.power_failed", {"detail": "Permission denied"})]
+
+
+def test_power_failure_detail_is_trimmed(online):
+    online.command_result = (1, "x" * (DETAIL_LIMIT + 100))
+    online.controller.shutdown()
+    assert online.notes == [("notify.power_failed", {"detail": "x" * DETAIL_LIMIT})]
+
+
+@pytest.mark.parametrize("action", ["shutdown", "suspend"])
+def test_power_action_needs_online_pc(env, action):
+    env.reachable = {env.config.router_ip}
+    env.controller.connect_and_wake()  # the PC is only waking
+    getattr(env.controller, action)()
+    assert env.commands == []
+    assert env.notes == [("notify.power_unavailable", {})]
+
+
+def test_power_action_is_skipped_while_busy(online):
+    online.controller._busy.acquire()
+    online.controller.shutdown()
+    assert online.commands == []
+    assert online.notes == []
+
+
+# ---------- loss notifications ----------
+def test_tunnel_lost_is_notified_once(online):
+    online.tunnel.running = False  # the service stopped without being asked to
+    online.controller.refresh()
+    online.controller.refresh()
+    assert online.status == Status(TunnelState.DOWN, PcState.UNKNOWN)
+    assert online.notes == [("notify.tunnel_lost", {})]
+
+
+def test_user_disconnect_is_not_reported_as_lost(online):
+    online.controller.toggle_tunnel()
+    online.controller.refresh()
+    assert online.status == Status(TunnelState.DOWN, PcState.UNKNOWN)
+    assert online.notes == []
+
+
+def test_pc_lost_is_notified_after_configured_failures(online):
+    online.reachable.discard(online.config.pc_ip)
+    for _ in range(online.config.offline_after_failures - 1):
+        online.controller.refresh()
+        assert online.notes == []
+    online.controller.refresh()
+    assert online.status.pc is PcState.OFFLINE
+    assert online.notes == [("notify.pc_lost", {})]
+    online.controller.refresh()
+    assert online.notes == [("notify.pc_lost", {})]
+
+
+@pytest.mark.parametrize("action", ["shutdown", "suspend"])
+def test_pc_going_down_after_power_command_is_silent(online, action):
+    getattr(online.controller, action)()
+    online.notes.clear()
+    online.reachable.discard(online.config.pc_ip)
+    for _ in range(online.config.offline_after_failures):
+        online.controller.refresh()
+    assert online.status.pc is PcState.OFFLINE
+    assert online.notes == []
+
+
+def test_pc_lost_is_notified_again_after_it_was_seen_online(online):
+    online.controller.suspend()
+    online.reachable.discard(online.config.pc_ip)
+    for _ in range(online.config.offline_after_failures):
+        online.controller.refresh()
+    online.reachable.add(online.config.pc_ip)  # woken up by hand
+    online.controller.refresh()
+    online.notes.clear()
+    online.reachable.discard(online.config.pc_ip)
+    for _ in range(online.config.offline_after_failures):
+        online.controller.refresh()
+    assert online.notes == [("notify.pc_lost", {})]
+
+
+def test_failed_power_command_does_not_silence_pc_lost(online):
+    online.command_result = (255, "Permission denied")
+    online.controller.shutdown()
+    online.notes.clear()
+    online.reachable.discard(online.config.pc_ip)
+    for _ in range(online.config.offline_after_failures):
+        online.controller.refresh()
+    assert online.notes == [("notify.pc_lost", {})]
+
+
+def test_pc_lost_is_silent_when_tunnel_goes_down(online):
+    online.tunnel.running = False
+    online.reachable.discard(online.config.pc_ip)
+    online.controller.refresh()
+    assert online.status == Status(TunnelState.DOWN, PcState.UNKNOWN)
+    assert ("notify.pc_lost", {}) not in online.notes

@@ -1,19 +1,27 @@
 # HomeLink
 
+[![CI](https://github.com/Alexsik76/homelink-tray/actions/workflows/ci.yml/badge.svg)](https://github.com/Alexsik76/homelink-tray/actions/workflows/ci.yml)
+
 [Українською](README.uk.md)
 
-A Windows tray utility that reaches a home PC in one click: it brings up a WireGuard
+A Windows tray utility that gives access to a home PC: it brings up a WireGuard
 tunnel, asks a MikroTik router to send Wake-on-LAN and shows the state of the tunnel
 and of the PC in the tray icon.
 
 ## How it works
 
-- **Left click** on the icon: bring the tunnel up, check the PC's ports and, when it is silent,
-  send Wake-on-LAN. A notification appears once the PC answers.
-- **Right click**: connect or disconnect the tunnel, wake the PC, open RDP, open the
-  settings file, quit.
-- **Icon**: the screen colour is the PC state (green: online, amber: waking, grey: off),
-  the badge is the tunnel state (blue: connected, yellow: connecting, red: off).
+- **Left click** on the icon: a box with the program version and the state of the tunnel
+  and of the PC. It only displays information.
+- **Right click**: *Status* (the same box), then *Tunnel* (checked while connected), which
+  connects or disconnects the tunnel. *Home PC* (a submenu that shows the PC state) wakes,
+  puts to sleep or shuts down the PC; the last two ask for a confirmation. *Open RDP*
+  opens the remote desktop. Below: the settings file, quit.
+- **Icon**: the screen colour and glyph show the PC (green check: online, amber dots:
+  waking, grey power symbol: off, dark "?": unknown), the badge shows the tunnel (blue:
+  connected, yellow: connecting, red and crossed: off). The PC is only shown while the
+  tunnel is up.
+- **Notifications**: when the PC answers after waking, and when the tunnel or the PC is
+  lost without being asked to.
 
 The magic packet is sent by the router, not by this computer: a broadcast frame does
 not travel through a routed tunnel. The program calls the router's REST API
@@ -40,6 +48,25 @@ of this computer:
 
 `test` is the policy required by `/tool wol`; `api` is checked for REST logins.
 
+## Remote power commands
+
+The "Sleep" and "Shut down" entries of the "Home PC" submenu (enabled while the PC is
+online) run `suspend_command` or `shutdown_command` on this computer after a confirmation.
+With the example settings that is an SSH call to the home PC, which needs the following there:
+
+- Key authentication: with `BatchMode=yes` SSH never asks for a password.
+- The host key must already be accepted: connect once manually (`ssh user@<pc_ip>`).
+- Passwordless `sudo` for exactly these two commands. Create `/etc/sudoers.d/homelink`
+  with `visudo -f /etc/sudoers.d/homelink`:
+
+```
+<user> ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl suspend -i
+```
+
+The `-i` option makes the PC sleep even when something blocks it. GNOME, for example,
+blocks sleep while a Remote Desktop session exists, and such a session stays alive after
+the RDP window is closed. Sleeping with `-i` may end that session.
+
 ## Build
 
 ```
@@ -47,6 +74,14 @@ build.bat
 ```
 
 The result is `dist\HomeLink.exe`. Exit a running copy before rebuilding.
+
+## Releases
+
+Ready-made `HomeLink.exe` files are published on the
+[Releases](https://github.com/Alexsik76/homelink-tray/releases) page. Pushing a tag such
+as `v0.3.0` whose number matches the package version (`homelink.__version__`) builds the
+program and creates a release. The executable is not code-signed, so Windows SmartScreen
+may show a warning on the first start.
 
 ## Settings
 
@@ -75,6 +110,9 @@ key is required: there are no default values in the code.
 | `poll_seconds` | Interval between state checks |
 | `wake_poll_seconds` | The same interval while the PC is waking |
 | `wake_timeout` | Seconds to wait for the PC after Wake-on-LAN |
+| `shutdown_command` | Command that powers the PC off, run on this computer: a list of the program and its arguments, e.g. an `ssh` call |
+| `suspend_command` | The same command for sleep |
+| `power_command_timeout` | Seconds to wait for either command to finish |
 | `rdp_user` | User name written into the RDP file |
 | `rdp_file` | RDP file name, relative to `config.json` |
 | `rdp_options` | Extra lines of the RDP file |
@@ -113,10 +151,16 @@ reg add "HKLM\Software\Policies\Microsoft\Windows NT\Terminal Services" `
 
 ## Custom icons
 
-An icon set is twelve PNG files named `<pc state>_<tunnel state>.png`, where the PC
-state is `unknown`, `offline`, `waking` or `online` and the tunnel state is `down`,
-`starting` or `up`. Put them in a folder and point `icons_dir` at it. The built-in set
-is produced by `python tools/generate_icons.py`.
+There are two built-in sets: `light` (a dark monitor, for a light taskbar) and `dark` (a
+light monitor, for a dark taskbar). When `icons_dir` is empty, the program picks one at
+start-up from the Windows taskbar theme (`SystemUsesLightTheme`; anything but a light
+taskbar means `dark`). Restart the program after changing the theme.
+
+A custom set is still twelve PNG files in one folder, named `<pc state>_<tunnel state>.png`,
+where the PC state is `unknown`, `offline`, `waking` or `online` and the tunnel state is
+`down`, `starting` or `up`. Point `icons_dir` at that folder; it overrides the automatic
+choice. The built-in sets are produced by `python tools/generate_icons.py`, which also
+writes a contact sheet to `build\icon-preview.png`.
 
 ## Development
 
@@ -136,7 +180,7 @@ py -m venv .venv
 | `controller.py` | Logic: actions and state tracking, no interface |
 | `tunnel.py` | WireGuard tunnel service |
 | `router.py` | Wake-on-LAN through the MikroTik REST API |
-| `net.py` | Ping and port checks |
+| `net.py` | Ping, port checks and running external commands |
 | `rdp.py` | RDP file |
 | `icons.py`, `i18n.py` | Icons and interface strings |
 | `app.py` | Tray icon and menu |

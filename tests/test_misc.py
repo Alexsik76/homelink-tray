@@ -1,10 +1,11 @@
 import json
+import sys
 
 import pytest
 import requests
 
 from homelink.i18n import LOCALES_DIR, Translator
-from homelink.icons import BUILTIN_DIR, IconSet, icon_name
+from homelink.icons import THEMES, IconSet, builtin_dir, icon_name
 from homelink.rdp import ensure_rdp_file
 from homelink.router import MikroTikRouter, RouterError
 from homelink.state import PcState, Status, TunnelState
@@ -87,13 +88,30 @@ def test_rdp_file_is_created_once(tmp_path):
 
 
 # ---------- icons ----------
-def test_builtin_icons_cover_every_state():
-    icons = IconSet()
+@pytest.mark.parametrize("theme", THEMES)
+def test_builtin_icons_cover_every_state(theme):
+    directory = builtin_dir(theme)
+    icons = IconSet(directory)
     for pc in PcState:
         for tunnel in TunnelState:
             status = Status(tunnel=tunnel, pc=pc)
-            assert (BUILTIN_DIR / icon_name(status)).is_file()
+            assert (directory / icon_name(status)).is_file()
             assert icons.get(status).mode == "RGBA"
+    assert len(list(directory.glob("*.png"))) == len(PcState) * len(TunnelState)
+
+
+@pytest.mark.parametrize("theme", THEMES)
+@pytest.mark.parametrize("tunnel", [TunnelState.DOWN, TunnelState.STARTING])
+def test_pc_state_is_shown_only_while_tunnel_is_up(theme, tunnel):
+    directory = builtin_dir(theme)
+    reference = (directory / icon_name(Status(tunnel, PcState.UNKNOWN))).read_bytes()
+    for pc in (PcState.OFFLINE, PcState.WAKING, PcState.ONLINE):
+        assert (directory / icon_name(Status(tunnel, pc))).read_bytes() == reference
+
+
+def test_unknown_theme():
+    with pytest.raises(ValueError, match="unknown icon theme"):
+        builtin_dir("blue")
 
 
 def test_icon_name():
@@ -140,3 +158,38 @@ def test_ports_open():
             unused.bind(("127.0.0.1", 0))
             closed = unused.getsockname()[1]
         assert not ports_open("127.0.0.1", [port, closed], 500)
+
+
+# ---------- commands ----------
+# run_hidden relies on Windows-only subprocess arguments
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="run_hidden is Windows-only")
+
+
+@windows_only
+def test_run_command_returns_code_and_output():
+    from homelink.net import run_command
+
+    code, output = run_command(
+        [sys.executable, "-c", "import sys; print('x'); print('e', file=sys.stderr); sys.exit(3)"],
+        10,
+    )
+    assert code == 3
+    assert output.splitlines() == ["e", "x"]
+
+
+@windows_only
+def test_run_command_timeout():
+    from homelink.net import run_command
+
+    code, output = run_command([sys.executable, "-c", "import time; time.sleep(30)"], 0.5)
+    assert code != 0
+    assert "timed out" in output
+
+
+@windows_only
+def test_run_command_missing_program():
+    from homelink.net import run_command
+
+    code, output = run_command(["homelink-no-such-program"], 5)
+    assert code != 0
+    assert output
