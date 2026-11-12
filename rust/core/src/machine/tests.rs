@@ -653,7 +653,7 @@ fn p9_a_failed_wake_request_is_reported_and_changes_nothing() {
     let out = m.step(
         Input::WakeDone {
             pc: desktop(),
-            result: Err("HTTP 500".into()),
+            result: Err("connection refused".into()),
         },
         Time::ZERO,
     );
@@ -661,7 +661,7 @@ fn p9_a_failed_wake_request_is_reported_and_changes_nothing() {
         out.notices,
         [Notice::WakeFailed {
             pc: "Desktop".into(),
-            detail: "HTTP 500".into()
+            detail: "connection refused".into()
         }]
     );
     assert_eq!(m.pc_state(&desktop()), Some(P::Unknown));

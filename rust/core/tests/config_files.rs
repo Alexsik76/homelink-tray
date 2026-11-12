@@ -46,10 +46,14 @@ fn full_fixture_loads_with_every_value() {
     assert_eq!(c.tunnels.len(), 1);
     assert_eq!(c.tunnels[0].timeout, Duration::from_secs(20));
     assert_eq!(c.routers.len(), 1);
+    let router = &c.routers[0];
+    assert_eq!((router.host.as_str(), router.port), ("192.168.88.1", 22));
+    assert_eq!(router.user, "homelink");
     assert_eq!(
-        c.routers[0].password_ref.as_str(),
-        "HomeLink/router/mikrotik"
+        router.identity_file,
+        r"C:\ProgramData\HomeLink\router_ed25519"
     );
+    assert_eq!(router.timeout, Duration::from_secs(8));
     assert_eq!(c.pcs.len(), 3);
 
     let desktop = &c.pcs[0];
@@ -65,10 +69,7 @@ fn full_fixture_loads_with_every_value() {
         Duration::from_secs(2),
         "default kept"
     );
-    assert!(matches!(
-        desktop.wake,
-        Some(WakeMethod::MikrotikRest { .. })
-    ));
+    assert!(matches!(desktop.wake, Some(WakeMethod::MikrotikSsh { .. })));
     assert!(matches!(
         desktop.power,
         Some(PowerMethod::Ssh { port: 22, .. })

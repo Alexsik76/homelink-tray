@@ -99,7 +99,7 @@ fn a_missing_required_setting_is_an_error() {
     for key in [
         "poll_seconds = 5\n",
         "offline_after_failures = 3\n",
-        "api_url = \"http://192.168.88.1\"\n",
+        "identity_file = 'C:\\ProgramData\\HomeLink\\router_ed25519'\n",
     ] {
         let text = change(key, "");
         assert!(
@@ -258,27 +258,70 @@ fn hosts_are_addresses_or_names() {
 }
 
 #[test]
-fn api_url_needs_http_scheme_and_host() {
-    for bad in [
-        "ftp://192.168.88.1",
-        "192.168.88.1",
-        "http://",
-        "http://user:pw@192.168.88.1",
-        "http://r:0",
-    ] {
+fn router_needs_a_host_a_port_and_a_safe_user() {
+    let host = "host = \"192.168.88.1\"\nport = 22\nuser = \"homelink\"";
+    rejected(
+        &change(host, "host = \"a b\"\nport = 22\nuser = \"homelink\""),
+        "routers[0].host",
+        "not a valid host",
+    );
+    rejected(
+        &change(
+            host,
+            "host = \"192.168.88.1\"\nport = 0\nuser = \"homelink\"",
+        ),
+        "routers[0].port",
+        "1 to 65535",
+    );
+    rejected(
+        &change(
+            host,
+            "host = \"192.168.88.1\"\nport = 70000\nuser = \"homelink\"",
+        ),
+        "routers[0].port",
+        "1 to 65535",
+    );
+    for bad in ["", "-oProxyCommand=x", "a@b", "a b"] {
         rejected(
             &change(
-                "api_url = \"http://192.168.88.1\"",
-                &format!("api_url = \"{bad}\""),
+                host,
+                &format!("host = \"192.168.88.1\"\nport = 22\nuser = \"{bad}\""),
             ),
-            "routers[0].api_url",
-            "not a valid API URL",
+            "routers[0].user",
+            "",
         );
     }
     accepted(&change(
-        "api_url = \"http://192.168.88.1\"",
-        "api_url = \"https://router.lan:8443\"",
+        host,
+        "host = \"router.lan\"\nport = 2222\nuser = \"homelink\"",
     ));
+}
+
+#[test]
+fn router_key_must_be_an_explicit_absolute_path() {
+    let key = r"identity_file = 'C:\ProgramData\HomeLink\router_ed25519'";
+    for bad in [
+        "",
+        "id_ed25519",
+        r"..\id_ed25519",
+        r"~/.ssh/id_ed25519",
+        r"C:id_ed25519",
+        r"keys\id_ed25519",
+    ] {
+        rejected(
+            &change(key, &format!("identity_file = '{bad}'")),
+            "routers[0].identity_file",
+            "",
+        );
+    }
+    for good in [
+        r"C:\Users\me\.ssh\router",
+        "C:/Users/me/.ssh/router",
+        r"\\server\share\router",
+        "/home/me/.ssh/router",
+    ] {
+        accepted(&change(key, &format!("identity_file = '{good}'")));
+    }
 }
 
 // ---- 6. ports ----
@@ -481,7 +524,7 @@ fn mikrotik_needs_an_interface() {
     rejected(
         &change("interface = \"bridge\"", "interface = \"\""),
         "pcs[0].wake.interface",
-        "must not be empty",
+        "interface name",
     );
 }
 
@@ -608,31 +651,51 @@ fn command_power_needs_at_least_one_command() {
     accepted(&change("sleep = [", "shutdown = [\"poweroff\"]\nsleep = ["));
 }
 
-// ---- 12. secrets ----
+// ---- 12. no secrets in the file, and nothing that can inject syntax ----
 
 #[test]
-fn secret_reference_must_be_present_but_need_not_exist_yet() {
-    rejected(
-        &change(
-            "password_ref = \"HomeLink/router/mikrotik\"",
-            "password_ref = \"\"",
-        ),
-        "routers[0].password_ref",
-        "secret reference",
-    );
-    rejected(
-        &change(
-            "password_ref = \"HomeLink/router/mikrotik\"",
-            "password_ref = \" x\"",
-        ),
-        "routers[0].password_ref",
-        "secret reference",
-    );
-    // Whether the secret exists is checked when it is used, not here.
-    accepted(&change(
+fn the_old_rest_and_password_keys_are_unknown_now() {
+    for extra in [
+        "api_url = \"http://192.168.88.1\"",
         "password_ref = \"HomeLink/router/mikrotik\"",
-        "password_ref = \"never-stored\"",
-    ));
+        "verify_tls = false",
+        "password = \"hunter2\"",
+    ] {
+        let text = change(
+            "kind = \"mikrotik\"",
+            &format!("kind = \"mikrotik\"\n{extra}"),
+        );
+        assert!(
+            matches!(config::parse(&text), Err(ConfigError::Syntax(_))),
+            "{extra}"
+        );
+    }
+}
+
+#[test]
+fn mikrotik_interface_name_has_a_closed_character_set() {
+    for bad in [
+        "",
+        "a b",
+        "bridge; /system reboot",
+        "a\"b",
+        "$(x)",
+        "[x]",
+        "a=b",
+        "мережа",
+    ] {
+        rejected(
+            &change("interface = \"bridge\"", &format!("interface = '{bad}'")),
+            "pcs[0].wake.interface",
+            "interface name",
+        );
+    }
+    for good in ["ether1", "vlan-10", "br_lan.2"] {
+        accepted(&change(
+            "interface = \"bridge\"",
+            &format!("interface = \"{good}\""),
+        ));
+    }
 }
 
 // ---- 13. paths and RDP ----

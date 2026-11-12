@@ -5,7 +5,7 @@
 //! manual clock.
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -16,52 +16,42 @@ use crate::engine::{Deps, Engine, Handle};
 use crate::machine::{Command, START_POLL};
 use crate::notice::Notice;
 use crate::ports::{
-    Clock, Executor, Pinger, PortProbe, PowerError, PowerRunner, Sink, Time, TunnelDriver,
-    TunnelError, WakeError, WakeRegistry, WakeRequest, WakeSender,
+    Clock, CommandOutput, CommandRunner, Executor, Pinger, PortProbe, PowerError, PowerRunner,
+    Sink, Time, TunnelDriver, TunnelError, WakeError, WakeRegistry, WakeRequest, WakeSender,
 };
-use crate::secret::{Secret, SecretError, SecretRef, SecretStore};
 use crate::snapshot::Snapshot;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().expect("test fake lock poisoned")
 }
 
-/// A [`SecretStore`] that keeps secrets in memory.
+/// A [`CommandRunner`] that records what it is asked to run and returns a set result
+/// (success with no output by default).
 #[derive(Default)]
-pub struct MemorySecretStore {
-    values: Mutex<HashMap<String, String>>,
+pub struct FakeCommandRunner {
+    calls: Mutex<Vec<(Vec<String>, Duration)>>,
+    result: Mutex<Option<CommandOutput>>,
 }
 
-impl MemorySecretStore {
-    /// An empty store.
-    pub fn new() -> Self {
-        Self::default()
+impl FakeCommandRunner {
+    /// Sets what every later run returns.
+    pub fn set_result(&self, output: CommandOutput) {
+        *lock(&self.result) = Some(output);
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, HashMap<String, String>>, SecretError> {
-        self.values
-            .lock()
-            .map_err(|_| SecretError::Store("poisoned lock".into()))
+    /// The command lines and timeouts run so far.
+    pub fn calls(&self) -> Vec<(Vec<String>, Duration)> {
+        lock(&self.calls).clone()
     }
 }
 
-impl SecretStore for MemorySecretStore {
-    fn get(&self, reference: &SecretRef) -> Result<Option<Secret>, SecretError> {
-        Ok(self
-            .lock()?
-            .get(reference.as_str())
-            .map(|v| Secret::new(v.clone())))
-    }
-
-    fn set(&self, reference: &SecretRef, value: &Secret) -> Result<(), SecretError> {
-        self.lock()?
-            .insert(reference.as_str().to_owned(), value.expose().to_owned());
-        Ok(())
-    }
-
-    fn delete(&self, reference: &SecretRef) -> Result<(), SecretError> {
-        self.lock()?.remove(reference.as_str());
-        Ok(())
+impl CommandRunner for FakeCommandRunner {
+    fn run(&self, argv: &[String], timeout: Duration) -> CommandOutput {
+        lock(&self.calls).push((argv.to_vec(), timeout));
+        lock(&self.result).clone().unwrap_or(CommandOutput {
+            code: 0,
+            text: String::new(),
+        })
     }
 }
 
@@ -367,10 +357,10 @@ ping_timeout_ms = 1000
 [[routers]]
 id = "mikrotik"
 kind = "mikrotik"
-api_url = "http://192.168.88.1"
+host = "192.168.88.1"
+port = 22
 user = "homelink"
-password_ref = "HomeLink/router/mikrotik"
-verify_tls = false
+identity_file = 'C:\HomeLink\router_key'
 timeout = 8
 
 [[pcs]]
@@ -519,7 +509,7 @@ impl Harness {
         let sink = Arc::new(RecordingSink::default());
         let mut registry = WakeRegistry::new();
         for kind in [
-            WakeKind::MikrotikRest,
+            WakeKind::MikrotikSsh,
             WakeKind::MagicPacket,
             WakeKind::Command,
         ] {
@@ -648,15 +638,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn store_round_trip() {
-        let store = MemorySecretStore::new();
-        let key = SecretRef::new("HomeLink/router/x").unwrap();
-        assert!(store.get(&key).unwrap().is_none());
-        store.set(&key, &Secret::new("pw".into())).unwrap();
-        assert_eq!(store.get(&key).unwrap().unwrap().expose(), "pw");
-        store.delete(&key).unwrap();
-        store.delete(&key).unwrap();
-        assert!(store.get(&key).unwrap().is_none());
+    fn fake_runner_records_and_answers() {
+        let runner = FakeCommandRunner::default();
+        assert_eq!(runner.run(&["a".into()], Duration::from_secs(1)).code, 0);
+        runner.set_result(CommandOutput {
+            code: 3,
+            text: "x".into(),
+        });
+        assert_eq!(runner.run(&["b".into()], Duration::from_secs(2)).code, 3);
+        assert_eq!(runner.calls().len(), 2);
     }
 
     #[test]

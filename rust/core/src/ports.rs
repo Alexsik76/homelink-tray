@@ -155,7 +155,7 @@ impl WakeRegistry {
             .get(&method.kind())
             .ok_or(WakeError::Unsupported)?;
         let router = match method {
-            WakeMethod::MikrotikRest { router, .. } => config.router(router),
+            WakeMethod::MikrotikSsh { router, .. } => config.router(router),
             _ => None,
         };
         sender.wake(&WakeRequest { pc, method, router })

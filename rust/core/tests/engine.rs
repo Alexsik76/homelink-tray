@@ -43,7 +43,7 @@ impl Sink for ChannelSink {
 fn wake_registry(wake: &Arc<FakeWake>) -> Arc<WakeRegistry> {
     let mut registry = WakeRegistry::new();
     for kind in [
-        homelink_core::domain::WakeKind::MikrotikRest,
+        homelink_core::domain::WakeKind::MikrotikSsh,
         homelink_core::domain::WakeKind::MagicPacket,
         homelink_core::domain::WakeKind::Command,
     ] {

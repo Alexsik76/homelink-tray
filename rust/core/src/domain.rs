@@ -8,8 +8,6 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
-use crate::secret::SecretRef;
-
 /// A value that failed validation, with a human-readable reason.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
@@ -178,61 +176,38 @@ impl fmt::Display for Host {
     }
 }
 
-/// Base URL of a router REST API: `http://` or `https://`, a host, an optional port, no
-/// user name or password (those are stored separately).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApiUrl(String);
+/// Longest router interface name.
+const INTERFACE_MAX_LEN: usize = 64;
 
-impl ApiUrl {
-    /// Validates the URL.
+/// The name of a router interface, restricted to letters, digits, `_`, `.` and `-`.
+///
+/// The name is placed into a RouterOS command that is sent over SSH, so anything that
+/// could add syntax (spaces, quotes, `;`, `$`, `[`, `]`, `\`, `=`) is not allowed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterfaceName(String);
+
+impl InterfaceName {
+    /// Validates an interface name.
     pub fn parse(s: &str) -> Result<Self, InvalidValue> {
-        let bad = |why: &str| invalid(format!("'{s}' is not a valid API URL: {why}"));
-        let lower = s.to_ascii_lowercase();
-        let prefix_len = if lower.starts_with("http://") {
-            "http://".len()
-        } else if lower.starts_with("https://") {
-            "https://".len()
+        let ok = (1..=INTERFACE_MAX_LEN).contains(&s.len())
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'));
+        if ok {
+            Ok(Self(s.to_owned()))
         } else {
-            return bad("it must start with http:// or https://");
-        };
-        let rest = s.get(prefix_len..).unwrap_or_default();
-        if s.chars().any(|c| c.is_whitespace() || c.is_control()) {
-            return bad("it contains whitespace");
+            invalid(format!(
+                "interface name '{s}' must be 1-{INTERFACE_MAX_LEN} characters from A-Z, a-z, 0-9 and _.-"
+            ))
         }
-        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-        if authority.contains('@') {
-            return bad("credentials in the URL are not allowed");
-        }
-        let (host, port) = if let Some(inner) = authority.strip_prefix('[') {
-            let Some((host, tail)) = inner.split_once(']') else {
-                return bad("unclosed '[' in the host");
-            };
-            (host, tail.strip_prefix(':'))
-        } else {
-            match authority.rsplit_once(':') {
-                Some((host, port)) => (host, Some(port)),
-                None => (authority, None),
-            }
-        };
-        if let Err(InvalidValue(why)) = Host::parse(host) {
-            return bad(&why);
-        }
-        if let Some(port) = port {
-            match port.parse::<u16>() {
-                Ok(p) if p != 0 => {}
-                _ => return bad("the port must be 1-65535"),
-            }
-        }
-        Ok(Self(s.to_owned()))
     }
 
-    /// The URL as given.
+    /// The name as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
-impl fmt::Display for ApiUrl {
+impl fmt::Display for InterfaceName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
@@ -400,26 +375,28 @@ pub struct Tunnel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RouterKind {
-    /// MikroTik RouterOS 7 REST API.
+    /// MikroTik RouterOS, reached over SSH.
     Mikrotik,
 }
 
-/// A router shared by the wake methods of several PCs.
+/// A router shared by the wake methods of several PCs. It is reached over SSH with a key,
+/// through the system OpenSSH client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Router {
     /// Identifier.
     pub id: RouterId,
     /// Kind of router.
     pub kind: RouterKind,
-    /// Base URL of the REST API.
-    pub api_url: ApiUrl,
-    /// User name.
+    /// Address.
+    pub host: Host,
+    /// SSH port.
+    pub port: u16,
+    /// SSH user.
     pub user: String,
-    /// Where the password is stored.
-    pub password_ref: SecretRef,
-    /// Whether to verify the TLS certificate of an `https://` router.
-    pub verify_tls: bool,
-    /// Timeout of one request.
+    /// Absolute path of the private key file. Explicit on purpose: the program runs
+    /// elevated and must not depend on which profile `ssh` resolves.
+    pub identity_file: String,
+    /// Timeout of one command, including the connection.
     pub timeout: Duration,
 }
 
@@ -427,14 +404,15 @@ pub struct Router {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WakeMethod {
-    /// A router sends the magic packet on one of its interfaces.
-    MikrotikRest {
+    /// A MikroTik router sends the magic packet on one of its interfaces
+    /// (`/tool wol`, run over SSH).
+    MikrotikSsh {
         /// The router.
         router: RouterId,
         /// MAC address of the PC.
         mac: MacAddr,
         /// Router interface that faces the PC.
-        interface: String,
+        interface: InterfaceName,
     },
     /// This computer broadcasts the magic packet over UDP.
     MagicPacket {
@@ -459,8 +437,8 @@ pub enum WakeMethod {
 /// The kind of a [`WakeMethod`], used to pick the sender that implements it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WakeKind {
-    /// [`WakeMethod::MikrotikRest`].
-    MikrotikRest,
+    /// [`WakeMethod::MikrotikSsh`].
+    MikrotikSsh,
     /// [`WakeMethod::MagicPacket`].
     MagicPacket,
     /// [`WakeMethod::Command`].
@@ -471,7 +449,7 @@ impl WakeMethod {
     /// The kind of this method.
     pub fn kind(&self) -> WakeKind {
         match self {
-            Self::MikrotikRest { .. } => WakeKind::MikrotikRest,
+            Self::MikrotikSsh { .. } => WakeKind::MikrotikSsh,
             Self::MagicPacket { .. } => WakeKind::MagicPacket,
             Self::Command { .. } => WakeKind::Command,
         }
@@ -652,27 +630,29 @@ mod tests {
     }
 
     #[test]
-    fn api_urls() {
-        for ok in [
-            "http://192.168.88.1",
-            "https://router.lan:8443/",
-            "HTTP://r",
-            "http://[::1]:80",
-        ] {
-            assert!(ApiUrl::parse(ok).is_ok(), "{ok}");
+    fn interface_names_cannot_carry_routeros_or_shell_syntax() {
+        for ok in ["bridge", "ether1", "vlan-10", "br_lan.2", &"a".repeat(64)] {
+            assert!(InterfaceName::parse(ok).is_ok(), "{ok}");
         }
         for bad in [
             "",
-            "ftp://r",
-            "192.168.88.1",
-            "http://",
-            "http://u:p@r",
-            "http://r:0",
-            "http://r:99999",
-            "http://r x",
-            "http://[::1",
+            "a b",
+            "a;b",
+            "a\"b",
+            "a'b",
+            "a$b",
+            "a[b]",
+            "a\\b",
+            "a=b",
+            "a&b",
+            "a|b",
+            "a`b`",
+            "a\nb",
+            "a\tb",
+            "мережа",
+            &"a".repeat(65),
         ] {
-            assert!(ApiUrl::parse(bad).is_err(), "{bad}");
+            assert!(InterfaceName::parse(bad).is_err(), "{bad:?}");
         }
     }
 

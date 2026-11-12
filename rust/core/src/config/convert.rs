@@ -78,10 +78,10 @@ fn raw_router(r: &Router) -> RawRouter {
     RawRouter {
         id: r.id.to_string(),
         kind: RawRouterKind::Mikrotik,
-        api_url: r.api_url.to_string(),
+        host: r.host.to_string(),
+        port: i64::from(r.port),
         user: r.user.clone(),
-        password_ref: r.password_ref.to_string(),
-        verify_tls: r.verify_tls,
+        identity_file: r.identity_file.clone(),
         timeout: secs(r.timeout),
     }
 }
@@ -109,14 +109,14 @@ fn raw_pc(pc: &Pc, defaults: &Timing) -> RawPc {
 
 fn raw_wake(w: &WakeMethod) -> RawWake {
     match w {
-        WakeMethod::MikrotikRest {
+        WakeMethod::MikrotikSsh {
             router,
             mac,
             interface,
         } => RawWake::Mikrotik {
             router: router.to_string(),
             mac: mac.to_string(),
-            interface: interface.clone(),
+            interface: interface.to_string(),
         },
         WakeMethod::MagicPacket {
             mac,

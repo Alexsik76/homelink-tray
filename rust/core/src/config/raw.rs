@@ -103,10 +103,10 @@ pub enum RawRouterKind {
 pub struct RawRouter {
     pub id: String,
     pub kind: RawRouterKind,
-    pub api_url: String,
+    pub host: String,
+    pub port: i64,
     pub user: String,
-    pub password_ref: String,
-    pub verify_tls: bool,
+    pub identity_file: String,
     pub timeout: u64,
 }
 

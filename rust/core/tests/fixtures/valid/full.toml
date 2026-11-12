@@ -26,10 +26,10 @@ ping_timeout_ms = 1000
 [[routers]]
 id = "mikrotik"
 kind = "mikrotik"
-api_url = "http://192.168.88.1"
+host = "192.168.88.1"
+port = 22
 user = "homelink"
-password_ref = "HomeLink/router/mikrotik"
-verify_tls = false
+identity_file = 'C:\ProgramData\HomeLink\router_ed25519'
 timeout = 8
 
 [[pcs]]

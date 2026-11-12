@@ -13,11 +13,10 @@ use super::raw::{
 };
 use super::{Config, Issue, LogConfig, VERSION};
 use crate::domain::{
-    ApiUrl, Argv, Host, InvalidValue, MacAddr, Os, Pc, PcId, PowerMethod, Rdp, Router, RouterId,
-    RouterKind, Timing, Tunnel, TunnelId, TunnelKind, WakeMethod,
+    Argv, Host, InterfaceName, InvalidValue, MacAddr, Os, Pc, PcId, PowerMethod, Rdp, Router,
+    RouterId, RouterKind, Timing, Tunnel, TunnelId, TunnelKind, WakeMethod,
 };
 use crate::i18n::{Lang, LanguageSetting};
-use crate::secret::SecretRef;
 
 /// Upper bound of every timeout and interval, in seconds. A technical sanity limit.
 pub const MAX_SECONDS: u64 = 3600;
@@ -379,21 +378,21 @@ fn validate_routers(ctx: &mut Ctx, raw: &[RawRouter]) -> Vec<Router> {
                 format!("duplicate id '{}' (also routers[{first}])", r.id),
             );
         }
-        let api_url = ctx.check(&at("api_url"), ApiUrl::parse(&r.api_url));
-        let user_ok = ctx.non_empty(&at("user"), &r.user);
-        let password_ref = SecretRef::new(&r.password_ref).map_err(|e| InvalidValue(e.to_string()));
-        let password_ref = ctx.check(&at("password_ref"), password_ref);
+        let host = ctx.check(&at("host"), Host::parse(&r.host));
+        let port = ctx.port(&at("port"), r.port);
+        let user_ok = check_ssh_user(ctx, &at("user"), &r.user);
+        let key_ok = check_absolute_path(ctx, &at("identity_file"), &r.identity_file);
         let timeout = ctx.seconds(&at("timeout"), r.timeout);
-        if let (Some(id), Some(api_url), true, Some(password_ref), Some(timeout)) =
-            (id, api_url, user_ok, password_ref, timeout)
+        if let (Some(id), Some(host), Some(port), true, true, Some(timeout)) =
+            (id, host, port, user_ok, key_ok, timeout)
         {
             out.push(Router {
                 id,
                 kind: RouterKind::Mikrotik,
-                api_url,
+                host,
+                port,
                 user: r.user.clone(),
-                password_ref,
-                verify_tls: r.verify_tls,
+                identity_file: r.identity_file.clone(),
                 timeout,
             });
         }
@@ -524,11 +523,14 @@ fn validate_wake(
                 );
             }
             let mac = ctx.check(&format!("{path}.mac"), MacAddr::parse(mac));
-            let iface_ok = ctx.non_empty(&format!("{path}.interface"), interface);
-            Some(WakeMethod::MikrotikRest {
+            let interface = ctx.check(
+                &format!("{path}.interface"),
+                InterfaceName::parse(interface),
+            );
+            Some(WakeMethod::MikrotikSsh {
                 router: id.filter(|_| known)?,
                 mac: mac?,
-                interface: iface_ok.then(|| interface.clone())?,
+                interface: interface?,
             })
         }
         RawWake::MagicPacket {
@@ -616,6 +618,27 @@ fn validate_power(ctx: &mut Ctx, path: &str, raw: &RawPower) -> Option<PowerMeth
             })
         }
     }
+}
+
+/// A key file path must be absolute, so that the elevated program never depends on which
+/// profile `ssh` would resolve a relative or `~` path in. Recognises Windows (`C:\`, `C:/`,
+/// `\\server`) and Unix (`/`) forms regardless of the platform the program runs on.
+fn check_absolute_path(ctx: &mut Ctx, path: &str, value: &str) -> bool {
+    if !ctx.non_empty(path, value) {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    let drive = bytes.first().is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(1) == Some(&b':')
+        && matches!(bytes.get(2), Some(b'\\' | b'/'));
+    if !(value.starts_with(['/', '\\']) || drive) || value.chars().any(char::is_control) {
+        ctx.err(
+            path,
+            format!("must be an absolute path (such as C:\\Users\\me\\.ssh\\key), got '{value}'"),
+        );
+        return false;
+    }
+    true
 }
 
 /// An SSH user becomes part of a command line: no blanks, no `@`, no leading `-`.

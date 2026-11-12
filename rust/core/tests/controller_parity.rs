@@ -60,7 +60,7 @@ fn connect_and_wake_sends_wake_when_pc_is_silent() {
     h.reachable(ROUTER, true);
     h.wake_pc("desktop");
     assert_eq!(status(&h), (TunnelState::Up, PcState::Waking));
-    assert_eq!(h.wake.calls(), [(pc_id("desktop"), WakeKind::MikrotikRest)]);
+    assert_eq!(h.wake.calls(), [(pc_id("desktop"), WakeKind::MikrotikSsh)]);
     let first_change = h
         .sink
         .snapshots()
@@ -119,7 +119,7 @@ fn tunnel_start_gives_up_after_timeout() {
 #[test]
 fn wake_failure_is_reported() {
     let mut h = env();
-    h.wake.fail_with(Some("HTTP 500"));
+    h.wake.fail_with(Some("connection refused"));
     h.reachable(ROUTER, true);
     h.wake_pc("desktop");
     assert_ne!(h.pc("desktop"), PcState::Waking);
@@ -127,7 +127,7 @@ fn wake_failure_is_reported() {
         h.notices(),
         [Notice::WakeFailed {
             pc: "Desktop".into(),
-            detail: "HTTP 500".into()
+            detail: "connection refused".into()
         }]
     );
 }

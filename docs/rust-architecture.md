@@ -12,11 +12,13 @@ code that is ported; `docs/design.md` describes the Python-era UI and is revised
 - Several remote PCs, each optionally behind a tunnel. A tunnel may serve several PCs; PCs
   without a tunnel form their own group. Old `config.json` files are not migrated.
 - One command raises the tunnel and wakes an inactive PC.
-- Wake methods per PC: MikroTik REST, direct magic packet, arbitrary command; more later.
+- Wake methods per PC: a MikroTik router over SSH (`/tool wol`), direct magic packet,
+  arbitrary command; more later. The MikroTik REST API is not used at all.
 - Remote PCs may run Windows or Linux.
-- A wizard adds a PC. Passwords live in Windows Credential Manager; the config only refers
-  to them. Nothing leaves the computer: no telemetry, no update check, network traffic only
-  to hosts the user configured.
+- A wizard adds a PC. The program holds no passwords or other secrets: routers and PCs are
+  reached over SSH with keys through the system OpenSSH client, and the Remote Desktop
+  password is typed into `mstsc`, never into HomeLink. So "HomeLink stores no secrets and
+  talks only to the hosts in its config" is unconditional (section 4).
 - Readiness = all listed TCP ports open. An online PC turns "off" only after
   `offline_after_failures` consecutive failed checks; one success means online.
 - Third-party users: tests, lint and CI are part of the deliverable. Own visual style
@@ -39,28 +41,29 @@ rust/
       engine.rs         event loop, job executor, snapshot publishing
       snapshot.rs       what the engine publishes to the UI
       ports.rs          traits that isolate side effects (section 6)
-      adapters/         portable adapters: tcp probe, magic packet, command runner,
-                        MikroTik REST client
+      wake.rs           wake sender that runs `ssh` through `CommandRunner` (argv building
+                        is pure); phase 3 adds the other portable senders
+      adapters/         (phase 3) portable adapters: tcp probe, magic packet, command runner
       wizard.rs         wizard steps and draft-to-config conversion (pure logic)
-      notice.rs, i18n.rs, secret.rs, rdp.rs
+      notice.rs, i18n.rs, rdp.rs
       testing.rs        fakes behind the `testing` feature
     locales/            en.json, uk.json
     tests/              integration tests with local servers and fixtures
   app/                  crate `homelink` (bin, produces HomeLink.exe): Windows + Slint
     src/
       main.rs           startup, single instance, elevation check, wiring
-      windows/          adapters: WireGuard service, Credential Manager, ICMP,
-                        taskbar theme, OEM output decoding, mstsc launch
+      windows/          adapters: WireGuard service, ICMP, taskbar theme,
+                        OEM output decoding, mstsc launch, OpenSSH client detection
       ui/               Slint glue: snapshot -> models, callbacks -> commands, tray, notices
     ui/                 *.slint (panel, wizard, about), fonts/, icons/
     build.rs
 ```
 
 Dependency rule: `app -> core`, never the reverse. `core` depends only on std, `serde`, a
-TOML/JSON parser, `thiserror`, `log` and (feature `http`) `ureq`. It builds and tests on
-Linux; only `app` needs Windows. The prototype in `rust/src` and `rust/ui` moves into
-`rust/app` in phase 4 (tray, panel placement and focus-loss logic are reused,
-`model.rs` sample data is deleted).
+TOML/JSON parser, `thiserror` and `log` (plus `serde_json` for the locale catalogs). It has no
+HTTP or TLS client. It builds and tests on Linux; only `app` needs Windows. The prototype in
+`rust/src` and `rust/ui` moves into `rust/app` in phase 4 (tray, panel placement and
+focus-loss logic are reused, `model.rs` sample data is deleted).
 
 Size policy: no `tokio`, no `reqwest`, no gettext, no extra GUI crates. Release profile
 with `lto = "fat"`, `codegen-units = 1`, `opt-level = "s"`, `strip = true`, panic = unwind
@@ -76,24 +79,26 @@ TunnelId, PcId, RouterId        validated slugs [a-z0-9-]{1,32}
 
 Tunnel      { id, name, kind: TunnelKind, probe_host, timeout, ping_timeout }
 TunnelKind  = WireGuardService { exe, conf }          // #[non_exhaustive]: OpenVPN etc. later
-Router      { id, kind: Mikrotik, api_url, user, password_ref, verify_tls, timeout }
+Router      { id, kind: Mikrotik, host, port, user, identity_file, timeout }   // SSH, key only
 
 Pc          { id, name, os: Os, host, tunnel: Option<TunnelId>, ports: NonEmpty<u16>,
               wake: Option<WakeMethod>, power: Option<PowerMethod>, rdp: Option<Rdp>,
               timing: Timing }
 Os          = Windows | Linux
-WakeMethod  = MikrotikRest { router, mac, interface }        // #[non_exhaustive]
+WakeMethod  = MikrotikSsh  { router, mac, interface: InterfaceName }   // #[non_exhaustive]
             | MagicPacket  { mac, broadcast, port }          // UDP, default 255.255.255.255:9
-            | Command      { argv, timeout }
+            | Command      { argv, mac: Option<Mac>, timeout }
 PowerAction = Sleep | Shutdown
-PowerMethod = Ssh     { user, port, identity_file, timeout } // uses the system ssh client
-            | Command { sleep: Option<argv>, shutdown: Option<argv>, timeout }
+PowerMethod = Ssh     { user, port, identity_file: Option<path> }   // system ssh client
+            | Command { sleep: Option<argv>, shutdown: Option<argv> }
 Rdp         { user, options }
-Timing      { poll, wake_poll, port_timeout, offline_after_failures, wake_timeout }
+Timing      { poll, wake_poll, port_timeout, offline_after_failures, wake_timeout,
+              power_timeout }
 ```
 
 `argv` is always a list, never a shell string, so there is no quoting or injection issue.
-Placeholders `{host}`, `{mac}`, `{user}` are substituted per element. SSH presets by `Os`:
+Placeholders `{host}` and (when the wake command has a `mac`) `{mac}` are substituted per
+element. SSH presets by `Os`:
 
 | Os | Shutdown | Sleep |
 | --- | --- | --- |
@@ -102,6 +107,26 @@ Placeholders `{host}`, `{mac}`, `{user}` are substituted per element. SSH preset
 
 Windows sleep through `SetSuspendState` hibernates when hibernation is enabled; the wizard
 says so. A `Command` power method covers anything else.
+
+**Waking through a MikroTik router.** The sender runs, through `CommandRunner`, the system
+client with this argument list (never a shell string):
+
+```
+ssh -o BatchMode=yes -o PasswordAuthentication=no -o IdentitiesOnly=yes
+    -o StrictHostKeyChecking=yes -o ConnectTimeout=<router timeout>
+    -i <identity_file> -p <port> -l <user> -- <host>
+    "/tool wol mac=<MAC> interface=<interface>"
+```
+
+`<MAC>` is a parsed MAC address rendered as six upper-case hex pairs, and `<interface>` is an
+`InterfaceName` restricted to `A-Za-z0-9_.-` (1-64 characters). Neither type can carry a space,
+quote, `;`, `$`, `[`, `]`, `\` or `=`, so a configured value cannot add RouterOS or shell
+syntax. The remote command is one argument. The key is an explicit absolute path (the program
+runs elevated and must not depend on which profile `ssh` would resolve); `IdentitiesOnly`
+stops `ssh` from offering other keys. The host key must already be known
+(`StrictHostKeyChecking=yes`): the wizard is the only place that may accept a new one
+(section 4). Argument building is pure and unit-tested in `core::wake`; the process itself is
+started by the `CommandRunner` adapter (phase 3).
 
 States (as in `state.py`, now per entity):
 
@@ -124,19 +149,32 @@ rules: Wake needs a wake method and a PC not `Online`/`Waking`; Sleep, Shutdown 
 an `Online` PC and the matching configuration (same rules as `app.py` `can_wake` and
 `pc_online`).
 
-## 4. Sensitive data
+## 4. Privacy and security
 
-- `SecretStore` trait (get/set/delete by target name); Windows implementation over
-  Credential Manager (`CredReadW`/`CredWriteW`, generic credentials, `CRED_PERSIST_LOCAL_MACHINE`
-  so nothing roams). Targets are `HomeLink/router/<id>`; the config holds `password_ref`.
-- `Secret` is a newtype that zeroizes on drop and prints as `***` in `Debug`/`Display`.
-  Secrets are fetched at the moment of use, never cached in config structures, never
-  logged; URLs are logged without credentials.
-- The RDP password, if the user wants it saved, is written by the wizard as the standard
-  `TERMSRV/<host>` credential (what `mstsc` reads); the config stores only the user name.
-  This replaces the manual `cmdkey` step from the README.
-- SSH uses keys only (`BatchMode=yes`), so there is no SSH password to store.
-- No telemetry, no automatic update check, no crash upload. The log file is local.
+HomeLink stores no secrets and talks only to the hosts in its config. This holds without
+exceptions, by construction:
+
+- **No secrets.** There is no password, token or key material in the configuration, in the
+  Windows Credential Manager (not used at all) or anywhere else the program controls. Routers and PCs are reached over SSH with key authentication through the system
+  OpenSSH client (`BatchMode=yes`, `PasswordAuthentication=no`); the private key stays in a
+  file the user owns, referenced by an explicit absolute path. The program never reads it.
+- **Remote Desktop.** HomeLink never handles the RDP password. The user types it in `mstsc`,
+  which may save it itself. The program only writes the `.rdp` file (host, user name, options)
+  and launches `mstsc`.
+- **No telemetry, no update checks, no crash uploads.** The program makes no network
+  connection of its own besides the ones the user configured: TCP checks of the listed ports,
+  pings of the tunnel probe host, UDP magic packets, SSH to routers and PCs, and the commands
+  the user wrote. There is no HTTP or TLS client in the program.
+- **SSH host keys are verified.** `StrictHostKeyChecking=yes` everywhere at run time. The wizard
+  may add a host key (`accept-new`) only after showing the fingerprint and receiving explicit
+  consent from the user; nothing else ever accepts a key. Known hosts are read from the
+  profile `ssh` resolves for the (elevated) user; the wizard runs in the same process, so the
+  two agree.
+- **Nothing sensitive in logs.** Logs hold states, ids, host names and error texts, never key
+  contents or command output beyond the error text shown in a notice. The log file is local.
+- **Supply chain.** `cargo-deny` checks licences, advisories and sources in CI; `Cargo.lock`
+  is committed and builds use `--locked`; releases are built by GitHub Actions from the
+  public source (section 14).
 
 ## 5. State machine and polling
 
@@ -172,11 +210,11 @@ Per tunnel. `expect_down` is set by a user disconnect (the old `user_stopped`).
 | T3 | Up | `Wake(pc)` | Up | probe PC (see P4) | `connect_and_wake` |
 | T4 | Starting/Up | `ToggleTunnel` | (observed next) | job `TunnelDown`; `expect_down = true`; `pending = {}` | `toggle_tunnel` |
 | T5 | Starting | `JobDone(TunnelUp, Err)` | observed next | notice `TunnelFailed(detail)`; `pending = {}`; probe at once | `_start_tunnel` |
-| T6 | Starting (deadline open) | probe: router answers | Up | start PC probes for `pending` and attached PCs | `_start_tunnel` loop |
+| T6 | Starting (deadline open) | probe: probe host answers | Up | start PC probes for `pending` and attached PCs | `_start_tunnel` loop |
 | T7 | Starting (deadline passed) | still silent | Starting | `pending = {}`; deadline-less polling goes on (T9); only logged in v0.3 | `_start_tunnel` end |
 | T8 | any | probe: service not running | Down | attached PCs to `Unknown`, clear `waking_until` and failure counters; if previous state was `Up` and not `expect_down`: notice `TunnelLost`; clear `expect_down` | `_refresh` first branch |
-| T9 | any | probe: service running, router silent | Starting | attached PCs to `Unknown`, counters cleared; no notice | `_refresh` second branch |
-| T10 | any | probe: router answers | Up | start attached PCs' probes | `_refresh` rest |
+| T9 | any | probe: service running, probe host silent | Starting | attached PCs to `Unknown`, counters cleared; no notice | `_refresh` second branch |
+| T10 | any | probe: probe host answers | Up | start attached PCs' probes | `_refresh` rest |
 
 While Starting with an open deadline only the reachability probe runs (the Python loop
 ignored the service state), at 1 s intervals; otherwise the tunnel is polled every
@@ -224,7 +262,8 @@ state; the next probe does.
 1. T7: a tunnel start that times out now produces a notice `TunnelTimeout` (v0.3 only logs it).
 2. `Controller.wake()` and the notice `tunnel_required` are dropped: the UI never called
    `wake()` directly; `Wake` on a PC with a tunnel is always connect-and-wake.
-3. `wol_failed` becomes `wake_failed` because wake is no longer WoL-only.
+3. `wol_failed` becomes `wake_failed` because wake is no longer router-only (the router is now
+   reached over SSH, so its detail text is `ssh` output or an exit code, not an HTTP status).
 4. Connect-and-wake on an `Up` tunnel does not flip the tunnel to `Starting` for an instant.
 
 Everything else (rules P1-P13, T8-T10, the 200 character detail limit, silence for user
@@ -237,11 +276,9 @@ disconnects and for PCs that were told to power off) is kept.
 | `TunnelDriver` | `is_running`, `up`, `down` for a `Tunnel` | `app`: SCM query + `wireguard.exe /installtunnelservice` / `/uninstalltunnelservice` (replaces psutil; "already installed" still tolerated) | scripted fake |
 | `Pinger` | ICMP echo to a host with timeout | `app`: `IcmpSendEcho` (no console window, no locale parsing) | set of reachable hosts |
 | `PortProbe` | all ports of a host accept TCP, short-circuit on first failure | `core`: `TcpStream::connect_timeout` | local listener / fake |
-| `WakeSender` | send one wake request for a `Pc` | one impl per method: `MikrotikRest` (over `HttpClient`), `MagicPacket` (UDP broadcast), `CommandWake`; selected through a `WakeRegistry` keyed by method kind | recording fake; real UDP socket on loopback |
-| `HttpClient` | POST JSON with basic auth, TLS verify flag, timeout | `core` feature `http`: `ureq` + rustls (fallback if size budget is missed: WinHTTP in `app`) | local mock server |
+| `WakeSender` | send one wake request for a `Pc` | one impl per method: `MikrotikSshWake` (`ssh` through `CommandRunner`, `core::wake`, done), `MagicPacket` (UDP broadcast), `CommandWake`; selected through a `WakeRegistry` keyed by method kind | recording fake; real UDP socket on loopback |
 | `CommandRunner` | run argv without a shell, hidden window, timeout; returns `(code, text)` | `core`: `std::process` with `CREATE_NO_WINDOW` on Windows; `app` wraps it to decode OEM code page | recording fake |
 | `PowerRunner` | run `Sleep`/`Shutdown` for a `PowerMethod` | `core`: builds argv (SSH or command), uses `CommandRunner` | recording fake |
-| `SecretStore` | get/set/delete secrets | `app`: Credential Manager | in-memory |
 | `Clock` | monotonic `now()` | `std::time::Instant` | manual clock |
 | `Executor` | run a blocking job and deliver `JobDone` | small fixed worker pool | inline, deterministic |
 | `Sink` | receive `Snapshot` and `Notice` from the engine | `app`: Slint + tray | collector |
@@ -287,8 +324,9 @@ processes; `app` contains everything that needs the `windows` crate.
 
 One file, `config.<ext>`, next to the executable (as in v0.3) or `--config <path>`. Written
 by the wizard atomically (temp file + rename). `version = 1` is the schema version. Unlike
-v0.3, defaults exist (one `Defaults` table in code, documented), so a third-party user writes
-only what differs. Illustrative TOML (the format is an owner decision, section 12):
+v0.3 a required `[defaults]` table holds the shared timing, and a PC may override single keys
+in `[pcs.timing]`; there are no built-in values for user settings in code (only technical
+limits). Illustrative TOML (the format is an owner decision, section 12):
 
 ```toml
 version  = 1
@@ -298,7 +336,7 @@ language = "auto"            # auto | en | uk; auto follows the Windows UI langu
 file  = "homelink.log"       # relative to the config file; rotated 1 MB x 2 backups, as now
 level = "info"               # error | warn | info | debug
 
-[defaults]                   # each key optional, overridable per PC
+[defaults]                   # every key required; a PC may override them in [pcs.timing]
 poll_seconds = 5
 wake_poll_seconds = 2
 port_timeout_ms = 1000
@@ -311,19 +349,19 @@ id = "home"
 name = "Home"
 kind = "wireguard"
 conf = 'C:\Program Files\WireGuard\Data\Configurations\home.conf.dpapi'
-wireguard_exe = 'C:\Program Files\WireGuard\wireguard.exe'   # optional, default as shown
+wireguard_exe = 'C:\Program Files\WireGuard\wireguard.exe'
 probe_host = "192.168.88.1"  # answers ping only when the tunnel works (was router_ip)
 timeout = 20                 # seconds to wait for probe_host after the start
 ping_timeout_ms = 1000
 
-[[routers]]
+[[routers]]                  # reached over SSH with a key; no password anywhere
 id = "mikrotik"
 kind = "mikrotik"
-api_url = "http://192.168.88.1"
-user = "homelink"
-password_ref = "HomeLink/router/mikrotik"   # Credential Manager target, never the password
-verify_tls = false
-timeout = 8
+host = "192.168.88.1"
+port = 22
+user = "homelink"            # a restricted RouterOS user that may only run commands
+identity_file = 'C:\ProgramData\HomeLink\router_ed25519'   # explicit absolute path, required
+timeout = 8                  # seconds, also the ssh connect timeout
 
 [[pcs]]
 id = "desktop"
@@ -345,7 +383,7 @@ ports = [3389]
   method = "ssh"             # or "command" with sleep = [...], shutdown = [...]
   user = "user"
   port = 22
-  identity_file = ""         # optional
+  # identity_file = '...'    # optional; without it ssh chooses the key
 
   [pcs.rdp]                  # omit to hide the RDP action
   user = "user"
@@ -363,20 +401,24 @@ Validation (all problems are collected and reported together, each with its path
 2. `version` is supported; `language` is one of the shipped locales or `auto`.
 3. Ids are unique within their kind and match `[a-z0-9-]{1,32}`; names are non-empty.
 4. `pcs[].tunnel` and `wake.router` refer to existing ids. A tunnel or router may be unused (warning).
-5. `host` is an IP address or a valid hostname; `probe_host` the same; `api_url` is `http://` or
-   `https://` with a host.
+5. `host` (PC and router) is an IP address or a valid hostname; `probe_host` the same.
 6. `ports`: at least one, each 1-65535, no duplicates.
 7. Numbers: `offline_after_failures >= 1`; all timeouts and intervals `> 0` and under an upper bound
    (e.g. 3600 s); `wake_timeout >= wake_poll_seconds`; `wake_poll_seconds <= poll_seconds`.
-8. MAC is six hex pairs separated by `:` or `-`; magic packet `broadcast` is an IPv4 address.
-9. Every `argv` is non-empty and its first element non-empty; placeholders are only
-   `{host}`, `{mac}`, `{user}`; no shell strings.
+8. MAC is six hex pairs separated by `:` or `-`; magic packet `broadcast` is an IPv4 address;
+   a MikroTik `interface` is 1-64 characters from `A-Za-z0-9_.-` (it is placed into a RouterOS
+   command, so no other character is accepted).
+9. Every `argv` is non-empty and its first element non-empty; placeholders are only `{host}`
+   and, when the wake command has a `mac`, `{mac}`; no shell strings.
 10. WireGuard: `conf` file name ends with `.conf` or `.conf.dpapi`; the derived tunnel name
     matches WireGuard's `[A-Za-z0-9_=+.-]{1,32}`.
 11. `power.method = "ssh"` needs `user`; `"command"` needs at least one of sleep/shutdown.
-12. Secrets: `password_ref` must be non-empty; whether the secret exists is checked at use
-    (and by the wizard), not at load, so the program can start before the user stores it. A
-    missing secret is reported as a `WakeFailed` with a clear reason.
+    An SSH user (power and router) has no blanks or `@` and does not start with `-`.
+12. Router access: `port` 1-65535; `identity_file` is required and must be an absolute path
+    (`C:\...`, `C:/...`, `\\server\...` or `/...`), so the elevated program never depends on
+    which profile `ssh` resolves. Keys that held REST or password settings (`api_url`,
+    `password_ref`, `verify_tls`, `password`) are unknown keys and rejected. The file is not
+    opened at load; a missing key file surfaces as an `ssh` error in a notice.
 13. `log.file` and `rdp` paths stay inside the config directory (no `..`, no absolute paths).
 
 Loading yields a `Config` of validated domain types (invalid states unrepresentable after
@@ -386,7 +428,7 @@ entities with unchanged ids keep their state, removed ones are dropped.
 ## 9. Errors and notifications
 
 - Each boundary has its own `thiserror` enum: `ConfigError` (a list of issues), `TunnelError`,
-  `WakeError`, `PowerError`, `SecretError`, `HttpError`. Adapters never panic; core denies
+  `WakeError`, `PowerError`. Adapters never panic; core denies
   `unwrap`/`expect`/indexing lints outside tests.
 - Fault tolerance as in Python: a failed side effect becomes a `Notice` and a log line, the
   state is re-read from reality on the next probe, a failed probe never throws (it is
@@ -438,12 +480,40 @@ It also edits an existing PC.
 2. Tunnel: none / existing / new. New WireGuard: auto-detect `wireguard.exe` and list
    `*.conf.dpapi` from its `Data\Configurations`; ask for `probe_host`.
 3. Readiness ports (presets: RDP 3389, SSH 22, custom) and "Check now" (raises the tunnel for the check if needed).
-4. Wake method: none / MikroTik (pick or create router, password goes to Credential Manager) /
-   magic packet / command; MAC and method fields.
-5. Power: none / SSH (user, key; "Test connection" with `StrictHostKeyChecking=accept-new`
-   after the user agrees, which replaces the manual first `ssh` from the README) / command.
-6. RDP (optional): user and, optionally, password stored as `TERMSRV/<host>`.
+4. Wake method: none / MikroTik over SSH (pick or create a router: host, port, user, key; see
+   "SSH setup" below) / magic packet / command; MAC and method fields.
+5. Power: none / SSH (user, key; "Test connection" as below) / command.
+6. RDP (optional): user name only. The step says that HomeLink never handles the RDP password:
+   it is typed in the Remote Desktop window, which can remember it (`wizard.rdp.note`).
 7. Summary and save.
+
+**SSH setup** (steps 4 and 5; shared by routers and PCs). The wizard does not ask for or store
+any password.
+
+- *OpenSSH client check.* Before any SSH step the wizard looks for the client (`ssh.exe` and
+  `ssh-keygen.exe`, normally `%SystemRoot%\System32\OpenSSH`). On Windows 10 LTSC it is an
+  optional feature that may be missing; the wizard then shows how to install it (Settings >
+  Apps > Optional features > OpenSSH Client) and does not continue the SSH step until it is
+  found (`wizard.ssh.openssh_missing`).
+- *Key.* Either "create a new key for HomeLink" (the wizard runs `ssh-keygen -t ed25519`
+  with an empty passphrase into a dedicated file, so the elevated program can use it
+  unattended; the file's location is a per-machine folder chosen in phase 4, restricted to
+  the user and administrators) or "use an existing key" (a file picker). The configuration
+  stores only the absolute path. The wizard shows the public key for the user to install.
+- *Router side.* For a MikroTik router the wizard displays the RouterOS commands to run on
+  the router, with the user name, key file name and the address of this computer filled in:
+  create a group that can only log in over SSH and run `/tool wol` (policies `ssh`, `read`,
+  `test`), create a user in it that is limited to this computer's address, import the public
+  key for that user, and disable password login for SSH (`/ip ssh set
+  always-allow-password-login=no`). These commands are to be verified on RouterOS 7 in phase 3
+  and kept in one place in core so tests and the wizard share them.
+- *PC side.* For an SSH power method the wizard shows the line to add to `authorized_keys`
+  and, for Linux, the `sudoers` line from the README.
+- *Test connection.* Runs `ssh` with `BatchMode=yes` and `StrictHostKeyChecking=yes`. If the
+  host key is unknown, the wizard shows its fingerprint and asks for explicit consent
+  (`wizard.ssh.host_key_unknown`, `wizard.ssh.trust`); only on consent does it repeat the test
+  with `StrictHostKeyChecking=accept-new`. This replaces the manual first `ssh` from the
+  README and is the only place in the program that accepts a host key.
 
 ## 12. Open questions (not decided here)
 
@@ -497,15 +567,20 @@ tests prove only the thin adapters.
   `PcLost` never follows an accepted power command; no notice without a transition cause.
 - **Config:** valid and invalid fixture files; every rule of section 8 has a failing case with the
   expected issue path; the documented example is parsed in a test; round trip load-save-load.
-- **Adapters:** magic packet bytes (6 x `FF` + 16 x MAC) and a loopback socket; MikroTik request
-  (path `/rest/tool/wol`, JSON body, basic auth, error status mapping) against a local mock
-  server; TCP probe against a local listener; command runner exit codes, timeout and output.
+- **Adapters:** magic packet bytes (6 x `FF` + 16 x MAC) and a loopback socket; the MikroTik
+  `ssh` argument list and RouterOS command built exactly as specified, with hostile MAC and
+  interface values rejected before they reach the command (done in `core::wake`, with a fake
+  `CommandRunner`); TCP probe against a local listener; command runner exit codes, timeout and
+  output.
+- **Privacy checks:** a test that the configuration schema has no password, token or URL
+  key, and a CI check (`cargo deny`, plus a grep gate on `http`/`tls` client crates in the
+  dependency tree) that no HTTP or TLS client is ever added.
 - **Engine:** the real engine with an inline `Executor`, `Clock` and fakes: end-to-end
   scenarios (connect-and-wake to online, wake timeout, shared tunnel) asserting snapshots and
   notices in order.
 - **i18n and wizard:** parity tests (section 10), step-by-step wizard tests.
-- **Windows only (CI `windows-latest`):** Credential Manager round trip with a unique
-  target, SCM query of a non-existing service, ICMP to loopback, OEM decoding; UI smoke with the
+- **Windows only (CI `windows-latest`):** SCM query of a non-existing service, ICMP to
+  loopback, OEM decoding, OpenSSH client detection; UI smoke with the
   Slint testing backend (component instantiation, callbacks reach the engine).
 - **Manual release checklist** (in the repo, run on Windows 10 LTSC and 11): tray, panel focus,
   notifications, real WireGuard, MikroTik, a Windows and a Linux PC, parity with 0.3.0.
@@ -540,15 +615,22 @@ must equal `homelink.__version__`. Changes (the Python jobs stay until phase 7):
 | Phase | Content | Exit criterion |
 | --- | --- | --- |
 | 0 Spike | Workspace skeleton, CI for `core` and `app`; on real Windows: panel focus/placement, tray notifications API (Slint's tray may not offer balloons, a `windows`-crate fallback may be needed), measured exe size; owner answers section 12 | questions 2 and 5 answered, size budget fixed, risks below closed or accepted |
-| 1 Core model | `domain`, `config` (schema, defaults, validation, fixtures), `secret`, `i18n` catalog, `notice` | config tests green on Linux; locale parity green |
-| 2 Machine and engine | `machine`, `engine`, `ports`, `testing` fakes; port all of `test_controller.py`; property tests | every Python controller test has a Rust counterpart; coverage gate on |
-| 3 Adapters | Portable (TCP, UDP magic packet, commands, MikroTik REST) with Linux integration tests; Windows (WireGuard service, Credential Manager, ICMP, OEM decoding) | adapter tests green in both CI jobs |
+| 1 Core model (done) | `domain`, `config` (schema, validation, fixtures), `i18n` catalog, `notice` | config tests green on Linux; locale parity green |
+| 2 Machine and engine (done) | `machine`, `engine`, `ports`, `testing` fakes; port all of `test_controller.py`; randomised invariants | every Python controller test has a Rust counterpart |
+| 2b SSH-only access (done, owner decision) | MikroTik REST and every secret removed; router over SSH with a key; `core::wake` builds the `ssh` argv (pure, tested); locale keys updated | no password, URL or secret type left in core; tests green |
+| 3 Adapters | Portable (TCP, UDP magic packet, `CommandRunner`, SSH power runner) with Linux integration tests; Windows (WireGuard service, ICMP, OEM decoding, OpenSSH detection); verify the RouterOS commands on RouterOS 7 | adapter tests green in both CI jobs; a real `/tool wol` over SSH works |
 | 4 App shell | Panel on the real engine, tray with aggregate icon, notices, logging, single instance, elevation manifest, icons moved from `src/homelink/assets` | a single PC with a tunnel works end to end on Windows |
 | 5 Multi-PC and wizard | Groups, shared tunnel, PC without a tunnel, wizard (add/edit/delete), About with the Slint credit, config reload | tunnel groups, a shared tunnel and a PC without a tunnel work by hand |
 | 6 Hardening | Manual checklist on Windows 10 LTSC and 11 (Linux and Windows remote PCs), docs rewrite (`README*.md`, `design.md`, router setup, SSH for Windows), size and licence check, `v1.0.0-rc.1` | no open defects; parity checklist complete |
 | 7 Release | Remove `src/homelink/`, `tests/`, `pyproject.toml`, `build.bat`, `run_homelink.pyw`, Python CI jobs; decide the future of `tools/generate_icons.py` (keep as a dev tool or port); tag `v1.0.0` | release published, README links verified |
 
 Technical risks to verify in phase 0: tray notifications in Slint 1.18; position of the tray
-icon (the prototype assumes a bottom-right taskbar); Credential Manager scope when UAC elevates
-under a different account than the logged-in user; `ureq`/rustls size against the budget;
-`unstable-winit-030` is an unstable Slint feature (pin the exact Slint version).
+icon (the prototype assumes a bottom-right taskbar); `ssh` reads `known_hosts` from the profile
+of the elevated user, which can differ from the logged-in user when UAC elevates under another
+account (the wizard and the program run in the same elevated process, so they agree, but a
+key or host list prepared by hand in the other profile will not be seen); the OpenSSH client
+may be absent on Windows 10 LTSC (optional feature, may need an offline source); an
+empty-passphrase key file must be protected by file permissions (created under a per-machine
+folder restricted to the user and administrators); the RouterOS user, policy and key-import
+commands must be verified on RouterOS 7; `unstable-winit-030` is an unstable Slint feature (pin
+the exact Slint version).
