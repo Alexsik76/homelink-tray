@@ -58,8 +58,12 @@ With the example settings that is an SSH call to the home PC, which needs the fo
   with `visudo -f /etc/sudoers.d/homelink`:
 
 ```
-<user> ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl suspend
+<user> ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl suspend -i
 ```
+
+The `-i` option makes the PC sleep even when something blocks it. GNOME, for example,
+blocks sleep while a Remote Desktop session exists, and such a session stays alive after
+the RDP window is closed. Sleeping with `-i` may end that session.
 
 ## Build
 

@@ -58,8 +58,12 @@ Wake-on-LAN і показує стан тунелю та ПК у значку.
   командою `visudo -f /etc/sudoers.d/homelink`:
 
 ```
-<користувач> ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl suspend
+<користувач> ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl suspend -i
 ```
+
+Параметр `-i` змушує ПК заснути, навіть коли щось блокує сон. GNOME, наприклад, блокує
+сон, доки існує сеанс віддаленого робочого стола, а такий сеанс живе й після закриття
+вікна RDP. Сон із параметром `-i` може завершити цей сеанс.
 
 ## Збирання
 
