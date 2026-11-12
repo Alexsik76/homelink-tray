@@ -81,3 +81,38 @@ jobs:
 
       - name: Test
         run: cargo test -p homelink-core --all-features
+
+  rust-app:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-app-${{ hashFiles('rust/Cargo.lock') }}
+
+      - name: Format check
+        run: cargo fmt -p homelink --check
+
+      - name: Lint
+        run: cargo clippy -p homelink --all-targets --locked -- -D warnings
+
+      - name: Build
+        run: cargo build -p homelink --release --locked
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: HomeLink-rust-demo
+          path: rust/target/release/HomeLink.exe
+          retention-days: 14
+          if-no-files-found: error

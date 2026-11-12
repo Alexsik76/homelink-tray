@@ -1,0 +1,23 @@
+[package]
+name = "homelink"
+version = "0.1.0"
+edition = "2024"
+description = "HomeLink: tray utility that wakes, sleeps and reaches remote PCs"
+publish = false
+
+[[bin]]
+name = "HomeLink"
+path = "src/main.rs"
+
+[dependencies]
+homelink-core = { path = "../core", features = ["testing"] }
+slint = { version = "1.18", default-features = false, features = ["std", "backend-winit", "renderer-software", "system-tray", "compat-1-2", "unstable-winit-030"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
+[build-dependencies]
+slint-build = "1.18"
+
+[lints]
+workspace = true

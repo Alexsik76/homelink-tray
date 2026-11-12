@@ -1,9 +1,11 @@
 [workspace]
-members = ["core"]
+members = ["core", "app"]
 resolver = "3"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny`, not `forbid`: the app crate needs a few Windows calls, and `forbid` cannot be
+# overridden by `allow`. Only one cfg(windows) module of `app` may use unsafe code.
+unsafe_code = "deny"
 missing_docs = "warn"
 
 [workspace.lints.clippy]
@@ -14,14 +16,9 @@ panic = "deny"
 todo = "deny"
 dbg_macro = "deny"
 
-[package]
-name = "homelink"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-slint = { version = "1.18", default-features = false, features = ["std", "backend-winit", "renderer-software", "system-tray", "compat-1-2", "unstable-winit-030"] }
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
-
-[build-dependencies]
-slint-build = "1.18"
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = "s"
+strip = true
+panic = "unwind"

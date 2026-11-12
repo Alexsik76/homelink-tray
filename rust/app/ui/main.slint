@@ -1,0 +1,305 @@
+// HomeLink panel and tray icon: layout and colours only. Every user-visible text comes from
+// the `Strings` global, which the app fills from the core catalog (en, uk).
+
+import "./fonts/Inter-Regular.ttf";
+import "./fonts/Inter-SemiBold.ttf";
+
+export enum ViewState { online, waking, off, unknown }
+export enum LinkState { down, starting, up }
+export enum PowerKind { sleep, shutdown }
+
+export global Strings {
+    in-out property <string> no-tunnel;
+    in-out property <string> empty;
+    in-out property <string> wake;
+    in-out property <string> sleep;
+    in-out property <string> shutdown;
+    in-out property <string> rdp;
+    in-out property <string> yes;
+    in-out property <string> no;
+    in-out property <string> quit;
+}
+
+export struct PcRow {
+    id: string,
+    name: string,
+    state: ViewState,
+    state-text: string,
+    can-wake: bool,
+    can-sleep: bool,
+    can-shutdown: bool,
+    can-rdp: bool,
+    // The inline confirmation of a sleep or shutdown request replaces the action buttons.
+    asking: bool,
+    asking-kind: PowerKind,
+    question: string,
+}
+
+export struct GroupRow {
+    // Empty for the group of PCs without a tunnel.
+    tunnel-id: string,
+    has-tunnel: bool,
+    tunnel-name: string,
+    tunnel-state: LinkState,
+    tunnel-state-text: string,
+    can-toggle: bool,
+    pcs: [PcRow],
+}
+
+component TunnelButton inherits Rectangle {
+    in property <string> label;
+    in property <string> detail;
+    in property <LinkState> link;
+    in property <bool> active: true;
+    callback clicked();
+    height: 44px;
+    background: root.link == LinkState.up
+        ? (ta.has-hover ? #1d4ed8 : #2563eb)
+        : root.link == LinkState.starting
+            ? (ta.has-hover ? #eab308 : #facc15)
+            : (ta.has-hover ? #d1d5db : #e5e7eb);
+    VerticalLayout {
+        alignment: center;
+        Text {
+            text: root.label;
+            color: root.link == LinkState.up ? #ffffff : (root.active ? #1a1a1a : #9a9a9a);
+            font-weight: 600;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            text: root.detail;
+            color: root.link == LinkState.up ? #ffffff : (root.active ? #1a1a1a : #9a9a9a);
+            font-size: 11px;
+            horizontal-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.active;
+        clicked => { root.clicked(); }
+    }
+}
+
+component ActionButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: true;
+    callback clicked();
+    height: 26px;
+    background: (root.active && ta.has-hover) ? #e6e6e6 : transparent;
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        Text {
+            text: root.label;
+            color: root.active ? #1a1a1a : #9a9a9a;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.active;
+        clicked => { root.clicked(); }
+    }
+}
+
+component PcRowView inherits VerticalLayout {
+    in property <PcRow> pc;
+    callback wake-clicked();
+    callback ask-power(PowerKind);
+    callback confirm-power();
+    callback cancel-power();
+    callback rdp-clicked();
+    spacing: 2px;
+
+    pure function dot-color(s: ViewState) -> color {
+        s == ViewState.online ? #22c55e
+            : s == ViewState.waking ? #f59e0b
+            : s == ViewState.off ? #a3a3a3
+            : #52525b
+    }
+
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        spacing: 8px;
+        Text {
+            text: root.pc.name;
+            color: #1a1a1a;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Rectangle {
+            width: 10px;
+            Rectangle {
+                width: 10px;
+                height: 10px;
+                y: (parent.height - self.height) / 2;
+                background: root.dot-color(root.pc.state);
+            }
+        }
+        Text {
+            text: root.pc.state-text;
+            color: #1a1a1a;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            min-width: 80px;
+        }
+    }
+    if !root.pc.asking : HorizontalLayout {
+        spacing: 2px;
+        ActionButton {
+            label: Strings.wake;
+            active: root.pc.can-wake;
+            clicked => { root.wake-clicked(); }
+        }
+        ActionButton {
+            label: Strings.sleep;
+            active: root.pc.can-sleep;
+            clicked => { root.ask-power(PowerKind.sleep); }
+        }
+        ActionButton {
+            label: Strings.shutdown;
+            active: root.pc.can-shutdown;
+            clicked => { root.ask-power(PowerKind.shutdown); }
+        }
+        ActionButton {
+            label: Strings.rdp;
+            active: root.pc.can-rdp;
+            clicked => { root.rdp-clicked(); }
+        }
+    }
+    if root.pc.asking : HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        spacing: 6px;
+        Text {
+            text: root.pc.question;
+            color: #1a1a1a;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+        }
+        // "No" is the first button and the one that cancels: the default answer.
+        ActionButton {
+            label: Strings.no;
+            clicked => { root.cancel-power(); }
+        }
+        ActionButton {
+            label: Strings.yes;
+            clicked => { root.confirm-power(); }
+        }
+    }
+}
+
+export component Panel inherits Window {
+    in property <[GroupRow]> groups;
+    out property <length> content-height: inner.preferred-height;
+    callback tunnel-clicked(string);
+    callback wake-clicked(string);
+    callback ask-power(string, PowerKind);
+    callback confirm-power(string);
+    callback cancel-power();
+    callback rdp-clicked(string);
+    callback hide-requested();
+    public function focus-panel() { fs.focus(); }
+
+    no-frame: true;
+    always-on-top: true;
+    background: #f9f9f9;
+    default-font-family: "Inter";
+    default-font-size: 13px;
+    width: 420px;
+    height: root.content-height;
+
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.hide-requested();
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            background: #f9f9f9;
+            border-width: 1px;
+            border-color: #d4d4d4;
+
+            inner := VerticalLayout {
+                padding: 12px;
+                spacing: 10px;
+                alignment: start;
+                if root.groups.length == 0 : Text {
+                    text: Strings.empty;
+                    color: #1a1a1a;
+                }
+                for g in root.groups : HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        width: 110px;
+                        alignment: start;
+                        if g.has-tunnel : TunnelButton {
+                            label: g.tunnel-name;
+                            detail: g.tunnel-state-text;
+                            link: g.tunnel-state;
+                            active: g.can-toggle;
+                            clicked => { root.tunnel-clicked(g.tunnel-id); }
+                        }
+                        if !g.has-tunnel : Text {
+                            height: 44px;
+                            text: Strings.no-tunnel;
+                            color: #1a1a1a;
+                            wrap: word-wrap;
+                            vertical-alignment: center;
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        horizontal-stretch: 1;
+                        for pc in g.pcs : PcRowView {
+                            pc: pc;
+                            wake-clicked => { root.wake-clicked(pc.id); }
+                            ask-power(kind) => { root.ask-power(pc.id, kind); }
+                            confirm-power => { root.confirm-power(pc.id); }
+                            cancel-power => { root.cancel-power(); }
+                            rdp-clicked => { root.rdp-clicked(pc.id); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component Tray inherits SystemTrayIcon {
+    // The PC screen and the tunnel badge of the tray icon (section 7 of the architecture).
+    in property <ViewState> pc-screen: ViewState.unknown;
+    in property <LinkState> badge: LinkState.down;
+    callback quit-requested();
+    callback toggle-panel();
+    clicked => { root.toggle-panel(); }
+    icon: root.pc-screen == ViewState.online
+            ? (root.badge == LinkState.up ? @image-url("../../../src/homelink/assets/icons/dark/online_up.png")
+                : root.badge == LinkState.starting ? @image-url("../../../src/homelink/assets/icons/dark/online_starting.png")
+                : @image-url("../../../src/homelink/assets/icons/dark/online_down.png"))
+        : root.pc-screen == ViewState.waking
+            ? (root.badge == LinkState.up ? @image-url("../../../src/homelink/assets/icons/dark/waking_up.png")
+                : root.badge == LinkState.starting ? @image-url("../../../src/homelink/assets/icons/dark/waking_starting.png")
+                : @image-url("../../../src/homelink/assets/icons/dark/waking_down.png"))
+        : root.pc-screen == ViewState.off
+            ? (root.badge == LinkState.up ? @image-url("../../../src/homelink/assets/icons/dark/offline_up.png")
+                : root.badge == LinkState.starting ? @image-url("../../../src/homelink/assets/icons/dark/offline_starting.png")
+                : @image-url("../../../src/homelink/assets/icons/dark/offline_down.png"))
+            : (root.badge == LinkState.up ? @image-url("../../../src/homelink/assets/icons/dark/unknown_up.png")
+                : root.badge == LinkState.starting ? @image-url("../../../src/homelink/assets/icons/dark/unknown_starting.png")
+                : @image-url("../../../src/homelink/assets/icons/dark/unknown_down.png"));
+    Menu {
+        MenuItem {
+            title: Strings.quit;
+            activated => { root.quit-requested(); }
+        }
+    }
+}
