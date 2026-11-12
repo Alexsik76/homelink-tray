@@ -354,13 +354,13 @@ probe_host = "192.168.88.1"
 timeout = 20
 ping_timeout_ms = 1000
 
-[[routers]]
-id = "mikrotik"
-kind = "mikrotik"
+[[relays]]
+id = "gateway"
+kind = "routeros"
 host = "192.168.88.1"
 port = 22
 user = "homelink"
-identity_file = 'C:\HomeLink\router_key'
+identity_file = 'C:\HomeLink\relay_key'
 timeout = 8
 
 [[pcs]]
@@ -372,8 +372,8 @@ tunnel = "home"
 ports = [3389]
 
 [pcs.wake]
-method = "mikrotik"
-router = "mikrotik"
+method = "relay"
+relay = "gateway"
 mac = "AA:BB:CC:DD:EE:FF"
 interface = "bridge"
 
@@ -410,7 +410,7 @@ ports = [3389, 445]
 [pcs.wake]
 method = "magic_packet"
 mac = "11:22:33:44:55:66"
-broadcast = "192.168.88.255"
+address = "192.168.88.255"
 port = 9
 
 [pcs.power]
@@ -440,7 +440,7 @@ ports = [22]
 [pcs.wake]
 method = "magic_packet"
 mac = "AA:BB:CC:00:00:07"
-broadcast = "10.0.0.255"
+address = "10.0.0.7"
 port = 9
 
 [pcs.power]
@@ -462,6 +462,62 @@ pub fn single_config() -> Config {
 /// `office`, and `nas` with no tunnel (`10.0.0.7`).
 pub fn multi_config() -> Config {
     let text = format!("{BASE}{MORE}");
+    config::parse(&text)
+        .expect("the built-in test configuration is valid")
+        .config
+}
+
+const RELAYS: &str = r#"
+[[relays]]
+id = "openwrt"
+kind = "etherwake"
+host = "192.168.10.1"
+port = 22
+user = "homelink"
+identity_file = 'C:\HomeLink\relay_key'
+timeout = 8
+
+[[relays]]
+id = "pi"
+kind = "wakeonlan"
+host = "10.0.5.2"
+port = 22
+user = "homelink"
+identity_file = 'C:\HomeLink\relay_key'
+timeout = 8
+
+[[pcs]]
+id = "media"
+name = "Media PC"
+os = "linux"
+host = "10.0.6.30"
+ports = [22]
+
+[pcs.wake]
+method = "relay"
+relay = "openwrt"
+mac = "00:11:22:33:44:55"
+interface = "br-lan"
+
+[[pcs]]
+id = "kiosk"
+name = "Kiosk"
+os = "linux"
+host = "10.0.5.30"
+ports = [22]
+
+[pcs.wake]
+method = "relay"
+relay = "pi"
+mac = "00:11:22:33:44:66"
+address = "10.0.5.255"
+"#;
+
+/// The single-PC configuration plus one PC for each of the other relay presets: `desktop`
+/// (a RouterOS relay), `media` (etherwake on `br-lan`) and `kiosk` (wakeonlan with an
+/// address).
+pub fn relay_config() -> Config {
+    let text = format!("{BASE}{RELAYS}");
     config::parse(&text)
         .expect("the built-in test configuration is valid")
         .config
@@ -510,11 +566,7 @@ impl Harness {
         let power = Arc::new(FakePower::default());
         let sink = Arc::new(RecordingSink::default());
         let mut registry = WakeRegistry::new();
-        for kind in [
-            WakeKind::MikrotikSsh,
-            WakeKind::MagicPacket,
-            WakeKind::Command,
-        ] {
+        for kind in [WakeKind::Relay, WakeKind::MagicPacket, WakeKind::Command] {
             registry.register(kind, wake.clone());
         }
         let executor: Arc<dyn Executor> = match &manual {

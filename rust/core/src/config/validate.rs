@@ -8,13 +8,13 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use super::raw::{
-    RawConfig, RawOs, RawPc, RawPower, RawRdp, RawRouter, RawTiming, RawTimingOverride, RawTunnel,
-    RawWake,
+    RawConfig, RawOs, RawPc, RawPower, RawRdp, RawRelay, RawRelayKind, RawTiming,
+    RawTimingOverride, RawTunnel, RawWake,
 };
 use super::{Config, Issue, LogConfig, VERSION};
 use crate::domain::{
-    Argv, Host, InterfaceName, InvalidValue, MacAddr, Os, Pc, PcId, PowerMethod, Rdp, Router,
-    RouterId, RouterKind, Timing, Tunnel, TunnelId, TunnelKind, WakeMethod,
+    Argv, Host, InterfaceName, InvalidValue, MacAddr, Os, Pc, PcId, PowerMethod, Rdp, Relay,
+    RelayId, RelayKind, Timing, Tunnel, TunnelId, TunnelKind, WakeMethod,
 };
 use crate::i18n::{Lang, LanguageSetting};
 
@@ -124,16 +124,16 @@ pub(super) fn validate(raw: RawConfig) -> Result<(Config, Vec<Issue>), Vec<Issue
     let defaults = timing_from_raw(&mut ctx, "defaults", &raw.defaults);
 
     let tunnels = validate_tunnels(&mut ctx, &raw.tunnels);
-    let routers = validate_routers(&mut ctx, &raw.routers);
+    let relays = validate_relays(&mut ctx, &raw.relays);
     let pcs = validate_pcs(
         &mut ctx,
         &raw.pcs,
         defaults.as_ref(),
         &raw.tunnels,
-        &raw.routers,
+        &raw.relays,
     );
 
-    // Unused tunnels and routers are only worth a warning.
+    // Unused tunnels and relays are only worth a warning.
     for (i, t) in raw.tunnels.iter().enumerate() {
         if !raw
             .pcs
@@ -146,15 +146,15 @@ pub(super) fn validate(raw: RawConfig) -> Result<(Config, Vec<Issue>), Vec<Issue
             });
         }
     }
-    for (i, r) in raw.routers.iter().enumerate() {
+    for (i, r) in raw.relays.iter().enumerate() {
         let used = raw
             .pcs
             .iter()
-            .any(|p| matches!(&p.wake, Some(RawWake::Mikrotik { router, .. }) if *router == r.id));
+            .any(|p| matches!(&p.wake, Some(RawWake::Relay { relay, .. }) if *relay == r.id));
         if !used {
             warnings.push(Issue {
-                path: format!("routers[{i}]"),
-                message: format!("router '{}' is not used by any PC", r.id),
+                path: format!("relays[{i}]"),
+                message: format!("relay '{}' is not used by any PC", r.id),
             });
         }
     }
@@ -172,7 +172,7 @@ pub(super) fn validate(raw: RawConfig) -> Result<(Config, Vec<Issue>), Vec<Issue
                 },
                 defaults,
                 tunnels,
-                routers,
+                relays,
                 pcs,
             },
             warnings,
@@ -366,16 +366,24 @@ fn validate_tunnels(ctx: &mut Ctx, raw: &[RawTunnel]) -> Vec<Tunnel> {
     out
 }
 
-fn validate_routers(ctx: &mut Ctx, raw: &[RawRouter]) -> Vec<Router> {
+fn relay_kind(raw: RawRelayKind) -> RelayKind {
+    match raw {
+        RawRelayKind::Routeros => RelayKind::RouterOs,
+        RawRelayKind::Etherwake => RelayKind::Etherwake,
+        RawRelayKind::Wakeonlan => RelayKind::Wakeonlan,
+    }
+}
+
+fn validate_relays(ctx: &mut Ctx, raw: &[RawRelay]) -> Vec<Relay> {
     let mut seen: HashMap<&str, usize> = HashMap::new();
     let mut out = Vec::new();
     for (i, r) in raw.iter().enumerate() {
-        let at = |key: &str| format!("routers[{i}].{key}");
-        let id = ctx.check(&at("id"), RouterId::parse(&r.id));
+        let at = |key: &str| format!("relays[{i}].{key}");
+        let id = ctx.check(&at("id"), RelayId::parse(&r.id));
         if let Some(first) = seen.insert(r.id.as_str(), i) {
             ctx.err(
                 at("id"),
-                format!("duplicate id '{}' (also routers[{first}])", r.id),
+                format!("duplicate id '{}' (also relays[{first}])", r.id),
             );
         }
         let host = ctx.check(&at("host"), Host::parse(&r.host));
@@ -386,9 +394,9 @@ fn validate_routers(ctx: &mut Ctx, raw: &[RawRouter]) -> Vec<Router> {
         if let (Some(id), Some(host), Some(port), true, true, Some(timeout)) =
             (id, host, port, user_ok, key_ok, timeout)
         {
-            out.push(Router {
+            out.push(Relay {
                 id,
-                kind: RouterKind::Mikrotik,
+                kind: relay_kind(r.kind),
                 host,
                 port,
                 user: r.user.clone(),
@@ -405,7 +413,7 @@ fn validate_pcs(
     raw: &[RawPc],
     defaults: Option<&Timing>,
     tunnels: &[RawTunnel],
-    routers: &[RawRouter],
+    relays: &[RawRelay],
 ) -> Vec<Pc> {
     let mut seen: HashMap<&str, usize> = HashMap::new();
     let mut out = Vec::new();
@@ -435,7 +443,7 @@ fn validate_pcs(
         let ports = validate_ports(ctx, &at("ports"), &p.ports);
         let wake = match &p.wake {
             None => Some(None),
-            Some(w) => validate_wake(ctx, &at("wake"), w, routers).map(Some),
+            Some(w) => validate_wake(ctx, &at("wake"), w, relays).map(Some),
         };
         let power = match &p.power {
             None => Some(None),
@@ -502,53 +510,90 @@ fn validate_ports(ctx: &mut Ctx, path: &str, raw: &[i64]) -> Option<Vec<u16>> {
     ok.then_some(ports)
 }
 
+/// An IPv4 address: unicast or broadcast, nothing else is assumed.
+fn parse_ipv4(value: &str) -> Result<Ipv4Addr, InvalidValue> {
+    value.parse::<Ipv4Addr>().map_err(|_| {
+        InvalidValue(format!(
+            "'{value}' is not an IPv4 address, e.g. 192.168.88.10 (a PC) or 192.168.88.255 (a broadcast)"
+        ))
+    })
+}
+
 fn validate_wake(
     ctx: &mut Ctx,
     path: &str,
     raw: &RawWake,
-    routers: &[RawRouter],
+    relays: &[RawRelay],
 ) -> Option<WakeMethod> {
     match raw {
-        RawWake::Mikrotik {
-            router,
+        RawWake::Relay {
+            relay,
             mac,
             interface,
+            address,
         } => {
-            let id = ctx.check(&format!("{path}.router"), RouterId::parse(router));
-            let known = routers.iter().any(|r| r.id == *router);
-            if id.is_some() && !known {
+            let id = ctx.check(&format!("{path}.relay"), RelayId::parse(relay));
+            let known = relays.iter().find(|r| r.id == *relay);
+            if id.is_some() && known.is_none() {
                 ctx.err(
-                    format!("{path}.router"),
-                    format!("refers to unknown router '{router}'"),
+                    format!("{path}.relay"),
+                    format!("refers to unknown relay '{relay}'"),
                 );
             }
             let mac = ctx.check(&format!("{path}.mac"), MacAddr::parse(mac));
-            let interface = ctx.check(
-                &format!("{path}.interface"),
-                InterfaceName::parse(interface),
-            );
-            Some(WakeMethod::MikrotikSsh {
-                router: id.filter(|_| known)?,
+            let interface_parsed = interface
+                .as_deref()
+                .map(|i| ctx.check(&format!("{path}.interface"), InterfaceName::parse(i)));
+            let address_parsed = address
+                .as_deref()
+                .map(|a| ctx.check(&format!("{path}.address"), parse_ipv4(a)));
+            // The preset decides which of the optional fields are required or refused.
+            let mut preset_ok = true;
+            if let Some(kind) = known.map(|r| relay_kind(r.kind)) {
+                let name = kind.code();
+                if kind.uses_interface() && interface.is_none() {
+                    ctx.err(
+                        format!("{path}.interface"),
+                        format!("is required by the '{name}' preset of relay '{relay}'"),
+                    );
+                    preset_ok = false;
+                }
+                if !kind.uses_interface() && interface.is_some() {
+                    ctx.err(
+                        format!("{path}.interface"),
+                        format!("is not used by the '{name}' preset of relay '{relay}'; remove it"),
+                    );
+                    preset_ok = false;
+                }
+                if !kind.uses_address() && address.is_some() {
+                    ctx.err(
+                        format!("{path}.address"),
+                        format!("is not used by the '{name}' preset of relay '{relay}'; remove it"),
+                    );
+                    preset_ok = false;
+                }
+            }
+            preset_ok.then_some(())?;
+            Some(WakeMethod::Relay {
+                relay: id.filter(|_| known.is_some())?,
                 mac: mac?,
-                interface: interface?,
+                interface: match interface_parsed {
+                    None => None,
+                    Some(parsed) => Some(parsed?),
+                },
+                address: match address_parsed {
+                    None => None,
+                    Some(parsed) => Some(parsed?),
+                },
             })
         }
-        RawWake::MagicPacket {
-            mac,
-            broadcast,
-            port,
-        } => {
+        RawWake::MagicPacket { mac, address, port } => {
             let mac = ctx.check(&format!("{path}.mac"), MacAddr::parse(mac));
-            let broadcast = broadcast.parse::<Ipv4Addr>().map_err(|_| {
-                InvalidValue(format!(
-                    "'{broadcast}' is not an IPv4 address, e.g. 255.255.255.255"
-                ))
-            });
-            let broadcast = ctx.check(&format!("{path}.broadcast"), broadcast);
+            let address = ctx.check(&format!("{path}.address"), parse_ipv4(address));
             let port = ctx.port(&format!("{path}.port"), *port);
             Some(WakeMethod::MagicPacket {
                 mac: mac?,
-                broadcast: broadcast?,
+                address: address?,
                 port: port?,
             })
         }

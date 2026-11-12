@@ -31,7 +31,7 @@ pub struct RawConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tunnels: Vec<RawTunnel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub routers: Vec<RawRouter>,
+    pub relays: Vec<RawRelay>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pcs: Vec<RawPc>,
 }
@@ -94,15 +94,17 @@ pub struct RawTunnel {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum RawRouterKind {
-    Mikrotik,
+pub enum RawRelayKind {
+    Routeros,
+    Etherwake,
+    Wakeonlan,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RawRouter {
+pub struct RawRelay {
     pub id: String,
-    pub kind: RawRouterKind,
+    pub kind: RawRelayKind,
     pub host: String,
     pub port: i64,
     pub user: String,
@@ -141,14 +143,17 @@ pub struct RawPc {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RawWake {
-    Mikrotik {
-        router: String,
+    Relay {
+        relay: String,
         mac: String,
-        interface: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interface: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address: Option<String>,
     },
     MagicPacket {
         mac: String,
-        broadcast: String,
+        address: String,
         port: i64,
     },
     Command {

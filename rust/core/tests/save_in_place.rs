@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use homelink_core::config::{self, Config, ConfigError, Renames};
-use homelink_core::domain::{Host, PcId, TunnelId};
+use homelink_core::domain::{Host, PcId, RelayId, RelayKind, TunnelId, WakeMethod};
 
 const COMMENTED: &str = include_str!("fixtures/valid/commented.toml");
 const FULL: &str = include_str!("fixtures/valid/full.toml");
@@ -201,10 +201,7 @@ fn a_kind_with_no_entries_gets_its_first_entry_before_the_first_later_kind() {
     c.tunnels.push(tunnel);
     let with = edit(&without, &c);
     assert_eq!(cfg(&with), c);
-    assert!(
-        at(&with, "[[tunnels]]") < at(&with, "[[routers]]"),
-        "{with}"
-    );
+    assert!(at(&with, "[[tunnels]]") < at(&with, "[[relays]]"), "{with}");
 }
 
 #[test]
@@ -213,13 +210,13 @@ fn entries_are_added_to_a_file_that_has_none() {
     let full = cfg(FULL);
     let mut c = cfg(minimal);
     c.tunnels = full.tunnels.clone();
-    c.routers = full.routers.clone();
+    c.relays = full.relays.clone();
     c.pcs = full.pcs.clone();
     c.defaults = full.defaults;
     let out = edit(minimal, &c);
     assert_eq!(cfg(&out), c);
-    assert!(at(&out, "[[tunnels]]") < at(&out, "[[routers]]"));
-    assert!(at(&out, "[[routers]]") < at(&out, "[[pcs]]"));
+    assert!(at(&out, "[[tunnels]]") < at(&out, "[[relays]]"));
+    assert!(at(&out, "[[relays]]") < at(&out, "[[pcs]]"));
     assert!(out.starts_with("version = 1\nlanguage = \"en\"\n"));
 }
 
@@ -270,7 +267,100 @@ fn deleting_every_entry_of_a_kind_removes_its_array() {
     let out = edit(COMMENTED, &c);
     assert_eq!(cfg(&out), c);
     assert!(!out.contains("[[pcs]]"));
-    assert!(out.contains("[[routers]]"));
+    assert!(out.contains("[[relays]]"));
+}
+
+// ---------- relays ----------
+
+#[test]
+fn changing_a_relay_preset_changes_only_its_kind() {
+    let mut c = cfg(COMMENTED);
+    c.relays[0].kind = RelayKind::Etherwake;
+    let out = edit(COMMENTED, &c);
+    assert_eq!(
+        out,
+        COMMENTED.replace("kind = \"routeros\"", "kind = \"etherwake\"")
+    );
+}
+
+#[test]
+fn switching_a_wake_from_an_interface_to_an_address_keeps_the_comments() {
+    let mut c = cfg(COMMENTED);
+    c.relays[0].kind = RelayKind::Wakeonlan;
+    let Some(WakeMethod::Relay {
+        interface, address, ..
+    }) = &mut c.pcs[0].wake
+    else {
+        panic!("the desktop wakes through a relay");
+    };
+    *interface = None;
+    *address = Some("10.0.0.255".parse().unwrap());
+    let out = edit(COMMENTED, &c);
+    assert_eq!(cfg(&out), c);
+    assert!(!out.contains("interface = \"bridge\""));
+    assert!(out.contains("address = \"10.0.0.255\""));
+    assert!(out.contains("kind = \"wakeonlan\""));
+    assert!(out.contains("# How to wake it."));
+    assert!(out.contains("mac = \"AA:BB:CC:DD:EE:FF\"   # eth0"));
+    // And back again.
+    let back = edit(&out, &cfg(COMMENTED));
+    assert_eq!(cfg(&back), cfg(COMMENTED));
+}
+
+#[test]
+fn a_new_relay_is_appended_after_the_last_relay() {
+    let mut c = cfg(COMMENTED);
+    let mut relay = c.relays[0].clone();
+    relay.id = RelayId::parse("pi").unwrap();
+    relay.kind = RelayKind::Wakeonlan;
+    c.relays.push(relay);
+    let out = edit(COMMENTED, &c);
+    assert_eq!(cfg(&out), c);
+    let start = at(&out, "\n[[relays]]\nid = \"pi\"");
+    let end = at(&out, "\n# ============ PCs");
+    assert!(start < end);
+    assert_eq!(format!("{}{}", &out[..start], &out[end..]), COMMENTED);
+}
+
+#[test]
+fn a_renamed_relay_with_its_references_is_still_one_entry() {
+    let mut c = cfg(COMMENTED);
+    let (old, new) = (
+        RelayId::parse("gateway").unwrap(),
+        RelayId::parse("edge").unwrap(),
+    );
+    c.relays[0].id = new.clone();
+    if let Some(WakeMethod::Relay { relay, .. }) = &mut c.pcs[0].wake {
+        *relay = new.clone();
+    }
+    let renames = Renames {
+        relays: vec![(old, new)],
+        ..Renames::default()
+    };
+    let out = config::edit(COMMENTED, &c, &renames).unwrap();
+    assert_eq!(
+        out,
+        COMMENTED
+            .replace("id = \"gateway\"", "id = \"edge\"")
+            .replace("relay = \"gateway\"", "relay = \"edge\"")
+    );
+}
+
+#[test]
+fn a_magic_packet_address_written_by_hand_is_kept_and_changes_in_place() {
+    let mut c = cfg(COMMENTED);
+    let Some(WakeMethod::MagicPacket { address, .. }) = &mut c.pcs[1].wake else {
+        panic!("the laptop wakes by magic packet");
+    };
+    *address = "192.168.88.11".parse().unwrap(); // unicast to the PC itself
+    let out = edit(COMMENTED, &c);
+    assert_eq!(
+        out,
+        COMMENTED.replace(
+            "address = \"192.168.88.255\"      # a subnet broadcast",
+            "address = \"192.168.88.11\"      # a subnet broadcast"
+        )
+    );
 }
 
 // ---------- renaming ----------

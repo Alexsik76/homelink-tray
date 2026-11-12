@@ -19,10 +19,17 @@ code that is ported; `docs/design.md` describes the Python-era UI and is revised
   idle timeout and no automatic disconnect when the last PC goes off or is put to sleep; a PC
   going offline never changes its tunnel.
 - One command raises the tunnel and wakes an inactive PC.
-- Wake methods per PC: a MikroTik router over SSH (`/tool wol`), direct magic packet,
-  arbitrary command; more later. The MikroTik REST API is not used at all.
+- Wake methods per PC: through a relay host over SSH (a preset picks the command: RouterOS
+  `/tool wol`, `etherwake` or `wakeonlan`), a direct magic packet, or an arbitrary command;
+  more presets and methods later. No REST API is used anywhere.
+- Waking a PC in another subnet or VLAN (final): a relay host in the PC's own network sends
+  the packet (the relay is any always-on device there, reached over SSH like everything
+  else), or the program sends a unicast magic packet to the PC's IP with a static ARP entry
+  on the last router (section 3). Directed subnet broadcast is not a separate method: it is the
+  direct magic packet with a broadcast address, and it works only if the router forwards
+  directed broadcasts.
 - Remote PCs may run Windows or Linux.
-- A wizard adds a PC. The program holds no passwords or other secrets: routers and PCs are
+- A wizard adds a PC. The program holds no passwords or other secrets: relay hosts and PCs are
   reached over SSH with keys through the system OpenSSH client, and the Remote Desktop
   password is typed into `mstsc`, never into HomeLink. So "HomeLink stores no secrets and
   talks only to the hosts in its config" is unconditional (section 4).
@@ -84,18 +91,20 @@ with `lto = "fat"`, `codegen-units = 1`, `opt-level = "s"`, `strip = true`, pani
 Type sketches only; fields mirror section 8.
 
 ```
-TunnelId, PcId, RouterId        validated slugs [a-z0-9-]{1,32}
+TunnelId, PcId, RelayId         validated slugs [a-z0-9-]{1,32}
 
 Tunnel      { id, name, kind: TunnelKind, probe_host, timeout, ping_timeout }
 TunnelKind  = WireGuardService { exe, conf }          // #[non_exhaustive]: OpenVPN etc. later
-Router      { id, kind: Mikrotik, host, port, user, identity_file, timeout }   // SSH, key only
+Relay       { id, kind: RelayKind, host, port, user, identity_file, timeout }   // SSH, key only
+RelayKind   = RouterOs | Etherwake | Wakeonlan        // preset: the wake command; #[non_exhaustive]
 
 Pc          { id, name, os: Os, host, tunnel: Option<TunnelId>, ports: NonEmpty<u16>,
               wake: Option<WakeMethod>, power: Option<PowerMethod>, rdp: Option<Rdp>,
               timing: Timing }
 Os          = Windows | Linux
-WakeMethod  = MikrotikSsh  { router, mac, interface: InterfaceName }   // #[non_exhaustive]
-            | MagicPacket  { mac, broadcast, port }          // UDP, default 255.255.255.255:9
+WakeMethod  = Relay        { relay, mac, interface: Option<InterfaceName>,
+                             address: Option<Ipv4Addr> }     // #[non_exhaustive]
+            | MagicPacket  { mac, address: Ipv4Addr, port }  // UDP; any IPv4 address, e.g. 255.255.255.255:9
             | Command      { argv, mac: Option<Mac>, timeout }
 PowerAction = Sleep | Shutdown
 PowerMethod = Ssh     { user, port, identity_file }   // system ssh client, key required
@@ -117,32 +126,71 @@ element. SSH presets by `Os`:
 Windows sleep through `SetSuspendState` hibernates when hibernation is enabled; the wizard
 says so. A `Command` power method covers anything else.
 
-An SSH power action runs the same kind of argument list as the router wake below, built by
+An SSH power action runs the same kind of argument list as the relay wake below, built by
 `core::ssh::power_ssh_argv` from the PC's `user`, `port`, `identity_file` and `host`, with
 the remote command from the table above as one argument and `ConnectTimeout` taken from
 `power_timeout`. The key is always passed with `-i <identity_file>` and `IdentitiesOnly=yes`
 (an explicit absolute path: the program runs elevated and must not depend on which profile
-`ssh` resolves), exactly as for routers; there is no mode in which `ssh` chooses the key.
+`ssh` resolves), exactly as for relays; there is no mode in which `ssh` chooses the key.
 
-**Waking through a MikroTik router.** The sender runs, through `CommandRunner`, the system
-client with this argument list (never a shell string):
+**Waking through a relay host.** A relay is a router or any always-on device in the PC's own
+network (a router, an OpenWrt box, a Raspberry Pi). The program connects to it over SSH and
+runs a wake command chosen by the relay's *preset* (`kind` in `[[relays]]`). The sender runs,
+through `CommandRunner`, the system client with this argument list (never a shell string):
 
 ```
 ssh -o BatchMode=yes -o PasswordAuthentication=no -o IdentitiesOnly=yes
-    -o StrictHostKeyChecking=yes -o ConnectTimeout=<router timeout>
+    -o StrictHostKeyChecking=yes -o ConnectTimeout=<relay timeout>
     -i <identity_file> -p <port> -l <user> -- <host>
-    "/tool wol mac=<MAC> interface=<interface>"
+    "<remote command>"
 ```
 
-`<MAC>` is a parsed MAC address rendered as six upper-case hex pairs, and `<interface>` is an
-`InterfaceName` restricted to `A-Za-z0-9_.-` (1-64 characters). Neither type can carry a space,
-quote, `;`, `$`, `[`, `]`, `\` or `=`, so a configured value cannot add RouterOS or shell
-syntax. The remote command is one argument. The key is an explicit absolute path (the program
+| Preset | Remote command | `interface` in the wake method | `address` |
+| --- | --- | --- | --- |
+| `routeros` | `/tool wol mac=<MAC> interface=<interface>` | required | not used |
+| `etherwake` | `etherwake -i <interface> <MAC>` (typical for OpenWrt) | required | not used |
+| `wakeonlan` | `wakeonlan <MAC>`, or `wakeonlan -i <address> <MAC>` | not used | optional (IPv4) |
+
+Validation checks the wake method against the preset of the relay it names: a field the
+preset needs must be present and a field it does not use is rejected, each with the path
+(`pcs[0].wake.interface`). The destination `address` of `wakeonlan` reuses the same name and
+meaning as in the direct magic packet. Adding a preset is one new `RelayKind` variant plus an
+arm in each `match` on it (`code`, `uses_interface`, `uses_address` in `domain`, and
+`relay_command` in `core::wake`); the compiler lists every place, and the exact-argument test
+set gets one more case.
+
+`<MAC>` is a parsed MAC address rendered as six upper-case hex pairs; `<interface>` is an
+`InterfaceName` (`A-Za-z0-9_.-`, 1-64 characters, not starting with `-`); `<address>` is a
+parsed `Ipv4Addr`. None of them can carry a space, quote, `;`, `$`, `[`, `]`, `\`, `=` or a
+leading `-` (an option), so a configured value cannot add RouterOS or shell syntax or an
+option. The remote command is one argument. The key is an explicit absolute path (the program
 runs elevated and must not depend on which profile `ssh` would resolve); `IdentitiesOnly`
 stops `ssh` from offering other keys. The host key must already be known
 (`StrictHostKeyChecking=yes`): the wizard is the only place that may accept a new one
-(section 4). Argument building is pure and unit-tested in `core::wake` and `core::ssh`; the
-process itself is started by the `CommandRunner` adapter (phase 3).
+(section 4). Argument building is pure and unit-tested in `core::wake` and `core::ssh` (exact
+argument lists for every preset); the process itself is started by the `CommandRunner` adapter
+(phase 3).
+
+**Waking across a routed network or a VLAN (direct magic packet).** The direct method sends a
+UDP magic packet from this computer to a configurable destination `address` (any IPv4
+address) and port (default 9). Two uses, the same method:
+
+- *On the same network:* `address` is the broadcast address (`255.255.255.255` or the subnet's
+  `x.y.z.255`).
+- *Routed, through the tunnel or across VLANs:* `address` is the **PC's own IP**, so the
+  packet is an ordinary routed unicast UDP datagram and crosses the WireGuard tunnel and
+  routers like any other traffic. The sleeping PC cannot answer ARP, so the **last router**
+  (the one on the PC's network) needs a **static ARP entry** for the PC's IP and MAC; then it
+  delivers the datagram to the PC's MAC. Examples: on RouterOS
+  `/ip arp add address=<pc-ip> mac-address=<pc-mac> interface=<lan-interface>`; on Linux
+  `ip neigh replace <pc-ip> lladdr <pc-mac> dev <lan-interface> nud permanent`. The firewall
+  must allow UDP to the chosen port.
+
+A directed subnet broadcast (`address = x.y.z.255` of a remote subnet) is not a separate
+method; it is this method with that address, and it works only if the router in front of that
+subnet forwards directed broadcasts (a router-specific setting; see its documentation). The
+unicast and static ARP setup above is the recommended way. The wizard shows this text when the
+user picks a destination (`wizard.magic.routed_help`).
 
 States (as in `state.py`, now per entity):
 
@@ -171,7 +219,7 @@ HomeLink stores no secrets and talks only to the hosts in its config. This holds
 exceptions, by construction:
 
 - **No secrets.** There is no password, token or key material in the configuration, in the
-  Windows Credential Manager (not used at all) or anywhere else the program controls. Routers and PCs are reached over SSH with key authentication through the system
+  Windows Credential Manager (not used at all) or anywhere else the program controls. Relay hosts and PCs are reached over SSH with key authentication through the system
   OpenSSH client (`BatchMode=yes`, `PasswordAuthentication=no`); the private key stays in a
   file the user owns, referenced by an explicit absolute path. The program never reads it.
 - **Remote Desktop.** HomeLink never handles the RDP password. The user types it in `mstsc`,
@@ -179,7 +227,7 @@ exceptions, by construction:
   and launches `mstsc`.
 - **No telemetry, no update checks, no crash uploads.** The program makes no network
   connection of its own besides the ones the user configured: TCP checks of the listed ports,
-  pings of the tunnel probe host, UDP magic packets, SSH to routers and PCs, and the commands
+  pings of the tunnel probe host, UDP magic packets, SSH to relay hosts and PCs, and the commands
   the user wrote. There is no HTTP or TLS client in the program.
 - **SSH host keys are verified.** `StrictHostKeyChecking=yes` everywhere at run time. The wizard
   may add a host key (`accept-new`) only after showing the fingerprint and receiving explicit
@@ -278,7 +326,7 @@ state; the next probe does.
 1. T7: a tunnel start that times out now produces a notice `TunnelTimeout` (v0.3 only logs it).
 2. `Controller.wake()` and the notice `tunnel_required` are dropped: the UI never called
    `wake()` directly; `Wake` on a PC with a tunnel is always connect-and-wake.
-3. `wol_failed` becomes `wake_failed` because wake is no longer router-only (the router is now
+3. `wol_failed` becomes `wake_failed` because wake is no longer relay-only (the relay is now
    reached over SSH, so its detail text is `ssh` output or an exit code, not an HTTP status).
 4. Connect-and-wake on an `Up` tunnel does not flip the tunnel to `Starting` for an instant.
 
@@ -292,7 +340,7 @@ disconnects and for PCs that were told to power off) is kept.
 | `TunnelDriver` | `is_running`, `up`, `down` for a `Tunnel` | `app`: SCM query + `wireguard.exe /installtunnelservice` / `/uninstalltunnelservice` (replaces psutil; "already installed" still tolerated) | scripted fake |
 | `Pinger` | ICMP echo to a host with timeout | `app`: `IcmpSendEcho` (no console window, no locale parsing) | set of reachable hosts |
 | `PortProbe` | all ports of a host accept TCP, short-circuit on first failure | `core`: `TcpStream::connect_timeout` | local listener / fake |
-| `WakeSender` | send one wake request for a `Pc` | one impl per method: `MikrotikSshWake` (`ssh` through `CommandRunner`, `core::wake`, done), `MagicPacket` (UDP broadcast), `CommandWake`; selected through a `WakeRegistry` keyed by method kind | recording fake; real UDP socket on loopback |
+| `WakeSender` | send one wake request for a `Pc` | one impl per method: `RelayWake` (`ssh` through `CommandRunner`, `core::wake`, done), `MagicPacket` (UDP to any IPv4 address), `CommandWake`; selected through a `WakeRegistry` keyed by method kind | recording fake; real UDP socket on loopback |
 | `CommandRunner` | run argv without a shell, hidden window, timeout; returns `(code, text)` | `core`: `std::process` with `CREATE_NO_WINDOW` on Windows; `app` wraps it to decode OEM code page | recording fake |
 | `PowerRunner` | run `Sleep`/`Shutdown` for a `PowerMethod` | `core`: builds argv (SSH or command), uses `CommandRunner` | recording fake |
 | `Clock` | monotonic `now()` | `std::time::Instant` | manual clock |
@@ -370,13 +418,13 @@ probe_host = "192.168.88.1"  # answers ping only when the tunnel works (was rout
 timeout = 20                 # seconds to wait for probe_host after the start
 ping_timeout_ms = 1000
 
-[[routers]]                  # reached over SSH with a key; no password anywhere
-id = "mikrotik"
-kind = "mikrotik"
+[[relays]]                   # a host that sends the magic packet; SSH with a key, no password
+id = "gateway"
+kind = "routeros"            # preset: routeros | etherwake | wakeonlan
 host = "192.168.88.1"
 port = 22
-user = "homelink"            # a restricted RouterOS user that may only run commands
-identity_file = 'C:\ProgramData\HomeLink\router_ed25519'   # explicit absolute path, required
+user = "homelink"            # a restricted user that may only run the wake command
+identity_file = 'C:\ProgramData\HomeLink\relay_ed25519'    # explicit absolute path, required
 timeout = 8                  # seconds, also the ssh connect timeout
 
 [[pcs]]
@@ -388,11 +436,13 @@ tunnel = "home"              # omit for a PC without a tunnel
 ports = [3389]
 
   [pcs.wake]                 # one of three shapes
-  method = "mikrotik"        # router = "mikrotik", mac = "AA:BB:CC:DD:EE:FF", interface = "bridge"
-  router = "mikrotik"
+  method = "relay"           # through a relay host; the relay's preset decides the fields
+  relay = "gateway"
   mac = "AA:BB:CC:DD:EE:FF"
-  interface = "bridge"
-  # method = "magic_packet"  mac, broadcast = "255.255.255.255", port = 9
+  interface = "bridge"       # routeros and etherwake: required; wakeonlan: not allowed
+  # address = "10.0.5.255"   # wakeonlan only, optional
+  # method = "magic_packet"  mac, address = "255.255.255.255" (broadcast, or the PC's own IP
+  #                          for a routed setup), port = 9
   # method = "command"       command = ["wakeonlan", "{mac}"], timeout = 15
 
   [pcs.power]
@@ -416,27 +466,33 @@ Validation (all problems are collected and reported together, each with its path
    differs from v0.3, justified because there is no old config to stay compatible with).
 2. `version` is supported; `language` is one of the shipped locales or `auto`.
 3. Ids are unique within their kind and match `[a-z0-9-]{1,32}`; names are non-empty.
-4. `pcs[].tunnel` and `wake.router` refer to existing ids. A tunnel or router may be unused (warning).
-5. `host` (PC and router) is an IP address or a valid hostname; `probe_host` the same.
+4. `pcs[].tunnel` and `wake.relay` refer to existing ids. A tunnel or relay may be unused (warning).
+5. `host` (PC and relay) is an IP address or a valid hostname; `probe_host` the same.
 6. `ports`: at least one, each 1-65535, no duplicates.
 7. Numbers: `offline_after_failures >= 1`; all timeouts and intervals `> 0` and under an upper bound
    (e.g. 3600 s); `wake_timeout >= wake_poll_seconds`; `wake_poll_seconds <= poll_seconds`.
-8. MAC is six hex pairs separated by `:` or `-`; magic packet `broadcast` is an IPv4 address;
-   a MikroTik `interface` is 1-64 characters from `A-Za-z0-9_.-` (it is placed into a RouterOS
-   command, so no other character is accepted).
+8. MAC is six hex pairs separated by `:` or `-`; the `address` of a magic packet or of a
+   `wakeonlan` relay wake is an IPv4 address (unicast or broadcast, nothing else is assumed);
+   an `interface` is 1-64 characters from `A-Za-z0-9_.-` and does not start with `-` (it is
+   placed into a command run on the relay, so no other character is accepted).
+   Relay wake methods are checked against the relay's preset: `interface` is required by
+   `routeros` and `etherwake` and rejected for `wakeonlan`; `address` is allowed only for
+   `wakeonlan`. The error names the field, e.g. `pcs[0].wake.interface`.
 9. Every `argv` is non-empty and its first element non-empty; placeholders are only `{host}`
    and, when the wake command has a `mac`, `{mac}`; no shell strings.
 10. WireGuard: `conf` file name ends with `.conf` or `.conf.dpapi`; the derived tunnel name
     matches WireGuard's `[A-Za-z0-9_=+.-]{1,32}`.
 11. `power.method = "ssh"` needs `user`, `port` and `identity_file`; `"command"` needs at least
-    one of sleep/shutdown. An SSH user (power and router) has no blanks or `@` and does not
+    one of sleep/shutdown. An SSH user (power and relay) has no blanks or `@` and does not
     start with `-`.
-12. SSH access (routers and SSH power methods): `port` 1-65535; `identity_file` is required and
+12. SSH access (relays and SSH power methods): `port` 1-65535; `identity_file` is required and
     must be an absolute path (`C:\...`, `C:/...`, `\\server\...` or `/...`), so the elevated
     program never depends on which profile `ssh` resolves; the error names the path, for
     example `pcs[0].power.identity_file`. Keys that held REST or password settings (`api_url`,
-    `password_ref`, `verify_tls`, `password`) are unknown keys and rejected. The file is not
-    opened at load; a missing key file surfaces as an `ssh` error in a notice.
+    `password_ref`, `verify_tls`, `password`), and the old names `[[routers]]`, `router`,
+    `broadcast` and `method = "mikrotik"`, are unknown keys and rejected (nothing is released
+    with them, so there are no aliases). The file is not opened at load; a missing key file
+    surfaces as an `ssh` error in a notice.
 13. `log.file` and `rdp` paths stay inside the config directory (no `..`, no absolute paths).
 
 **Saving.** `save` never re-renders an existing file; it edits it by key (`toml_edit`, only in
@@ -450,7 +506,7 @@ Validation (all problems are collected and reported together, each with its path
 - A changed value is replaced and keeps its spacing and trailing comment. (Comments inside a
   changed multi-line array are lost with the array's old text.) Keys that are gone are removed;
   new keys are appended to their table.
-- `[[tunnels]]`, `[[routers]]` and `[[pcs]]` entries are matched by `id`, never by position.
+- `[[tunnels]]`, `[[relays]]` and `[[pcs]]` entries are matched by `id`, never by position.
   A deleted entry is removed together with its sub-tables and the comments written above it. A
   new entry is appended after the last entry of its kind (or, if the file has none, before the
   first entry of a later kind). Reordered entries move as a whole, with their comments.
@@ -518,21 +574,29 @@ https://slint.dev (required by the royalty-free licence) and the third-party lic
 
 The wizard is a second Slint window; its logic (`core::wizard`) is pure and tested on Linux. A
 `PcDraft` moves through steps; each step validates its slice with the same validators as section 8,
-and the last step converts the draft to a `Pc` (plus a `Tunnel`/`Router` if created) and saves.
+and the last step converts the draft to a `Pc` (plus a `Tunnel`/`Relay` if created) and saves.
 It also edits an existing PC.
 
 1. Name, OS, address.
 2. Tunnel: none / existing / new. New WireGuard: auto-detect `wireguard.exe` and list
    `*.conf.dpapi` from its `Data\Configurations`; ask for `probe_host`.
 3. Readiness ports (presets: RDP 3389, SSH 22, custom) and "Check now" (raises the tunnel for the check if needed).
-4. Wake method: none / MikroTik over SSH (pick or create a router: host, port, user, key; see
-   "SSH setup" below) / magic packet / command; MAC and method fields.
+4. Wake method: none / through a relay host over SSH / direct magic packet / command; MAC and
+   method fields.
+   - *Relay host:* pick or create a relay (host, port, user, key; see "SSH setup" below) and
+     choose its **preset**: RouterOS, etherwake or wakeonlan (`wizard.relay.*`). The preset
+     decides which fields the step shows: an interface for RouterOS and etherwake, an optional
+     destination address for wakeonlan. The step then shows the setup commands for that preset
+     (below).
+   - *Direct magic packet:* a destination address (default: broadcast) and port; when the PC is
+     behind a tunnel or in another VLAN the step shows the routed-setup help (unicast to the
+     PC's IP and a static ARP entry on the last router, `wizard.magic.routed_help`).
 5. Power: none / SSH (user, key; "Test connection" as below) / command.
 6. RDP (optional): user name only. The step says that HomeLink never handles the RDP password:
    it is typed in the Remote Desktop window, which can remember it (`wizard.rdp.note`).
 7. Summary and save.
 
-**SSH setup** (steps 4 and 5; shared by routers and PCs). The wizard does not ask for or store
+**SSH setup** (steps 4 and 5; shared by relay hosts and PCs). The wizard does not ask for or store
 any password.
 
 - *OpenSSH client check.* Before any SSH step the wizard looks for the client (`ssh.exe` and
@@ -544,16 +608,22 @@ any password.
   with an empty passphrase into a dedicated file, so the elevated program can use it
   unattended; the file's location is a per-machine folder chosen in phase 4, restricted to
   the user and administrators) or "use an existing key" (a file picker). The configuration
-  stores only the absolute path. A key is required for every SSH router and every SSH power
+  stores only the absolute path. A key is required for every SSH relay and every SSH power
   method; the wizard does not offer "let ssh choose". The wizard shows the public key for the
   user to install.
-- *Router side.* For a MikroTik router the wizard displays the RouterOS commands to run on
-  the router, with the user name, key file name and the address of this computer filled in:
-  create a group that can only log in over SSH and run `/tool wol` (policies `ssh`, `read`,
-  `test`), create a user in it that is limited to this computer's address, import the public
-  key for that user, and disable password login for SSH (`/ip ssh set
-  always-allow-password-login=no`). These commands are to be verified on RouterOS 7 in phase 3
-  and kept in one place in core so tests and the wizard share them.
+- *Relay side, by preset* (`wizard.relay.setup.*`; the wizard fills in the user name, key
+  file name and the address of this computer):
+  - `routeros`: the RouterOS commands to create a group that can only log in over SSH and run
+    `/tool wol` (policies `ssh`, `read`, `test`), create a user in it that is limited to this
+    computer's address, import the public key for that user, and disable password login for
+    SSH (`/ip ssh set always-allow-password-login=no`). To be verified on RouterOS 7 in
+    phase 3.
+  - `etherwake`: install `etherwake`, create the SSH user, add the public key to its
+    `authorized_keys`, and allow that user to run the `etherwake` binary (path from
+    `which etherwake`) with `sudo` without a password, for that command only.
+  - `wakeonlan`: install `wakeonlan`, create the SSH user and add the public key to its
+    `authorized_keys`.
+  The text of each set lives in one place in core so tests and the wizard share it.
 - *PC side.* For an SSH power method the wizard shows the line to add to `authorized_keys`
   and, for Linux, the `sudoers` line from the README.
 - *Test connection.* Runs `ssh` with the same options as at run time (`BatchMode=yes`,
@@ -565,18 +635,12 @@ any password.
 
 ## 12. Open questions (not decided here)
 
-1. **Waking a PC in another VLAN or subnet.** A UDP broadcast does not cross routers, and a
-   routed WireGuard tunnel carries no broadcast. The MikroTik method already works for any
-   segment the router itself belongs to (`interface` may be a VLAN interface). Options for the
-   magic-packet method: directed broadcast to the target subnet (needs router support), a relay
-   or helper on the target segment, a unicast UDP packet to an always-on device. The design
-   keeps `broadcast`/`port` configurable and `WakeMethod` extensible, nothing more.
-2. **Does the custom panel work well on screen?** Window focus on show and hide, hide-on-blur
+1. **Does the custom panel work well on screen?** Window focus on show and hide, hide-on-blur
    against a tray-icon click, action buttons under a mouse and keyboard, DPI, taskbar not at
    the bottom (the prototype anchors to the work-area corner), multi-monitor, accessibility.
    Needs a check on real Windows 10 LTSC and 11 in phase 0; fallbacks: `MessageBoxW`
    confirmations, a standard tray menu as a degraded mode.
-3. **Panel and wizard styling.** To a designer: layout of the two columns, tunnel button states,
+2. **Panel and wizard styling.** To a designer: layout of the two columns, tunnel button states,
    PC row with four actions, wizard steps, About, and the tray icon rule for several tunnels
    and PCs (section 7 is provisional).
 
@@ -601,9 +665,10 @@ tests prove only the thin adapters.
   one changed value, additions, deletions, renames and reorders change only what they should;
   timing overrides appear and disappear; and a randomised test applies many edits in a row and
   checks that editing in place and rendering from scratch describe the same configuration.
-- **Adapters:** magic packet bytes (6 x `FF` + 16 x MAC) and a loopback socket; the MikroTik
-  `ssh` argument list and RouterOS command built exactly as specified, with hostile MAC and
-  interface values rejected before they reach the command (done in `core::wake`, with a fake
+- **Adapters:** magic packet bytes (6 x `FF` + 16 x MAC) and a loopback socket; the relay
+  `ssh` argument list and remote command built exactly as specified for every preset (RouterOS,
+  etherwake, wakeonlan), with hostile MAC, interface and address values
+  rejected before they reach the command (done in `core::wake`, with a fake
   `CommandRunner`); TCP probe against a local listener; command runner exit codes, timeout and
   output.
 - **Privacy checks:** a test that the configuration schema has no password, token or URL
@@ -617,7 +682,7 @@ tests prove only the thin adapters.
   loopback, OEM decoding, OpenSSH client detection; UI smoke with the
   Slint testing backend (component instantiation, callbacks reach the engine).
 - **Manual release checklist** (in the repo, run on Windows 10 LTSC and 11): tray, panel focus,
-  notifications, real WireGuard, MikroTik, a Windows and a Linux PC, parity with 0.3.0.
+  notifications, real WireGuard, one relay of each preset, a Windows and a Linux PC, parity with 0.3.0.
 - **Gates:** `cargo llvm-cov` on `core` with a threshold (machine and config near 100 %),
   `cargo mutants` on `machine/` and `config/` run manually before releases.
 
@@ -648,14 +713,15 @@ must equal `homelink.__version__`. Changes (the Python jobs stay until phase 7):
 
 | Phase | Content | Exit criterion |
 | --- | --- | --- |
-| 0 Spike | Workspace skeleton, CI for `core` and `app`; on real Windows: panel focus/placement, tray notifications API (Slint's tray may not offer balloons, a `windows`-crate fallback may be needed), measured exe size; owner answers section 12 | question 2 answered, size budget fixed, risks below closed or accepted |
+| 0 Spike | Workspace skeleton, CI for `core` and `app`; on real Windows: panel focus/placement, tray notifications API (Slint's tray may not offer balloons, a `windows`-crate fallback may be needed), measured exe size; owner answers section 12 | question 1 answered, size budget fixed, risks below closed or accepted |
 | 1 Core model (done) | `domain`, `config` (schema, validation, fixtures), `i18n` catalog, `notice` | config tests green on Linux; locale parity green |
 | 2 Machine and engine (done) | `machine`, `engine`, `ports`, `testing` fakes; port all of `test_controller.py`; randomised invariants | every Python controller test has a Rust counterpart |
-| 2b SSH-only access (done, owner decision) | MikroTik REST and every secret removed; router over SSH with a key; `core::wake` builds the `ssh` argv (pure, tested); locale keys updated | no password, URL or secret type left in core; tests green |
+| 2b SSH-only access (done, owner decision) | REST and every secret removed; relay hosts over SSH with a key; `core::wake` builds the `ssh` argv (pure, tested); locale keys updated | no password, URL or secret type left in core; tests green |
+| 2c Relay presets and routed wake (done, owner decision) | `[[relays]]` with a preset (`routeros`, `etherwake`, `wakeonlan`); `method = "relay"`; magic packet `address` (unicast or broadcast); per-preset validation and exact-argument tests | tests green; section 3 documents the unicast + static ARP setup |
 | 3 Adapters | Portable (TCP, UDP magic packet, `CommandRunner`, SSH power runner) with Linux integration tests; Windows (WireGuard service, ICMP, OEM decoding, OpenSSH detection); verify the RouterOS commands on RouterOS 7 | adapter tests green in both CI jobs; a real `/tool wol` over SSH works |
 | 4 App shell | Panel on the real engine, tray with aggregate icon, notices, logging, single instance, elevation manifest, icons moved from `src/homelink/assets` | a single PC with a tunnel works end to end on Windows |
 | 5 Multi-PC and wizard | Groups, shared tunnel, PC without a tunnel, wizard (add/edit/delete), About with the Slint credit, config reload | tunnel groups, a shared tunnel and a PC without a tunnel work by hand |
-| 6 Hardening | Manual checklist on Windows 10 LTSC and 11 (Linux and Windows remote PCs), docs rewrite (`README*.md`, `design.md`, router setup, SSH for Windows), size and licence check, `v1.0.0-rc.1` | no open defects; parity checklist complete |
+| 6 Hardening | Manual checklist on Windows 10 LTSC and 11 (Linux and Windows remote PCs), docs rewrite (`README*.md`, `design.md`, relay and router setup, SSH for Windows), size and licence check, `v1.0.0-rc.1` | no open defects; parity checklist complete |
 | 7 Release | Remove `src/homelink/`, `tests/`, `pyproject.toml`, `build.bat`, `run_homelink.pyw`, Python CI jobs; decide the future of `tools/generate_icons.py` (keep as a dev tool or port); tag `v1.0.0` | release published, README links verified |
 
 Technical risks to verify in phase 0: tray notifications in Slint 1.18; position of the tray

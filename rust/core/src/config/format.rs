@@ -19,7 +19,7 @@
 //!   unchanged configuration gives byte-identical text.
 //! - A changed value is replaced and keeps its decoration, hence its trailing comment.
 //! - Keys that are gone are removed; new keys are appended to their table.
-//! - `[[tunnels]]`, `[[routers]]` and `[[pcs]]` entries are matched by `id`, never by
+//! - `[[tunnels]]`, `[[relays]]` and `[[pcs]]` entries are matched by `id`, never by
 //!   position. An entry that is gone is removed together with its sub-tables and the
 //!   comments written above it. A new entry is appended after the last entry of its kind
 //!   (or, when the file has none, before the first entry of a later kind).
@@ -70,7 +70,7 @@ impl FormatError {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct EntryRenames {
     pub tunnels: Vec<(String, String)>,
-    pub routers: Vec<(String, String)>,
+    pub relays: Vec<(String, String)>,
     pub pcs: Vec<(String, String)>,
 }
 
@@ -78,7 +78,7 @@ impl EntryRenames {
     fn for_key(&self, key: &str) -> &[(String, String)] {
         match key {
             "tunnels" => &self.tunnels,
-            "routers" => &self.routers,
+            "relays" => &self.relays,
             "pcs" => &self.pcs,
             _ => &[],
         }
@@ -94,7 +94,7 @@ const BOM: char = '\u{feff}';
 
 /// The keys of the arrays of tables that are matched by `id`, in the order a new file
 /// lists them.
-const ENTRY_KEYS: [&str; 3] = ["tunnels", "routers", "pcs"];
+const ENTRY_KEYS: [&str; 3] = ["tunnels", "relays", "pcs"];
 
 /// Distance between the positions of tables after [`scale_positions`]; leaves room to put
 /// moved and new tables between existing ones.

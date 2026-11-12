@@ -83,7 +83,7 @@ fn unknown_keys_and_values_are_errors() {
     for text in [
         change("level = \"info\"", "level = \"info\"\nextra = 1"),
         change("os = \"linux\"", "os = \"freebsd\""),
-        change("method = \"mikrotik\"", "method = \"carrier_pigeon\""),
+        change("method = \"relay\"", "method = \"carrier_pigeon\""),
         change("kind = \"wireguard\"", "kind = \"openvpn\""),
         change("level = \"info\"", "level = \"loud\""),
     ] {
@@ -99,7 +99,7 @@ fn a_missing_required_setting_is_an_error() {
     for key in [
         "poll_seconds = 5\n",
         "offline_after_failures = 3\n",
-        "identity_file = 'C:\\ProgramData\\HomeLink\\router_ed25519'\n",
+        "identity_file = 'C:\\ProgramData\\HomeLink\\relay_ed25519'\n",
     ] {
         let text = change(key, "");
         assert!(
@@ -151,8 +151,8 @@ fn ids_are_slugs() {
         "1-32 characters",
     );
     rejected(
-        &change("id = \"mikrotik\"", "id = \"\""),
-        "routers[0].id",
+        &change("id = \"gateway\"", "id = \"\""),
+        "relays[0].id",
         "1-32 characters",
     );
     rejected(
@@ -180,8 +180,8 @@ fn ids_are_unique_within_their_kind() {
     );
     // The same id in different kinds is fine.
     accepted(
-        &change("id = \"mikrotik\"", "id = \"home\"")
-            .replace("router = \"mikrotik\"", "router = \"home\""),
+        &change("id = \"gateway\"", "id = \"home\"")
+            .replace("relay = \"gateway\"", "relay = \"home\""),
     );
 }
 
@@ -209,27 +209,27 @@ fn references_must_exist() {
         "unknown tunnel 'ghost'",
     );
     rejected(
-        &change("router = \"mikrotik\"", "router = \"ghost\""),
-        "pcs[0].wake.router",
-        "unknown router 'ghost'",
+        &change("relay = \"gateway\"", "relay = \"ghost\""),
+        "pcs[0].wake.relay",
+        "unknown relay 'ghost'",
     );
 }
 
 #[test]
-fn unused_tunnel_and_router_are_warnings_only() {
+fn unused_tunnel_and_relay_are_warnings_only() {
     let loaded = config::parse(&extra_tunnel("spare")).unwrap();
     assert_eq!(loaded.warnings.len(), 1);
     assert_eq!(loaded.warnings[0].path, "tunnels[1]");
 
-    let no_wake = change("method = \"mikrotik\"", "method = \"magic_packet\"")
-        .replace("router = \"mikrotik\"\n", "")
+    let no_wake = change("method = \"relay\"", "method = \"magic_packet\"")
+        .replace("relay = \"gateway\"\n", "")
         .replace(
             "interface = \"bridge\"",
-            "broadcast = \"255.255.255.255\"\nport = 9",
+            "address = \"255.255.255.255\"\nport = 9",
         );
     let loaded = config::parse(&no_wake).unwrap();
     assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
-    assert_eq!(loaded.warnings[0].path, "routers[0]");
+    assert_eq!(loaded.warnings[0].path, "relays[0]");
 
     assert!(config::parse(&full()).unwrap().warnings.is_empty());
 }
@@ -258,11 +258,11 @@ fn hosts_are_addresses_or_names() {
 }
 
 #[test]
-fn router_needs_a_host_a_port_and_a_safe_user() {
+fn relay_needs_a_host_a_port_and_a_safe_user() {
     let host = "host = \"192.168.88.1\"\nport = 22\nuser = \"homelink\"";
     rejected(
         &change(host, "host = \"a b\"\nport = 22\nuser = \"homelink\""),
-        "routers[0].host",
+        "relays[0].host",
         "not a valid host",
     );
     rejected(
@@ -270,7 +270,7 @@ fn router_needs_a_host_a_port_and_a_safe_user() {
             host,
             "host = \"192.168.88.1\"\nport = 0\nuser = \"homelink\"",
         ),
-        "routers[0].port",
+        "relays[0].port",
         "1 to 65535",
     );
     rejected(
@@ -278,7 +278,7 @@ fn router_needs_a_host_a_port_and_a_safe_user() {
             host,
             "host = \"192.168.88.1\"\nport = 70000\nuser = \"homelink\"",
         ),
-        "routers[0].port",
+        "relays[0].port",
         "1 to 65535",
     );
     for bad in ["", "-oProxyCommand=x", "a@b", "a b"] {
@@ -287,7 +287,7 @@ fn router_needs_a_host_a_port_and_a_safe_user() {
                 host,
                 &format!("host = \"192.168.88.1\"\nport = 22\nuser = \"{bad}\""),
             ),
-            "routers[0].user",
+            "relays[0].user",
             "",
         );
     }
@@ -298,8 +298,8 @@ fn router_needs_a_host_a_port_and_a_safe_user() {
 }
 
 #[test]
-fn router_key_must_be_an_explicit_absolute_path() {
-    let key = r"identity_file = 'C:\ProgramData\HomeLink\router_ed25519'";
+fn relay_key_must_be_an_explicit_absolute_path() {
+    let key = r"identity_file = 'C:\ProgramData\HomeLink\relay_ed25519'";
     for bad in [
         "",
         "id_ed25519",
@@ -310,7 +310,7 @@ fn router_key_must_be_an_explicit_absolute_path() {
     ] {
         rejected(
             &change(key, &format!("identity_file = '{bad}'")),
-            "routers[0].identity_file",
+            "relays[0].identity_file",
             "",
         );
     }
@@ -410,7 +410,7 @@ fn timeouts_and_intervals_are_positive_and_bounded() {
     );
     rejected(
         &change("\ntimeout = 8", "\ntimeout = 3601"),
-        "routers[0].timeout",
+        "relays[0].timeout",
         "at most 3600",
     );
     rejected(
@@ -473,7 +473,7 @@ fn per_pc_overrides_are_validated_too() {
     );
 }
 
-// ---- 8. MAC addresses and broadcast ----
+// ---- 8. MAC addresses and magic packet destination ----
 
 #[test]
 fn mac_addresses_are_six_hex_pairs() {
@@ -501,17 +501,21 @@ fn mac_addresses_are_six_hex_pairs() {
 }
 
 #[test]
-fn magic_packet_needs_ipv4_broadcast_and_port() {
-    rejected(
-        &change("broadcast = \"10.0.0.255\"", "broadcast = \"10.0.0\""),
-        "pcs[2].wake.broadcast",
-        "not an IPv4 address",
-    );
-    rejected(
-        &change("broadcast = \"10.0.0.255\"", "broadcast = \"::1\""),
-        "pcs[2].wake.broadcast",
-        "not an IPv4 address",
-    );
+fn magic_packet_needs_an_ipv4_address_and_a_port() {
+    for bad in ["10.0.0", "::1", "nas.lan", "10.0.0.256", ""] {
+        rejected(
+            &change("address = \"10.0.0.7\"", &format!("address = \"{bad}\"")),
+            "pcs[2].wake.address",
+            "not an IPv4 address",
+        );
+    }
+    // Any IPv4 address is a destination: a PC (unicast) or a broadcast address.
+    for good in ["10.0.0.7", "10.0.0.255", "255.255.255.255", "192.168.88.1"] {
+        accepted(&change(
+            "address = \"10.0.0.7\"",
+            &format!("address = \"{good}\""),
+        ));
+    }
     rejected(
         &change("\nport = 9", "\nport = 0"),
         "pcs[2].wake.port",
@@ -520,12 +524,133 @@ fn magic_packet_needs_ipv4_broadcast_and_port() {
 }
 
 #[test]
-fn mikrotik_needs_an_interface() {
+fn an_interface_must_be_a_valid_name() {
+    for bad in ["", "-h", "a b"] {
+        rejected(
+            &change("interface = \"bridge\"", &format!("interface = \"{bad}\"")),
+            "pcs[0].wake.interface",
+            "interface name",
+        );
+    }
+}
+
+// ---- relay presets: required and refused fields ----
+// Fixture: desktop (pcs[0]) uses the routeros relay with an interface, media (pcs[3]) the
+// etherwake relay with an interface, kiosk (pcs[4]) the wakeonlan relay with an address.
+
+#[test]
+fn routeros_and_etherwake_need_an_interface_and_refuse_an_address() {
+    // routeros: desktop
     rejected(
-        &change("interface = \"bridge\"", "interface = \"\""),
+        &change("interface = \"bridge\"\n", ""),
         "pcs[0].wake.interface",
-        "interface name",
+        "required by the 'routeros' preset",
     );
+    rejected(
+        &change(
+            "interface = \"bridge\"",
+            "interface = \"bridge\"\naddress = \"10.0.0.255\"",
+        ),
+        "pcs[0].wake.address",
+        "not used by the 'routeros' preset",
+    );
+    // etherwake: media
+    rejected(
+        &change("interface = \"br-lan\"\n", ""),
+        "pcs[3].wake.interface",
+        "required by the 'etherwake' preset",
+    );
+    rejected(
+        &change(
+            "interface = \"br-lan\"",
+            "interface = \"br-lan\"\naddress = \"10.0.0.255\"",
+        ),
+        "pcs[3].wake.address",
+        "not used by the 'etherwake' preset",
+    );
+    accepted(&change("interface = \"br-lan\"", "interface = \"eth0.2\""));
+}
+
+#[test]
+fn wakeonlan_refuses_an_interface_and_takes_an_optional_address() {
+    rejected(
+        &change(
+            "address = \"10.0.5.255\"",
+            "address = \"10.0.5.255\"\ninterface = \"eth0\"",
+        ),
+        "pcs[4].wake.interface",
+        "not used by the 'wakeonlan' preset",
+    );
+    accepted(&change("address = \"10.0.5.255\"\n", ""));
+    accepted(&change(
+        "address = \"10.0.5.255\"",
+        "address = \"10.0.0.1\"",
+    ));
+    rejected(
+        &change("address = \"10.0.5.255\"", "address = \"10.0.5\""),
+        "pcs[4].wake.address",
+        "not an IPv4 address",
+    );
+}
+
+#[test]
+fn the_fields_are_checked_against_the_preset_of_the_relay_that_is_used() {
+    // Make the routeros relay a wakeonlan one: the desktop's interface is now unused.
+    rejected(
+        &change("kind = \"routeros\"", "kind = \"wakeonlan\""),
+        "pcs[0].wake.interface",
+        "not used by the 'wakeonlan' preset of relay 'gateway'",
+    );
+    // And the etherwake relay a routeros one: the media PC's interface is fine.
+    accepted(&change("kind = \"etherwake\"", "kind = \"routeros\""));
+}
+
+#[test]
+fn an_unknown_preset_is_an_error() {
+    let text = change("kind = \"routeros\"", "kind = \"ubnt\"");
+    assert!(matches!(config::parse(&text), Err(ConfigError::Syntax(_))));
+}
+
+#[test]
+fn the_wake_method_must_name_an_existing_relay_and_a_valid_mac() {
+    rejected(
+        &change("relay = \"openwrt\"", "relay = \"ghost\""),
+        "pcs[3].wake.relay",
+        "unknown relay 'ghost'",
+    );
+    rejected(
+        &change("mac = \"00:11:22:33:44:55\"", "mac = \"00:11:22:33:44\""),
+        "pcs[3].wake.mac",
+        "not a MAC address",
+    );
+}
+
+#[test]
+fn every_relay_must_be_used_or_it_is_a_warning() {
+    let text = change("relay = \"pi\"", "relay = \"openwrt\"")
+        .replace("address = \"10.0.5.255\"", "interface = \"br-lan\"");
+    let loaded = config::parse(&text).unwrap();
+    assert!(
+        loaded
+            .warnings
+            .iter()
+            .any(|w| w.path == "relays[2]" && w.message.contains("'pi'"))
+    );
+}
+
+#[test]
+fn the_old_router_and_broadcast_keys_are_gone() {
+    for text in [
+        change("[[relays]]", "[[routers]]"),
+        change("relay = \"gateway\"", "router = \"gateway\""),
+        change("address = \"10.0.0.7\"", "broadcast = \"10.0.0.255\""),
+        change("method = \"relay\"", "method = \"mikrotik\""),
+    ] {
+        assert!(
+            config::parse(&text).is_err(),
+            "an old name was accepted:\n{text}"
+        );
+    }
 }
 
 // ---- 9. commands ----
@@ -698,13 +823,13 @@ fn command_power_needs_at_least_one_command() {
 fn the_old_rest_and_password_keys_are_unknown_now() {
     for extra in [
         "api_url = \"http://192.168.88.1\"",
-        "password_ref = \"HomeLink/router/mikrotik\"",
+        "password_ref = \"HomeLink/relay/gateway\"",
         "verify_tls = false",
         "password = \"hunter2\"",
     ] {
         let text = change(
-            "kind = \"mikrotik\"",
-            &format!("kind = \"mikrotik\"\n{extra}"),
+            "kind = \"routeros\"",
+            &format!("kind = \"routeros\"\n{extra}"),
         );
         assert!(
             matches!(config::parse(&text), Err(ConfigError::Syntax(_))),
@@ -714,7 +839,7 @@ fn the_old_rest_and_password_keys_are_unknown_now() {
 }
 
 #[test]
-fn mikrotik_interface_name_has_a_closed_character_set() {
+fn interface_name_has_a_closed_character_set() {
     for bad in [
         "",
         "a b",
@@ -792,7 +917,7 @@ fn every_problem_is_reported_not_just_the_first() {
         "version",
         "pcs[0].ports",
         "pcs[0].host",
-        "routers[0].timeout",
+        "relays[0].timeout",
     ] {
         assert!(
             paths.contains(&expected),
@@ -810,8 +935,9 @@ fn error_text_lists_each_issue_on_its_own_line() {
         "{err}"
     );
     assert!(
-        err.contains("routers[0].timeout: must be greater than 0"),
+        err.contains("relays[0].timeout: must be greater than 0"),
         "{err}"
     );
-    assert_eq!(err.lines().count(), 2, "{err}");
+    // One line for the ports and one for each of the two relays whose timeout is 8.
+    assert_eq!(err.lines().count(), 3, "{err}");
 }

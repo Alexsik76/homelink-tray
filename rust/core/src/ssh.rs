@@ -1,4 +1,4 @@
-//! The `ssh` command line, shared by router wake and PC power actions.
+//! The `ssh` command line, shared by relay wake and PC power actions.
 //!
 //! Every connection of the program is key-only, with the key given explicitly: `BatchMode`
 //! and `PasswordAuthentication=no` (no prompts, no passwords), `-i <key>` with

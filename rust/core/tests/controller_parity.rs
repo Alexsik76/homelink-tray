@@ -19,7 +19,7 @@ use homelink_core::notice::{DETAIL_LIMIT, Notice};
 use homelink_core::ports::{Clock, Time};
 use homelink_core::testing::{Harness, pc_id, single_config, tunnel_id};
 
-const ROUTER: &str = "192.168.88.1";
+const PROBE_HOST: &str = "192.168.88.1";
 const PC: &str = "192.168.88.10";
 const FAILURES: u64 = 3; // offline_after_failures
 
@@ -29,7 +29,7 @@ fn env() -> Harness {
 
 fn up_and_online() -> Harness {
     let mut h = env();
-    h.reachable(ROUTER, true);
+    h.reachable(PROBE_HOST, true);
     h.reachable(PC, true);
     h.wake_pc("desktop");
     assert_eq!(
@@ -57,10 +57,10 @@ const DOWN_UNKNOWN: (TunnelState, PcState) = (TunnelState::Down, PcState::Unknow
 #[test]
 fn connect_and_wake_sends_wake_when_pc_is_silent() {
     let mut h = env();
-    h.reachable(ROUTER, true);
+    h.reachable(PROBE_HOST, true);
     h.wake_pc("desktop");
     assert_eq!(status(&h), (TunnelState::Up, PcState::Waking));
-    assert_eq!(h.wake.calls(), [(pc_id("desktop"), WakeKind::MikrotikSsh)]);
+    assert_eq!(h.wake.calls(), [(pc_id("desktop"), WakeKind::Relay)]);
     let first_change = h
         .sink
         .snapshots()
@@ -103,7 +103,7 @@ fn tunnel_failure_is_reported() {
 #[test]
 fn tunnel_start_gives_up_after_timeout() {
     let mut h = env();
-    h.wake_pc("desktop"); // the router never answers
+    h.wake_pc("desktop"); // the probe host never answers
     assert!(h.clock.now() >= Time::ZERO + Duration::from_secs(20));
     assert_eq!(status(&h), (TunnelState::Starting, PcState::Unknown));
     assert!(h.wake.woken().is_empty());
@@ -115,12 +115,12 @@ fn tunnel_start_gives_up_after_timeout() {
     );
 }
 
-// Python: test_router_failure_is_reported (the router is now one wake method among several)
+// Python: test_router_failure_is_reported (wake is now one of several methods, not only a router request)
 #[test]
 fn wake_failure_is_reported() {
     let mut h = env();
     h.wake.fail_with(Some("connection refused"));
-    h.reachable(ROUTER, true);
+    h.reachable(PROBE_HOST, true);
     h.wake_pc("desktop");
     assert_ne!(h.pc("desktop"), PcState::Waking);
     assert_eq!(
@@ -136,7 +136,7 @@ fn wake_failure_is_reported() {
 #[test]
 fn waking_pc_comes_online() {
     let mut h = env();
-    h.reachable(ROUTER, true);
+    h.reachable(PROBE_HOST, true);
     h.wake_pc("desktop");
     h.refresh();
     assert_eq!(h.pc("desktop"), PcState::Waking);
@@ -156,7 +156,7 @@ fn waking_pc_comes_online() {
 #[test]
 fn waking_times_out() {
     let mut h = env();
-    h.reachable(ROUTER, true);
+    h.reachable(PROBE_HOST, true);
     h.wake_pc("desktop");
     h.advance(180 + 1);
     h.refresh();
@@ -175,7 +175,7 @@ fn waking_times_out() {
 #[test]
 fn wake_with_the_tunnel_down_connects_first() {
     let mut h = env();
-    h.reachable(ROUTER, true);
+    h.reachable(PROBE_HOST, true);
     h.wake_pc("desktop");
     assert_eq!(h.tunnel.ups(), [tunnel_id("home")]);
     assert_eq!(h.wake.woken(), [pc_id("desktop")]);
@@ -186,7 +186,7 @@ fn wake_with_the_tunnel_down_connects_first() {
 #[test]
 fn toggle_tunnel_up_and_down() {
     let mut h = env();
-    h.reachable(ROUTER, true);
+    h.reachable(PROBE_HOST, true);
     h.toggle_tunnel("home");
     assert_eq!(status(&h), (TunnelState::Up, PcState::Offline));
     h.toggle_tunnel("home");
@@ -199,7 +199,7 @@ fn toggle_tunnel_up_and_down() {
 fn refresh_detects_external_tunnel() {
     let mut h = env();
     h.tunnel.set_running(&tunnel_id("home"), true);
-    h.reachable(ROUTER, true);
+    h.reachable(PROBE_HOST, true);
     h.reachable(PC, true);
     h.refresh();
     assert_eq!(status(&h), (TunnelState::Up, PcState::Online));
@@ -215,7 +215,7 @@ fn poll_interval_is_shorter_while_waking() {
         h.engine.machine().pc_interval(&pc),
         Some(Duration::from_secs(5))
     );
-    h.reachable(ROUTER, true);
+    h.reachable(PROBE_HOST, true);
     h.wake_pc("desktop");
     assert_eq!(
         h.engine.machine().pc_interval(&pc),
@@ -333,7 +333,7 @@ fn power_failure_detail_is_trimmed() {
 fn power_action_needs_online_pc() {
     for action in ACTIONS {
         let mut h = env();
-        h.reachable(ROUTER, true);
+        h.reachable(PROBE_HOST, true);
         h.wake_pc("desktop"); // the PC is only waking
         h.power_pc("desktop", action);
         assert!(h.power.calls().is_empty());
@@ -352,7 +352,7 @@ fn power_action_needs_online_pc() {
 #[test]
 fn power_action_is_skipped_while_busy() {
     let mut h = Harness::manual(single_config());
-    h.reachable(ROUTER, true);
+    h.reachable(PROBE_HOST, true);
     h.reachable(PC, true);
     h.wake_pc("desktop");
     while h.jobs.as_ref().unwrap().pending() > 0 {

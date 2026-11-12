@@ -111,7 +111,7 @@ fn a_tunnel_start_timeout_is_one_notice_and_wakes_nobody() {
     let mut h = Harness::manual(multi_config());
     h.wake_pc("desktop");
     h.wake_pc("laptop");
-    // The router never answers: run jobs and let a second pass at a time.
+    // The probe host never answers: run jobs and let a second pass at a time.
     for _ in 0..60 {
         h.run_jobs();
         h.advance(1);

@@ -7,7 +7,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::domain::{Pc, PcId, Router, RouterId, Timing, Tunnel, TunnelId};
+use crate::domain::{Pc, PcId, Relay, RelayId, Timing, Tunnel, TunnelId};
 use crate::i18n::LanguageSetting;
 
 mod convert;
@@ -42,8 +42,8 @@ pub struct Config {
     pub defaults: Timing,
     /// Tunnels.
     pub tunnels: Vec<Tunnel>,
-    /// Routers.
-    pub routers: Vec<Router>,
+    /// Relays.
+    pub relays: Vec<Relay>,
     /// Remote PCs.
     pub pcs: Vec<Pc>,
 }
@@ -54,9 +54,9 @@ impl Config {
         self.tunnels.iter().find(|t| t.id == *id)
     }
 
-    /// The router with this id.
-    pub fn router(&self, id: &RouterId) -> Option<&Router> {
-        self.routers.iter().find(|r| r.id == *id)
+    /// The relay with this id.
+    pub fn relay(&self, id: &RelayId) -> Option<&Relay> {
+        self.relays.iter().find(|r| r.id == *id)
     }
 
     /// The PC with this id.
@@ -144,14 +144,14 @@ pub fn load(path: &Path) -> Result<Loaded, ConfigError> {
 /// old entry (with the comments above it) and an addition of a new one at the end.
 ///
 /// The configuration passed to [`save_with`] must already use the new ids everywhere
-/// (including `pcs[].tunnel` and `wake.router`); this only tells the editor which old entry
+/// (including `pcs[].tunnel` and `wake.relay`); this only tells the editor which old entry
 /// the new id continues.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Renames {
     /// Renamed tunnels as `(old, new)`.
     pub tunnels: Vec<(TunnelId, TunnelId)>,
-    /// Renamed routers as `(old, new)`.
-    pub routers: Vec<(RouterId, RouterId)>,
+    /// Renamed relays as `(old, new)`.
+    pub relays: Vec<(RelayId, RelayId)>,
     /// Renamed PCs as `(old, new)`.
     pub pcs: Vec<(PcId, PcId)>,
 }
@@ -165,7 +165,7 @@ impl Renames {
         }
         format::EntryRenames {
             tunnels: pairs(&self.tunnels),
-            routers: pairs(&self.routers),
+            relays: pairs(&self.relays),
             pcs: pairs(&self.pcs),
         }
     }

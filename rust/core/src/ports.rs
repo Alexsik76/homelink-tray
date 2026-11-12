@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::config::Config;
-use crate::domain::{Host, Pc, PowerAction, Router, Tunnel, WakeKind, WakeMethod};
+use crate::domain::{Host, Pc, PowerAction, Relay, Tunnel, WakeKind, WakeMethod};
 use crate::notice::Notice;
 use crate::snapshot::Snapshot;
 
@@ -120,8 +120,8 @@ pub struct WakeRequest<'a> {
     pub pc: &'a Pc,
     /// Its wake method.
     pub method: &'a WakeMethod,
-    /// The router named by the method, for router based methods.
-    pub router: Option<&'a Router>,
+    /// The relay named by the method, for relay based methods.
+    pub relay: Option<&'a Relay>,
 }
 
 /// Sends one kind of wake request.
@@ -154,11 +154,11 @@ impl WakeRegistry {
             .senders
             .get(&method.kind())
             .ok_or(WakeError::Unsupported)?;
-        let router = match method {
-            WakeMethod::MikrotikSsh { router, .. } => config.router(router),
+        let relay = match method {
+            WakeMethod::Relay { relay, .. } => config.relay(relay),
             _ => None,
         };
-        sender.wake(&WakeRequest { pc, method, router })
+        sender.wake(&WakeRequest { pc, method, relay })
     }
 }
 

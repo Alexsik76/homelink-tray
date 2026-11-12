@@ -2,10 +2,12 @@
 
 use super::Config;
 use super::raw::{
-    RawConfig, RawLog, RawOs, RawPc, RawPower, RawRdp, RawRouter, RawRouterKind, RawTiming,
+    RawConfig, RawLog, RawOs, RawPc, RawPower, RawRdp, RawRelay, RawRelayKind, RawTiming,
     RawTimingOverride, RawTunnel, RawTunnelKind, RawWake,
 };
-use crate::domain::{Os, Pc, PowerMethod, Router, Timing, Tunnel, TunnelKind, WakeMethod};
+use crate::domain::{
+    Os, Pc, PowerMethod, Relay, RelayKind, Timing, Tunnel, TunnelKind, WakeMethod,
+};
 
 pub(super) fn to_raw(config: &Config) -> RawConfig {
     RawConfig {
@@ -17,7 +19,7 @@ pub(super) fn to_raw(config: &Config) -> RawConfig {
         },
         defaults: raw_timing(&config.defaults),
         tunnels: config.tunnels.iter().map(raw_tunnel).collect(),
-        routers: config.routers.iter().map(raw_router).collect(),
+        relays: config.relays.iter().map(raw_relay).collect(),
         pcs: config
             .pcs
             .iter()
@@ -74,10 +76,14 @@ fn raw_tunnel(t: &Tunnel) -> RawTunnel {
     }
 }
 
-fn raw_router(r: &Router) -> RawRouter {
-    RawRouter {
+fn raw_relay(r: &Relay) -> RawRelay {
+    RawRelay {
         id: r.id.to_string(),
-        kind: RawRouterKind::Mikrotik,
+        kind: match r.kind {
+            RelayKind::RouterOs => RawRelayKind::Routeros,
+            RelayKind::Etherwake => RawRelayKind::Etherwake,
+            RelayKind::Wakeonlan => RawRelayKind::Wakeonlan,
+        },
         host: r.host.to_string(),
         port: i64::from(r.port),
         user: r.user.clone(),
@@ -109,22 +115,20 @@ fn raw_pc(pc: &Pc, defaults: &Timing) -> RawPc {
 
 fn raw_wake(w: &WakeMethod) -> RawWake {
     match w {
-        WakeMethod::MikrotikSsh {
-            router,
+        WakeMethod::Relay {
+            relay,
             mac,
             interface,
-        } => RawWake::Mikrotik {
-            router: router.to_string(),
+            address,
+        } => RawWake::Relay {
+            relay: relay.to_string(),
             mac: mac.to_string(),
-            interface: interface.to_string(),
+            interface: interface.as_ref().map(ToString::to_string),
+            address: address.as_ref().map(ToString::to_string),
         },
-        WakeMethod::MagicPacket {
-            mac,
-            broadcast,
-            port,
-        } => RawWake::MagicPacket {
+        WakeMethod::MagicPacket { mac, address, port } => RawWake::MagicPacket {
             mac: mac.to_string(),
-            broadcast: broadcast.to_string(),
+            address: address.to_string(),
             port: i64::from(*port),
         },
         WakeMethod::Command { argv, mac, timeout } => RawWake::Command {

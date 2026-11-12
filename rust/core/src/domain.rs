@@ -1,4 +1,4 @@
-//! Domain model: tunnels, routers, PCs, wake and power methods, states.
+//! Domain model: tunnels, relays, PCs, wake and power methods, states.
 //!
 //! Types here are plain validated data. Constructors (`parse`) reject malformed values, so
 //! the rest of the program never re-validates them. Nothing in this module reads or writes
@@ -75,9 +75,9 @@ id_type!(
     "PC"
 );
 id_type!(
-    /// Identifier of a [`Router`].
-    RouterId,
-    "router"
+    /// Identifier of a [`Relay`].
+    RelayId,
+    "relay"
 );
 
 /// A MAC address.
@@ -176,13 +176,15 @@ impl fmt::Display for Host {
     }
 }
 
-/// Longest router interface name.
+/// Longest network interface name.
 const INTERFACE_MAX_LEN: usize = 64;
 
-/// The name of a router interface, restricted to letters, digits, `_`, `.` and `-`.
+/// The name of a network interface on a relay host, restricted to letters, digits, `_`, `.`
+/// and `-`, and not starting with `-`.
 ///
-/// The name is placed into a RouterOS command that is sent over SSH, so anything that
-/// could add syntax (spaces, quotes, `;`, `$`, `[`, `]`, `\`, `=`) is not allowed.
+/// The name is placed into a command that is run on the relay host over SSH, so anything
+/// that could add syntax or an option (spaces, quotes, `;`, `$`, `[`, `]`, `\`, `=`, a
+/// leading `-`) is not allowed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterfaceName(String);
 
@@ -190,13 +192,14 @@ impl InterfaceName {
     /// Validates an interface name.
     pub fn parse(s: &str) -> Result<Self, InvalidValue> {
         let ok = (1..=INTERFACE_MAX_LEN).contains(&s.len())
+            && !s.starts_with('-')
             && s.bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'));
         if ok {
             Ok(Self(s.to_owned()))
         } else {
             invalid(format!(
-                "interface name '{s}' must be 1-{INTERFACE_MAX_LEN} characters from A-Z, a-z, 0-9 and _.-"
+                "interface name '{s}' must be 1-{INTERFACE_MAX_LEN} characters from A-Z, a-z, 0-9 and _.-, not starting with '-'"
             ))
         }
     }
@@ -371,22 +374,62 @@ pub struct Tunnel {
     pub ping_timeout: Duration,
 }
 
-/// The kind of a router that can send a wake request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The wake command preset of a relay host: which tool the host runs to send the magic
+/// packet. A relay is any always-on device in the PC's network (a router, an OpenWrt box, a
+/// Raspberry Pi). To add a preset, add a variant here and an arm to each `match` below and in
+/// `wake::relay_command`; the compiler points at every place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum RouterKind {
-    /// MikroTik RouterOS, reached over SSH.
-    Mikrotik,
+pub enum RelayKind {
+    /// MikroTik RouterOS: `/tool wol mac=<mac> interface=<interface>`.
+    RouterOs,
+    /// `etherwake -i <interface> <mac>` (typical for OpenWrt).
+    Etherwake,
+    /// `wakeonlan [-i <address>] <mac>`.
+    Wakeonlan,
 }
 
-/// A router shared by the wake methods of several PCs. It is reached over SSH with a key,
-/// through the system OpenSSH client.
+impl RelayKind {
+    /// Every preset.
+    pub const ALL: [RelayKind; 3] = [Self::RouterOs, Self::Etherwake, Self::Wakeonlan];
+
+    /// The name used in the configuration file.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::RouterOs => "routeros",
+            Self::Etherwake => "etherwake",
+            Self::Wakeonlan => "wakeonlan",
+        }
+    }
+
+    /// Whether the preset sends the packet on a named interface; if so, the wake method must
+    /// give one.
+    pub fn uses_interface(self) -> bool {
+        match self {
+            Self::RouterOs | Self::Etherwake => true,
+            Self::Wakeonlan => false,
+        }
+    }
+
+    /// Whether the preset can take a destination address (optional); if not, the wake method
+    /// must not give one.
+    pub fn uses_address(self) -> bool {
+        match self {
+            Self::Wakeonlan => true,
+            Self::RouterOs | Self::Etherwake => false,
+        }
+    }
+}
+
+/// A relay host shared by the wake methods of several PCs: a router or any always-on device
+/// in the PC's network that sends the magic packet on its behalf. It is reached over SSH with
+/// a key, through the system OpenSSH client.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Router {
+pub struct Relay {
     /// Identifier.
-    pub id: RouterId,
-    /// Kind of router.
-    pub kind: RouterKind,
+    pub id: RelayId,
+    /// The wake command preset.
+    pub kind: RelayKind,
     /// Address.
     pub host: Host,
     /// SSH port.
@@ -404,22 +447,25 @@ pub struct Router {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WakeMethod {
-    /// A MikroTik router sends the magic packet on one of its interfaces
-    /// (`/tool wol`, run over SSH).
-    MikrotikSsh {
-        /// The router.
-        router: RouterId,
+    /// A relay host sends the magic packet; it is told to over SSH.
+    Relay {
+        /// The relay.
+        relay: RelayId,
         /// MAC address of the PC.
         mac: MacAddr,
-        /// Router interface that faces the PC.
-        interface: InterfaceName,
+        /// Interface of the relay that faces the PC; given exactly when the relay's preset
+        /// uses one.
+        interface: Option<InterfaceName>,
+        /// Destination address, for presets that take one.
+        address: Option<Ipv4Addr>,
     },
-    /// This computer broadcasts the magic packet over UDP.
+    /// This computer sends the magic packet over UDP to `address`: a broadcast address, or,
+    /// for a routed network, the PC's own IP (with a static ARP entry on the last router).
     MagicPacket {
         /// MAC address of the PC.
         mac: MacAddr,
-        /// Broadcast address.
-        broadcast: Ipv4Addr,
+        /// Destination address (any IPv4 address, unicast or broadcast).
+        address: Ipv4Addr,
         /// UDP port.
         port: u16,
     },
@@ -437,8 +483,8 @@ pub enum WakeMethod {
 /// The kind of a [`WakeMethod`], used to pick the sender that implements it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WakeKind {
-    /// [`WakeMethod::MikrotikSsh`].
-    MikrotikSsh,
+    /// [`WakeMethod::Relay`].
+    Relay,
     /// [`WakeMethod::MagicPacket`].
     MagicPacket,
     /// [`WakeMethod::Command`].
@@ -449,7 +495,7 @@ impl WakeMethod {
     /// The kind of this method.
     pub fn kind(&self) -> WakeKind {
         match self {
-            Self::MikrotikSsh { .. } => WakeKind::MikrotikSsh,
+            Self::Relay { .. } => WakeKind::Relay,
             Self::MagicPacket { .. } => WakeKind::MagicPacket,
             Self::Command { .. } => WakeKind::Command,
         }
@@ -631,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn interface_names_cannot_carry_routeros_or_shell_syntax() {
+    fn interface_names_cannot_carry_command_syntax() {
         for ok in ["bridge", "ether1", "vlan-10", "br_lan.2", &"a".repeat(64)] {
             assert!(InterfaceName::parse(ok).is_ok(), "{ok}");
         }
@@ -645,6 +691,8 @@ mod tests {
             "a[b]",
             "a\\b",
             "a=b",
+            "-h",
+            "-i",
             "a&b",
             "a|b",
             "a`b`",

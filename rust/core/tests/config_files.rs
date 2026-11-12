@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use homelink_core::config::{self, Config, ConfigError};
-use homelink_core::domain::{Os, PowerMethod, WakeMethod};
+use homelink_core::domain::{Os, PowerMethod, RelayKind, WakeMethod};
 use homelink_core::i18n::{Lang, LanguageSetting};
 
 fn fixture(name: &str) -> PathBuf {
@@ -45,16 +45,16 @@ fn full_fixture_loads_with_every_value() {
 
     assert_eq!(c.tunnels.len(), 1);
     assert_eq!(c.tunnels[0].timeout, Duration::from_secs(20));
-    assert_eq!(c.routers.len(), 1);
-    let router = &c.routers[0];
-    assert_eq!((router.host.as_str(), router.port), ("192.168.88.1", 22));
-    assert_eq!(router.user, "homelink");
+    assert_eq!(c.relays.len(), 3);
+    let relay = &c.relays[0];
+    assert_eq!((relay.host.as_str(), relay.port), ("192.168.88.1", 22));
+    assert_eq!(relay.user, "homelink");
     assert_eq!(
-        router.identity_file,
-        r"C:\ProgramData\HomeLink\router_ed25519"
+        relay.identity_file,
+        r"C:\ProgramData\HomeLink\relay_ed25519"
     );
-    assert_eq!(router.timeout, Duration::from_secs(8));
-    assert_eq!(c.pcs.len(), 3);
+    assert_eq!(relay.timeout, Duration::from_secs(8));
+    assert_eq!(c.pcs.len(), 5);
 
     let desktop = &c.pcs[0];
     assert_eq!(desktop.os, Os::Linux);
@@ -69,7 +69,7 @@ fn full_fixture_loads_with_every_value() {
         Duration::from_secs(2),
         "default kept"
     );
-    assert!(matches!(desktop.wake, Some(WakeMethod::MikrotikSsh { .. })));
+    assert!(matches!(desktop.wake, Some(WakeMethod::Relay { .. })));
     assert!(matches!(
         desktop.power,
         Some(PowerMethod::Ssh { port: 22, .. })
@@ -95,10 +95,40 @@ fn full_fixture_loads_with_every_value() {
 
     let nas = &c.pcs[2];
     assert!(nas.tunnel.is_none());
-    assert!(matches!(
-        nas.wake,
-        Some(WakeMethod::MagicPacket { port: 9, .. })
-    ));
+    // The destination of a magic packet is any IPv4 address; here the PC's own (unicast).
+    let Some(WakeMethod::MagicPacket { address, port, .. }) = &nas.wake else {
+        panic!("expected a magic packet");
+    };
+    assert_eq!((address.to_string().as_str(), *port), ("10.0.0.7", 9));
+
+    // One relay of each preset.
+    let kinds: Vec<RelayKind> = c.relays.iter().map(|r| r.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            RelayKind::RouterOs,
+            RelayKind::Etherwake,
+            RelayKind::Wakeonlan
+        ]
+    );
+    let Some(WakeMethod::Relay {
+        interface: Some(interface),
+        address: None,
+        ..
+    }) = &c.pcs[3].wake
+    else {
+        panic!("the media PC wakes through etherwake on an interface");
+    };
+    assert_eq!(interface.as_str(), "br-lan");
+    let Some(WakeMethod::Relay {
+        interface: None,
+        address: Some(address),
+        ..
+    }) = &c.pcs[4].wake
+    else {
+        panic!("the kiosk wakes through wakeonlan with an address");
+    };
+    assert_eq!(address.to_string(), "10.0.5.255");
 }
 
 #[test]
@@ -111,9 +141,9 @@ fn lookups_and_grouping() {
             .collect::<Vec<_>>()
     };
     assert_eq!(ids(Some(home)), ["desktop", "laptop"]);
-    assert_eq!(ids(None), ["nas"]);
+    assert_eq!(ids(None), ["nas", "media", "kiosk"]);
     assert!(c.tunnel(home).is_some());
-    assert!(c.router(&c.routers[0].id).is_some());
+    assert!(c.relay(&c.relays[0].id).is_some());
     assert!(c.pc(&c.pcs[2].id).is_some());
 }
 
@@ -121,7 +151,7 @@ fn lookups_and_grouping() {
 fn minimal_fixture_loads_without_entities() {
     let c = load("valid/minimal.toml");
     assert_eq!(c.language, LanguageSetting::Fixed(Lang::En));
-    assert!(c.tunnels.is_empty() && c.routers.is_empty() && c.pcs.is_empty());
+    assert!(c.tunnels.is_empty() && c.relays.is_empty() && c.pcs.is_empty());
 }
 
 #[test]

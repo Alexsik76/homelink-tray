@@ -42,14 +42,14 @@ offline_after_failures = 3
 wake_timeout = 180
 power_timeout = 15
 
-# ---- router ------------------------------------------------
-[[routers]]
-id = "mikrotik"
-kind = "mikrotik"
+# ---- relay: the router, which sends the magic packet ---
+[[relays]]
+id = "gateway"
+kind = "routeros"
 host = "192.168.88.1"
 port = 22
 user = "homelink"
-identity_file = 'C:\ProgramData\HomeLink\router_ed25519'
+identity_file = 'C:\ProgramData\HomeLink\relay_ed25519'
 timeout = 8
 
 # ============ PCs ============
@@ -65,8 +65,8 @@ ports = [3389]            # RDP
 
   # How to wake it.
   [pcs.wake]
-  method = "mikrotik"
-  router = "mikrotik"
+  method = "relay"
+  relay = "gateway"
   mac = "AA:BB:CC:DD:EE:FF"   # eth0
   interface = "bridge"
 
@@ -95,7 +95,7 @@ ports = [3389, 445]
   [pcs.wake]
   method = "magic_packet"
   mac = "11-22-33-44-55-66"
-  broadcast = "192.168.88.255"
+  address = "192.168.88.255"      # a subnet broadcast
   port = 9
 
   [pcs.timing]              # slow machine
