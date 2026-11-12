@@ -2,7 +2,7 @@
 
 [Українською](README.uk.md)
 
-A Windows tray utility that reaches a home PC in one click: it brings up a WireGuard
+A Windows tray utility that gives access to a home PC: it brings up a WireGuard
 tunnel, asks a MikroTik router to send Wake-on-LAN and shows the state of the tunnel
 and of the PC in the tray icon.
 
