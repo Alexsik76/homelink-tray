@@ -411,6 +411,15 @@ impl RelayKind {
         }
     }
 
+    /// Whether the relay entry must say if the command is run with `sudo` (the tool may need
+    /// root). RouterOS has no `sudo`, so there the key is rejected.
+    pub fn supports_sudo(self) -> bool {
+        match self {
+            Self::Etherwake | Self::Wakeonlan => true,
+            Self::RouterOs => false,
+        }
+    }
+
     /// Whether the preset can take a destination address (optional); if not, the wake method
     /// must not give one.
     pub fn uses_address(self) -> bool {
@@ -441,6 +450,10 @@ pub struct Relay {
     pub identity_file: String,
     /// Timeout of one command, including the connection.
     pub timeout: Duration,
+    /// Whether the wake command is run as `sudo -n <command>` (the tool needs root and the
+    /// user may run it without a password). Always `false` for presets that do not support it
+    /// ([`RelayKind::supports_sudo`]).
+    pub sudo: bool,
 }
 
 /// How a PC is woken.

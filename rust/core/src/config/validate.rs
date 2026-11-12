@@ -391,17 +391,42 @@ fn validate_relays(ctx: &mut Ctx, raw: &[RawRelay]) -> Vec<Relay> {
         let user_ok = check_ssh_user(ctx, &at("user"), &r.user);
         let key_ok = check_absolute_path(ctx, &at("identity_file"), &r.identity_file);
         let timeout = ctx.seconds(&at("timeout"), r.timeout);
-        if let (Some(id), Some(host), Some(port), true, true, Some(timeout)) =
-            (id, host, port, user_ok, key_ok, timeout)
+        let kind = relay_kind(r.kind);
+        // `sudo` is a required yes/no for presets whose tool may need root and does not
+        // exist for the others; there is no default.
+        let sudo = match (kind.supports_sudo(), r.sudo) {
+            (true, Some(value)) => Some(value),
+            (false, None) => Some(false),
+            (true, None) => {
+                ctx.err(
+                    at("sudo"),
+                    format!(
+                        "is required by the '{}' preset: true if the command must run as `sudo -n`, false if not",
+                        kind.code()
+                    ),
+                );
+                None
+            }
+            (false, Some(_)) => {
+                ctx.err(
+                    at("sudo"),
+                    format!("is not used by the '{}' preset; remove it", kind.code()),
+                );
+                None
+            }
+        };
+        if let (Some(id), Some(host), Some(port), true, true, Some(timeout), Some(sudo)) =
+            (id, host, port, user_ok, key_ok, timeout, sudo)
         {
             out.push(Relay {
                 id,
-                kind: relay_kind(r.kind),
+                kind,
                 host,
                 port,
                 user: r.user.clone(),
                 identity_file: r.identity_file.clone(),
                 timeout,
+                sudo,
             });
         }
     }

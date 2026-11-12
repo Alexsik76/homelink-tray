@@ -48,10 +48,9 @@ impl FakeCommandRunner {
 impl CommandRunner for FakeCommandRunner {
     fn run(&self, argv: &[String], timeout: Duration) -> CommandOutput {
         lock(&self.calls).push((argv.to_vec(), timeout));
-        lock(&self.result).clone().unwrap_or(CommandOutput {
-            code: 0,
-            text: String::new(),
-        })
+        lock(&self.result)
+            .clone()
+            .unwrap_or_else(|| CommandOutput::exited(0, ""))
     }
 }
 
@@ -476,6 +475,7 @@ port = 22
 user = "homelink"
 identity_file = 'C:\HomeLink\relay_key'
 timeout = 8
+sudo = false
 
 [[relays]]
 id = "pi"
@@ -485,6 +485,7 @@ port = 22
 user = "homelink"
 identity_file = 'C:\HomeLink\relay_key'
 timeout = 8
+sudo = true
 
 [[pcs]]
 id = "media"
@@ -690,16 +691,17 @@ impl Harness {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::CommandOutcome;
 
     #[test]
     fn fake_runner_records_and_answers() {
         let runner = FakeCommandRunner::default();
-        assert_eq!(runner.run(&["a".into()], Duration::from_secs(1)).code, 0);
-        runner.set_result(CommandOutput {
-            code: 3,
-            text: "x".into(),
-        });
-        assert_eq!(runner.run(&["b".into()], Duration::from_secs(2)).code, 3);
+        assert!(runner.run(&["a".into()], Duration::from_secs(1)).success());
+        runner.set_result(CommandOutput::exited(3, "x"));
+        assert_eq!(
+            runner.run(&["b".into()], Duration::from_secs(2)).outcome,
+            CommandOutcome::Exited(3)
+        );
         assert_eq!(runner.calls().len(), 2);
     }
 

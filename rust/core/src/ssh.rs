@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use crate::domain::{Host, Os, Pc, PowerAction, PowerMethod};
+use crate::ports::{CommandOutcome, CommandOutput};
 
 /// The program that is run; resolved through `PATH` by the runner.
 pub const SSH_PROGRAM: &str = "ssh";
@@ -61,6 +62,55 @@ pub fn ssh_argv(target: &SshTarget<'_>, remote_command: &str) -> Vec<String> {
     argv.push(target.host.to_string());
     argv.push(remote_command.to_owned());
     argv
+}
+
+/// The exit code `ssh` itself uses for its own errors (cannot connect, host key or
+/// authentication failure); any other non-zero code is the remote command's.
+pub const SSH_OWN_ERROR: i32 = 255;
+
+fn with_detail(summary: String, text: &str) -> String {
+    let text = text.trim();
+    if text.is_empty() {
+        summary
+    } else {
+        format!("{summary}: {text}")
+    }
+}
+
+/// Explains why an `ssh` run did not succeed, or `None` if it did. The failures are told
+/// apart so that the user can act: the client is missing, it timed out, `ssh` itself could
+/// not connect or authenticate (exit 255), or the command ran on the remote host and failed.
+pub fn explain_ssh(output: &CommandOutput) -> Option<String> {
+    Some(match output.outcome {
+        CommandOutcome::Exited(0) => return None,
+        CommandOutcome::NotStarted => with_detail(
+            "cannot run ssh (is the OpenSSH client installed?)".into(),
+            &output.text,
+        ),
+        CommandOutcome::TimedOut => with_detail("ssh did not finish in time".into(), &output.text),
+        CommandOutcome::Exited(SSH_OWN_ERROR) => {
+            with_detail("ssh could not connect or authenticate".into(), &output.text)
+        }
+        CommandOutcome::Exited(code) => with_detail(
+            format!("the command on the remote host failed (exit code {code})"),
+            &output.text,
+        ),
+    })
+}
+
+/// Explains why a command (not `ssh`) did not succeed, or `None` if it did.
+pub fn explain_command(output: &CommandOutput) -> Option<String> {
+    Some(match output.outcome {
+        CommandOutcome::Exited(0) => return None,
+        CommandOutcome::NotStarted => with_detail("cannot run the command".into(), &output.text),
+        CommandOutcome::TimedOut => {
+            with_detail("the command did not finish in time".into(), &output.text)
+        }
+        CommandOutcome::Exited(code) => with_detail(
+            format!("the command failed (exit code {code})"),
+            &output.text,
+        ),
+    })
 }
 
 /// The remote command that performs `action` on a PC running `os`.

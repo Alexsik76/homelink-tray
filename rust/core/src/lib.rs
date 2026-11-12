@@ -6,6 +6,7 @@
 //! engine that drives it. The program stores no secrets: remote access uses SSH keys
 //! through the system OpenSSH client. See `docs/rust-architecture.md`.
 
+pub mod adapters;
 pub mod config;
 pub mod domain;
 pub mod engine;

@@ -273,13 +273,38 @@ fn deleting_every_entry_of_a_kind_removes_its_array() {
 // ---------- relays ----------
 
 #[test]
-fn changing_a_relay_preset_changes_only_its_kind() {
+fn changing_a_relay_preset_changes_its_kind_and_adds_the_sudo_key_it_now_needs() {
     let mut c = cfg(COMMENTED);
     c.relays[0].kind = RelayKind::Etherwake;
+    c.relays[0].sudo = true;
     let out = edit(COMMENTED, &c);
     assert_eq!(
         out,
-        COMMENTED.replace("kind = \"routeros\"", "kind = \"etherwake\"")
+        COMMENTED
+            .replace("kind = \"routeros\"", "kind = \"etherwake\"")
+            .replace(
+                "timeout = 8\n\n# ====",
+                "timeout = 8\nsudo = true\n\n# ===="
+            )
+    );
+}
+
+#[test]
+fn toggling_sudo_changes_only_that_value() {
+    let mut c = cfg(FULL);
+    c.relays[2].sudo = false; // the wakeonlan relay
+    assert_eq!(edit(FULL, &c), FULL.replace("sudo = true", "sudo = false"));
+}
+
+#[test]
+fn a_preset_without_sudo_loses_the_key() {
+    let mut c = cfg(FULL);
+    c.relays[1].kind = RelayKind::RouterOs; // the etherwake relay becomes RouterOS
+    c.relays[1].sudo = false;
+    assert_eq!(
+        edit(FULL, &c),
+        FULL.replace("kind = \"etherwake\"", "kind = \"routeros\"")
+            .replace("timeout = 8\nsudo = false\n", "timeout = 8\n")
     );
 }
 

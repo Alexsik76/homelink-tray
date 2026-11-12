@@ -5,17 +5,18 @@
 //! over SSH with the system OpenSSH client and key authentication (see [`crate::ssh`]); the
 //! command it runs is chosen by the relay's preset ([`RelayKind`]):
 //!
-//! | preset      | remote command                                  | `interface` | `address`  |
-//! | ----------- | ----------------------------------------------- | ----------- | ---------- |
-//! | `routeros`  | `/tool wol mac=<mac> interface=<interface>`     | required    | not used   |
-//! | `etherwake` | `etherwake -i <interface> <mac>`                | required    | not used   |
-//! | `wakeonlan` | `wakeonlan [-i <address>] <mac>`                | not used    | optional   |
+//! | preset      | remote command                                  | `interface` | `address` | `sudo` on the relay |
+//! | ----------- | ----------------------------------------------- | ----------- | --------- | ------------------- |
+//! | `routeros`  | `/tool wol mac=<mac> interface=<interface>`     | required    | not used  | rejected            |
+//! | `etherwake` | `[sudo -n ]etherwake -i <interface> <mac>`      | required    | not used  | required            |
+//! | `wakeonlan` | `[sudo -n ]wakeonlan [-i <address>] <mac>`      | not used    | optional  | required            |
 //!
 //! The command is one argument of the `ssh` argument list, never a shell string built from
 //! free text: `mac` is a parsed MAC address, `interface` an [`InterfaceName`] (letters,
 //! digits, `_.-`, no leading `-`) and `address` an `Ipv4Addr`, so none of them can add
-//! syntax or options. Running the list goes through [`CommandRunner`], so this module is
-//! tested with a fake runner and never starts a process itself.
+//! syntax or options; `sudo -n ` is a fixed prefix (`-n`: never ask for a password).
+//! Running the list goes through [`CommandRunner`], so this module is tested with a fake
+//! runner and never starts a process itself.
 
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -23,14 +24,16 @@ use std::time::Duration;
 
 use crate::domain::{InterfaceName, InvalidValue, MacAddr, Relay, RelayKind, WakeMethod};
 use crate::ports::{CommandRunner, WakeError, WakeRequest, WakeSender};
-use crate::ssh::{SshTarget, ssh_argv};
+use crate::ssh::{SshTarget, explain_ssh, ssh_argv};
 
 /// The remote command that makes a relay of kind `kind` send the magic packet.
 ///
 /// Fails when the arguments do not fit the preset: a missing `interface` for a preset that
-/// needs one, an `interface` or `address` for a preset that does not use it.
+/// needs one, an `interface` or `address` for a preset that does not use it, `sudo` for a
+/// preset that has none.
 pub fn relay_command(
     kind: RelayKind,
+    sudo: bool,
     mac: &MacAddr,
     interface: Option<&InterfaceName>,
     address: Option<Ipv4Addr>,
@@ -51,6 +54,9 @@ pub fn relay_command(
             "the '{name}' preset does not use an address"
         )));
     }
+    if sudo && !kind.supports_sudo() {
+        return Err(InvalidValue(format!("the '{name}' preset has no sudo")));
+    }
     let command = match (kind, interface, address) {
         (RelayKind::RouterOs, Some(interface), _) => {
             format!("/tool wol mac={mac} interface={interface}")
@@ -65,7 +71,11 @@ pub fn relay_command(
             )));
         }
     };
-    Ok(command)
+    Ok(if sudo {
+        format!("sudo -n {command}")
+    } else {
+        command
+    })
 }
 
 /// The `ssh` command line that runs `remote_command` on a relay (see [`crate::ssh`]).
@@ -106,28 +116,22 @@ impl WakeSender for RelayWake {
         let relay = request.relay.ok_or_else(|| {
             WakeError::Failed("the relay of this PC is missing from the configuration".into())
         })?;
-        let command = relay_command(relay.kind, mac, interface.as_ref(), *address)
+        let command = relay_command(relay.kind, relay.sudo, mac, interface.as_ref(), *address)
             .map_err(|err| WakeError::Failed(err.to_string()))?;
         let argv = relay_ssh_argv(relay, &command);
         log::info!("waking {} through relay {}", request.pc.id, relay.id);
         let output = self.runner.run(&argv, command_timeout(relay.timeout));
-        if output.code == 0 {
-            Ok(())
-        } else {
-            let text = output.text.trim();
-            Err(WakeError::Failed(if text.is_empty() {
-                format!("ssh exited with code {}", output.code)
-            } else {
-                text.to_owned()
-            }))
+        match explain_ssh(&output) {
+            None => Ok(()),
+            Some(reason) => Err(WakeError::Failed(reason)),
         }
     }
 }
 
 /// The runner gets a little longer than the connection timeout so `ssh` can report its own
 /// timeout before the runner kills it.
-fn command_timeout(relay_timeout: Duration) -> Duration {
-    relay_timeout + Duration::from_secs(2)
+pub(crate) fn command_timeout(timeout: Duration) -> Duration {
+    timeout + Duration::from_secs(2)
 }
 
 #[cfg(test)]
@@ -137,7 +141,7 @@ mod tests {
     use crate::ports::CommandOutput;
     use crate::testing::{FakeCommandRunner, multi_config, pc_id, relay_config};
 
-    fn relay(kind: RelayKind) -> Relay {
+    fn relay(kind: RelayKind, sudo: bool) -> Relay {
         Relay {
             id: RelayId::parse("gateway").unwrap(),
             kind,
@@ -146,6 +150,7 @@ mod tests {
             user: "homelink".into(),
             identity_file: r"C:\HomeLink\relay_key".into(),
             timeout: Duration::from_secs(8),
+            sudo,
         }
     }
 
@@ -191,6 +196,7 @@ mod tests {
     fn routeros_runs_tool_wol() {
         let command = relay_command(
             RelayKind::RouterOs,
+            false,
             &mac(),
             Some(&interface("bridge")),
             None,
@@ -198,50 +204,57 @@ mod tests {
         .unwrap();
         assert_eq!(command, "/tool wol mac=AA:BB:CC:DD:EE:FF interface=bridge");
         assert_eq!(
-            relay_ssh_argv(&relay(RelayKind::RouterOs), &command),
+            relay_ssh_argv(&relay(RelayKind::RouterOs, false), &command),
             expected_argv("/tool wol mac=AA:BB:CC:DD:EE:FF interface=bridge")
         );
     }
 
     #[test]
-    fn etherwake_runs_etherwake_on_an_interface() {
-        let command = relay_command(
-            RelayKind::Etherwake,
-            &mac(),
-            Some(&interface("br-lan")),
-            None,
-        )
-        .unwrap();
-        assert_eq!(command, "etherwake -i br-lan AA:BB:CC:DD:EE:FF");
+    fn etherwake_runs_etherwake_on_an_interface_with_or_without_sudo() {
+        let i = interface("br-lan");
+        let plain = relay_command(RelayKind::Etherwake, false, &mac(), Some(&i), None).unwrap();
+        assert_eq!(plain, "etherwake -i br-lan AA:BB:CC:DD:EE:FF");
         assert_eq!(
-            relay_ssh_argv(&relay(RelayKind::Etherwake), &command),
+            relay_ssh_argv(&relay(RelayKind::Etherwake, false), &plain),
             expected_argv("etherwake -i br-lan AA:BB:CC:DD:EE:FF")
+        );
+
+        let sudo = relay_command(RelayKind::Etherwake, true, &mac(), Some(&i), None).unwrap();
+        assert_eq!(sudo, "sudo -n etherwake -i br-lan AA:BB:CC:DD:EE:FF");
+        assert_eq!(
+            relay_ssh_argv(&relay(RelayKind::Etherwake, true), &sudo),
+            expected_argv("sudo -n etherwake -i br-lan AA:BB:CC:DD:EE:FF")
         );
     }
 
     #[test]
-    fn wakeonlan_runs_wakeonlan_with_or_without_an_address() {
-        let plain = relay_command(RelayKind::Wakeonlan, &mac(), None, None).unwrap();
-        assert_eq!(plain, "wakeonlan AA:BB:CC:DD:EE:FF");
-        assert_eq!(
-            relay_ssh_argv(&relay(RelayKind::Wakeonlan), &plain),
-            expected_argv("wakeonlan AA:BB:CC:DD:EE:FF")
-        );
-
+    fn wakeonlan_runs_wakeonlan_with_or_without_an_address_and_sudo() {
         let addr = Some(Ipv4Addr::new(192, 168, 10, 255));
-        let with = relay_command(RelayKind::Wakeonlan, &mac(), None, addr).unwrap();
-        assert_eq!(with, "wakeonlan -i 192.168.10.255 AA:BB:CC:DD:EE:FF");
-        assert_eq!(
-            relay_ssh_argv(&relay(RelayKind::Wakeonlan), &with),
-            expected_argv("wakeonlan -i 192.168.10.255 AA:BB:CC:DD:EE:FF")
-        );
+        let cases = [
+            (false, None, "wakeonlan AA:BB:CC:DD:EE:FF"),
+            (false, addr, "wakeonlan -i 192.168.10.255 AA:BB:CC:DD:EE:FF"),
+            (true, None, "sudo -n wakeonlan AA:BB:CC:DD:EE:FF"),
+            (
+                true,
+                addr,
+                "sudo -n wakeonlan -i 192.168.10.255 AA:BB:CC:DD:EE:FF",
+            ),
+        ];
+        for (sudo, address, expected) in cases {
+            let command = relay_command(RelayKind::Wakeonlan, sudo, &mac(), None, address).unwrap();
+            assert_eq!(command, expected);
+            assert_eq!(
+                relay_ssh_argv(&relay(RelayKind::Wakeonlan, sudo), &command),
+                expected_argv(expected)
+            );
+        }
     }
 
     #[test]
     fn the_remote_command_is_one_argument_after_the_host() {
         let argv = relay_ssh_argv(
-            &relay(RelayKind::Etherwake),
-            "etherwake -i br0 AA:BB:CC:DD:EE:FF",
+            &relay(RelayKind::Etherwake, true),
+            "sudo -n etherwake -i br0 AA:BB:CC:DD:EE:FF",
         );
         let dashes = argv.iter().position(|a| a == "--").unwrap();
         assert_eq!(
@@ -253,7 +266,7 @@ mod tests {
 
     #[test]
     fn a_sub_second_timeout_still_gives_ssh_a_connect_timeout() {
-        let mut r = relay(RelayKind::RouterOs);
+        let mut r = relay(RelayKind::RouterOs, false);
         r.timeout = Duration::from_millis(300);
         assert!(relay_ssh_argv(&r, "x").contains(&"ConnectTimeout=1".to_owned()));
     }
@@ -266,18 +279,33 @@ mod tests {
         let a = Some(Ipv4Addr::new(10, 0, 0, 255));
         for kind in [RelayKind::RouterOs, RelayKind::Etherwake] {
             assert!(
-                relay_command(kind, &mac(), None, None).is_err(),
+                relay_command(kind, false, &mac(), None, None).is_err(),
                 "{kind:?} needs an interface"
             );
             assert!(
-                relay_command(kind, &mac(), Some(&i), a).is_err(),
+                relay_command(kind, false, &mac(), Some(&i), a).is_err(),
                 "{kind:?} has no address"
             );
-            assert!(relay_command(kind, &mac(), Some(&i), None).is_ok());
+            assert!(relay_command(kind, false, &mac(), Some(&i), None).is_ok());
         }
-        assert!(relay_command(RelayKind::Wakeonlan, &mac(), Some(&i), None).is_err());
-        assert!(relay_command(RelayKind::Wakeonlan, &mac(), None, None).is_ok());
-        assert!(relay_command(RelayKind::Wakeonlan, &mac(), None, a).is_ok());
+        assert!(relay_command(RelayKind::Wakeonlan, false, &mac(), Some(&i), None).is_err());
+        assert!(relay_command(RelayKind::Wakeonlan, false, &mac(), None, None).is_ok());
+        assert!(relay_command(RelayKind::Wakeonlan, false, &mac(), None, a).is_ok());
+    }
+
+    #[test]
+    fn sudo_exists_only_for_presets_that_support_it() {
+        let i = interface("bridge");
+        assert!(relay_command(RelayKind::RouterOs, true, &mac(), Some(&i), None).is_err());
+        assert!(relay_command(RelayKind::Etherwake, true, &mac(), Some(&i), None).is_ok());
+        assert!(relay_command(RelayKind::Wakeonlan, true, &mac(), None, None).is_ok());
+        for kind in RelayKind::ALL {
+            assert_eq!(
+                kind.supports_sudo(),
+                kind != RelayKind::RouterOs,
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]
@@ -291,7 +319,7 @@ mod tests {
             let i = interface("eth0");
             let interface = kind.uses_interface().then_some(&i);
             assert!(
-                relay_command(kind, &mac(), interface, None).is_ok(),
+                relay_command(kind, kind.supports_sudo(), &mac(), interface, None).is_ok(),
                 "{kind:?}"
             );
         }
@@ -341,18 +369,19 @@ mod tests {
     #[test]
     fn what_is_accepted_renders_to_the_exact_expected_shape() {
         let i = interface("vlan-10");
-        let routeros = relay_command(RelayKind::RouterOs, &mac(), Some(&i), None).unwrap();
+        let routeros = relay_command(RelayKind::RouterOs, false, &mac(), Some(&i), None).unwrap();
         assert_eq!(routeros.split(' ').count(), 4, "{routeros}");
-        let etherwake = relay_command(RelayKind::Etherwake, &mac(), Some(&i), None).unwrap();
-        assert_eq!(etherwake.split(' ').count(), 4, "{etherwake}");
+        let etherwake = relay_command(RelayKind::Etherwake, true, &mac(), Some(&i), None).unwrap();
+        assert_eq!(etherwake.split(' ').count(), 6, "{etherwake}");
         let wol = relay_command(
             RelayKind::Wakeonlan,
+            true,
             &mac(),
             None,
             Some(Ipv4Addr::new(10, 0, 0, 1)),
         )
         .unwrap();
-        assert_eq!(wol.split(' ').count(), 4, "{wol}");
+        assert_eq!(wol.split(' ').count(), 6, "{wol}");
     }
 
     // ---- the sender ----
@@ -377,7 +406,11 @@ mod tests {
                 10,
             ),
             ("media", "etherwake -i br-lan 00:11:22:33:44:55", 10),
-            ("kiosk", "wakeonlan -i 10.0.5.255 00:11:22:33:44:66", 10),
+            (
+                "kiosk",
+                "sudo -n wakeonlan -i 10.0.5.255 00:11:22:33:44:66",
+                10,
+            ),
         ];
         for (pc, remote, timeout) in cases {
             let runner = Arc::new(FakeCommandRunner::default());
@@ -393,25 +426,37 @@ mod tests {
     }
 
     #[test]
-    fn a_failing_command_reports_its_output_or_its_exit_code() {
+    fn failures_are_told_apart() {
         let config = relay_config();
         let request = request_for(&config, "desktop");
-
-        let runner = Arc::new(FakeCommandRunner::default());
-        runner.set_result(CommandOutput {
-            code: 255,
-            text: "Permission denied\n".into(),
-        });
-        let err = RelayWake::new(runner).wake(&request).unwrap_err();
-        assert_eq!(err, WakeError::Failed("Permission denied".into()));
-
-        let runner = Arc::new(FakeCommandRunner::default());
-        runner.set_result(CommandOutput {
-            code: 1,
-            text: String::new(),
-        });
-        let err = RelayWake::new(runner).wake(&request).unwrap_err();
-        assert_eq!(err, WakeError::Failed("ssh exited with code 1".into()));
+        let cases = [
+            (
+                CommandOutput::exited(255, "Permission denied\n"),
+                "ssh could not connect or authenticate: Permission denied",
+            ),
+            (
+                CommandOutput::exited(1, "no such interface"),
+                "the command on the remote host failed (exit code 1): no such interface",
+            ),
+            (
+                CommandOutput::exited(1, ""),
+                "the command on the remote host failed (exit code 1)",
+            ),
+            (
+                CommandOutput::timed_out(Duration::from_secs(10), ""),
+                "ssh did not finish in time: timed out after 10 s",
+            ),
+            (
+                CommandOutput::not_started("No such file or directory"),
+                "cannot run ssh (is the OpenSSH client installed?): No such file or directory",
+            ),
+        ];
+        for (output, expected) in cases {
+            let runner = Arc::new(FakeCommandRunner::default());
+            runner.set_result(output);
+            let err = RelayWake::new(runner).wake(&request).unwrap_err();
+            assert_eq!(err, WakeError::Failed(expected.into()));
+        }
     }
 
     #[test]

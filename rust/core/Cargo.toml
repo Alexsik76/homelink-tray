@@ -30,3 +30,11 @@ required-features = ["testing"]
 [[test]]
 name = "engine"
 required-features = ["testing"]
+
+[[test]]
+name = "portable_adapters"
+required-features = ["testing"]
+
+[[test]]
+name = "real_engine"
+required-features = ["testing"]

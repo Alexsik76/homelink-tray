@@ -601,8 +601,64 @@ fn the_fields_are_checked_against_the_preset_of_the_relay_that_is_used() {
         "pcs[0].wake.interface",
         "not used by the 'wakeonlan' preset of relay 'gateway'",
     );
-    // And the etherwake relay a routeros one: the media PC's interface is fine.
-    accepted(&change("kind = \"etherwake\"", "kind = \"routeros\""));
+    // And the etherwake relay a routeros one (which has no sudo): the media PC's interface is
+    // fine.
+    accepted(&change("kind = \"etherwake\"", "kind = \"routeros\"").replace("sudo = false\n", ""));
+}
+
+// ---- sudo on a relay: required where the tool may need root, rejected where it does not exist ----
+// Fixture: gateway (relays[0]) is routeros, openwrt (relays[1]) etherwake with `sudo = false`,
+// pi (relays[2]) wakeonlan with `sudo = true`.
+
+#[test]
+fn sudo_is_required_for_etherwake_and_wakeonlan() {
+    rejected(
+        &change("sudo = false\n", ""),
+        "relays[1].sudo",
+        "required by the 'etherwake' preset",
+    );
+    rejected(
+        &change("sudo = true\n", ""),
+        "relays[2].sudo",
+        "required by the 'wakeonlan' preset",
+    );
+    accepted(&change("sudo = false", "sudo = true"));
+    accepted(&change("sudo = true", "sudo = false"));
+}
+
+#[test]
+fn sudo_is_rejected_for_routeros() {
+    for value in ["true", "false"] {
+        rejected(
+            &change(
+                "kind = \"routeros\"",
+                &format!("kind = \"routeros\"\nsudo = {value}"),
+            ),
+            "relays[0].sudo",
+            "not used by the 'routeros' preset",
+        );
+    }
+}
+
+#[test]
+fn sudo_must_be_a_boolean() {
+    for bad in ["\"yes\"", "1", "\"true\""] {
+        let text = change("sudo = false", &format!("sudo = {bad}"));
+        assert!(
+            matches!(config::parse(&text), Err(ConfigError::Syntax(_))),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn changing_a_relay_to_a_preset_with_sudo_demands_the_key() {
+    // routeros -> etherwake without saying anything about sudo.
+    rejected(
+        &change("kind = \"routeros\"", "kind = \"etherwake\""),
+        "relays[0].sudo",
+        "required by the 'etherwake' preset",
+    );
 }
 
 #[test]
