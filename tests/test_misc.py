@@ -1,4 +1,5 @@
 import json
+import sys
 
 import pytest
 import requests
@@ -140,3 +141,38 @@ def test_ports_open():
             unused.bind(("127.0.0.1", 0))
             closed = unused.getsockname()[1]
         assert not ports_open("127.0.0.1", [port, closed], 500)
+
+
+# ---------- commands ----------
+# run_hidden relies on Windows-only subprocess arguments
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="run_hidden is Windows-only")
+
+
+@windows_only
+def test_run_command_returns_code_and_output():
+    from homelink.net import run_command
+
+    code, output = run_command(
+        [sys.executable, "-c", "import sys; print('x'); print('e', file=sys.stderr); sys.exit(3)"],
+        10,
+    )
+    assert code == 3
+    assert output.splitlines() == ["e", "x"]
+
+
+@windows_only
+def test_run_command_timeout():
+    from homelink.net import run_command
+
+    code, output = run_command([sys.executable, "-c", "import time; time.sleep(30)"], 0.5)
+    assert code != 0
+    assert "timed out" in output
+
+
+@windows_only
+def test_run_command_missing_program():
+    from homelink.net import run_command
+
+    code, output = run_command(["homelink-no-such-program"], 5)
+    assert code != 0
+    assert output

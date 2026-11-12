@@ -21,6 +21,21 @@ def run_hidden(cmd: list[str], timeout: float) -> subprocess.CompletedProcess[st
     )
 
 
+def run_command(cmd: list[str], timeout: float) -> tuple[int, str]:
+    """Run a command and return its exit code with the combined stderr and stdout text.
+
+    A timeout or a failure to start the program gives a non-zero code and a readable message.
+    """
+    try:
+        result = run_hidden(cmd, timeout)
+    except subprocess.TimeoutExpired:
+        return -1, f"timed out after {timeout:g} s"
+    except OSError as exc:
+        return -1, str(exc)
+    parts = (result.stderr.strip(), result.stdout.strip())
+    return result.returncode, "\n".join(part for part in parts if part)
+
+
 def ping(host: str, timeout_ms: int) -> bool:
     """True when the host answers a single ICMP echo request."""
     try:

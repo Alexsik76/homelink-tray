@@ -47,6 +47,10 @@ class Config:
     wake_poll_seconds: int
     wake_timeout: int
 
+    shutdown_command: tuple[str, ...]
+    suspend_command: tuple[str, ...]
+    power_command_timeout: int
+
     rdp_user: str
     rdp_file: str
     rdp_options: tuple[str, ...]
@@ -96,6 +100,9 @@ def parse_config(raw: object) -> Config:
     config = Config(**values)
     if not config.pc_ports:
         raise ConfigError("'pc_ports' must list at least one port")
+    for name in ("shutdown_command", "suspend_command"):
+        if not getattr(config, name):
+            raise ConfigError(f"'{name}' must contain at least one element")
     if config.offline_after_failures < 1:
         raise ConfigError("'offline_after_failures' must be at least 1")
     return config

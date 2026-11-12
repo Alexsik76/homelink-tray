@@ -39,6 +39,7 @@ class Controller:
         router: Router,
         ping: Callable[[str, int], bool],
         ports_open: Callable[[str, tuple[int, ...], int], bool],
+        run_command: Callable[[list[str], float], tuple[int, str]],
         on_change: Callable[[Status], None],
         on_notify: Callable[..., None],
         clock: Callable[[], float] = time.monotonic,
@@ -49,6 +50,7 @@ class Controller:
         self.router = router
         self._ping = ping
         self._ports_open = ports_open
+        self._run_command = run_command
         self._on_change = on_change
         self._on_notify = on_notify
         self._clock = clock
@@ -161,6 +163,35 @@ class Controller:
             else:
                 self.tunnel.down()
             self._refresh()
+        finally:
+            self._busy.release()
+
+    def shutdown(self) -> None:
+        """Power the PC off with the configured command."""
+        self._power("shutdown", self.config.shutdown_command, "notify.shutdown_sent")
+
+    def suspend(self) -> None:
+        """Put the PC to sleep with the configured command."""
+        self._power("suspend", self.config.suspend_command, "notify.suspend_sent")
+
+    def _power(self, name: str, command: tuple[str, ...], sent_key: str) -> None:
+        """Run a power command; the state is left to the monitoring to update."""
+        log.info("action: %s", name)
+        if not self._busy.acquire(blocking=False):
+            log.info("skipped: another action is in progress")
+            return
+        try:
+            if self.status.pc is not PcState.ONLINE:
+                log.info("skipped: pc is %s", self.status.pc)
+                self._on_notify("notify.power_unavailable")
+                return
+            log.info("running: %s", " ".join(command))
+            code, output = self._run_command(list(command), self.config.power_command_timeout)
+            log.info("%s command exit code %s: %s", name, code, output)
+            if code == 0:
+                self._on_notify(sent_key, host=self.config.pc_ip)
+            else:
+                self._on_notify("notify.power_failed", detail=output[:DETAIL_LIMIT])
         finally:
             self._busy.release()
 

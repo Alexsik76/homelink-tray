@@ -10,8 +10,8 @@ and of the PC in the tray icon.
 
 - **Left click** on the icon: bring the tunnel up, check the PC's ports and, when it is silent,
   send Wake-on-LAN. A notification appears once the PC answers.
-- **Right click**: connect or disconnect the tunnel, wake the PC, open RDP, open the
-  settings file, quit.
+- **Right click**: connect or disconnect the tunnel, wake the PC, open RDP, put the PC to
+  sleep or shut it down (after a confirmation), open the settings file, quit.
 - **Icon**: the screen colour is the PC state (green: online, amber: waking, grey: off),
   the badge is the tunnel state (blue: connected, yellow: connecting, red: off).
 
@@ -39,6 +39,21 @@ of this computer:
 ```
 
 `test` is the policy required by `/tool wol`; `api` is checked for REST logins.
+
+## Remote power commands
+
+The "Turn off PC" submenu (enabled while the PC is online) runs `shutdown_command` or
+`suspend_command` on this computer after a confirmation. With the example settings that
+is an SSH call to the home PC, which needs the following there:
+
+- Key authentication: with `BatchMode=yes` SSH never asks for a password.
+- The host key must already be accepted: connect once manually (`ssh user@<pc_ip>`).
+- Passwordless `sudo` for exactly these two commands. Create `/etc/sudoers.d/homelink`
+  with `visudo -f /etc/sudoers.d/homelink`:
+
+```
+<user> ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl suspend
+```
 
 ## Build
 
@@ -75,6 +90,9 @@ key is required: there are no default values in the code.
 | `poll_seconds` | Interval between state checks |
 | `wake_poll_seconds` | The same interval while the PC is waking |
 | `wake_timeout` | Seconds to wait for the PC after Wake-on-LAN |
+| `shutdown_command` | Command that powers the PC off, run on this computer: a list of the program and its arguments, e.g. an `ssh` call |
+| `suspend_command` | The same command for sleep |
+| `power_command_timeout` | Seconds to wait for either command to finish |
 | `rdp_user` | User name written into the RDP file |
 | `rdp_file` | RDP file name, relative to `config.json` |
 | `rdp_options` | Extra lines of the RDP file |
@@ -136,7 +154,7 @@ py -m venv .venv
 | `controller.py` | Logic: actions and state tracking, no interface |
 | `tunnel.py` | WireGuard tunnel service |
 | `router.py` | Wake-on-LAN through the MikroTik REST API |
-| `net.py` | Ping and port checks |
+| `net.py` | Ping, port checks and running external commands |
 | `rdp.py` | RDP file |
 | `icons.py`, `i18n.py` | Icons and interface strings |
 | `app.py` | Tray icon and menu |

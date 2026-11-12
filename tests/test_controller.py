@@ -1,6 +1,6 @@
 import pytest
 
-from homelink.controller import Controller
+from homelink.controller import DETAIL_LIMIT, Controller
 from homelink.router import RouterError
 from homelink.state import PcState, Status, TunnelState
 from homelink.tunnel import TunnelError
@@ -45,17 +45,24 @@ class Env:
         self.now = 0.0
         self.changes = []
         self.notes = []
+        self.commands = []
+        self.command_result = (0, "")
         self.controller = Controller(
             config=config,
             tunnel=self.tunnel,
             router=self.router,
             ping=lambda host, _timeout: host in self.reachable,
             ports_open=lambda host, _ports, _timeout: host in self.reachable,
+            run_command=self.run_command,
             on_change=self.changes.append,
             on_notify=lambda key, **params: self.notes.append((key, params)),
             clock=lambda: self.now,
             sleep=self.advance,
         )
+
+    def run_command(self, command, timeout):
+        self.commands.append((command, timeout))
+        return self.command_result
 
     def advance(self, seconds):
         self.now += seconds
@@ -185,3 +192,63 @@ def test_one_successful_check_is_enough_for_online(env):
     env.reachable.add(env.config.pc_ip)
     env.controller.refresh()
     assert env.status.pc is PcState.ONLINE
+
+
+# ---------- power commands ----------
+@pytest.fixture
+def online(env):
+    env.reachable = {env.config.router_ip, env.config.pc_ip}
+    env.controller.connect_and_wake()
+    assert env.status == Status(TunnelState.UP, PcState.ONLINE)
+    return env
+
+
+@pytest.mark.parametrize(
+    ("action", "command_key", "note"),
+    [
+        ("shutdown", "shutdown_command", "notify.shutdown_sent"),
+        ("suspend", "suspend_command", "notify.suspend_sent"),
+    ],
+)
+def test_power_action_runs_configured_command(online, action, command_key, note):
+    getattr(online.controller, action)()
+    command = list(getattr(online.config, command_key))
+    assert online.commands == [(command, online.config.power_command_timeout)]
+    assert online.notes == [(note, {"host": online.config.pc_ip})]
+
+
+@pytest.mark.parametrize("action", ["shutdown", "suspend"])
+def test_power_action_does_not_change_state(online, action):
+    changes = list(online.changes)
+    getattr(online.controller, action)()
+    assert online.status == Status(TunnelState.UP, PcState.ONLINE)
+    assert online.changes == changes
+
+
+@pytest.mark.parametrize("action", ["shutdown", "suspend"])
+def test_power_failure_is_reported(online, action):
+    online.command_result = (255, "Permission denied")
+    getattr(online.controller, action)()
+    assert online.notes == [("notify.power_failed", {"detail": "Permission denied"})]
+
+
+def test_power_failure_detail_is_trimmed(online):
+    online.command_result = (1, "x" * (DETAIL_LIMIT + 100))
+    online.controller.shutdown()
+    assert online.notes == [("notify.power_failed", {"detail": "x" * DETAIL_LIMIT})]
+
+
+@pytest.mark.parametrize("action", ["shutdown", "suspend"])
+def test_power_action_needs_online_pc(env, action):
+    env.reachable = {env.config.router_ip}
+    env.controller.connect_and_wake()  # the PC is only waking
+    getattr(env.controller, action)()
+    assert env.commands == []
+    assert env.notes == [("notify.power_unavailable", {})]
+
+
+def test_power_action_is_skipped_while_busy(online):
+    online.controller._busy.acquire()
+    online.controller.shutdown()
+    assert online.commands == []
+    assert online.notes == []

@@ -24,6 +24,10 @@
   "wake_poll_seconds": 2,
   "wake_timeout": 180,
 
+  "shutdown_command": ["ssh", "-o", "BatchMode=yes", "user@192.168.88.10", "sudo", "systemctl", "poweroff"],
+  "suspend_command": ["ssh", "-o", "BatchMode=yes", "user@192.168.88.10", "sudo", "systemctl", "suspend"],
+  "power_command_timeout": 15,
+
   "rdp_user": "user",
   "rdp_file": "home.rdp",
   "rdp_options": [

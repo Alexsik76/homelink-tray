@@ -1,5 +1,6 @@
 """System tray interface."""
 
+import ctypes
 import logging
 import os
 import threading
@@ -14,13 +15,21 @@ from homelink.config import Config
 from homelink.controller import Controller
 from homelink.i18n import Translator
 from homelink.icons import BUILTIN_DIR, IconSet
-from homelink.net import ping, ports_open
+from homelink.net import ping, ports_open, run_command
 from homelink.rdp import ensure_rdp_file, open_rdp
 from homelink.router import MikroTikRouter
 from homelink.state import PcState, Status, TunnelState
 from homelink.tunnel import WireGuardTunnel
 
 APP_NAME = "HomeLink"
+
+# MessageBoxW flags and result
+MB_YESNO = 0x00000004
+MB_ICONQUESTION = 0x00000020
+MB_DEFBUTTON2 = 0x00000100
+MB_SETFOREGROUND = 0x00010000
+MB_TOPMOST = 0x00040000
+IDYES = 6
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +52,7 @@ class TrayApp:
             ),
             ping=ping,
             ports_open=ports_open,
+            run_command=run_command,
             on_change=self._show,
             on_notify=self._notify,
         )
@@ -71,6 +81,9 @@ class TrayApp:
         def status() -> Status:
             return self.controller.status
 
+        def pc_online(_: object) -> bool:
+            return status().pc is PcState.ONLINE
+
         return Menu(
             Item(
                 self.t("menu.connect_and_wake"),
@@ -94,7 +107,22 @@ class TrayApp:
             Item(
                 self.t("menu.rdp"),
                 self._open_rdp,
-                enabled=lambda _: status().pc is PcState.ONLINE,
+                enabled=pc_online,
+            ),
+            Item(
+                self.t("menu.power"),
+                Menu(
+                    Item(
+                        self.t("menu.suspend"),
+                        self._confirmed("confirm.suspend", self.controller.suspend),
+                        enabled=pc_online,
+                    ),
+                    Item(
+                        self.t("menu.shutdown"),
+                        self._confirmed("confirm.shutdown", self.controller.shutdown),
+                        enabled=pc_online,
+                    ),
+                ),
             ),
             Menu.SEPARATOR,
             Item(self.t("menu.settings"), self._open_config),
@@ -116,6 +144,20 @@ class TrayApp:
             threading.Thread(target=guarded, daemon=True).start()
 
         return handler
+
+    def _confirmed(self, question_key: str, action: Callable[[], None]) -> Callable[..., None]:
+        """A menu handler that asks first and runs the action only after "Yes"."""
+
+        def ask_and_run() -> None:
+            if self._confirm(self.t(question_key)):
+                action()
+
+        return self._in_thread(ask_and_run)
+
+    def _confirm(self, question: str) -> bool:
+        flags = MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND | MB_TOPMOST
+        answer = ctypes.windll.user32.MessageBoxW(None, question, self.t("confirm.title"), flags)
+        return answer == IDYES
 
     def _open_rdp(self, *_: object) -> None:
         path = self.config_path.parent / self.config.rdp_file
