@@ -158,12 +158,26 @@ fn only_overrides_that_differ_from_defaults_are_written() {
 }
 
 #[test]
-fn save_replaces_an_existing_file() {
+fn save_updates_an_existing_valid_file() {
     let dir = temp_dir("replace");
     let path = dir.join(config::FILE_NAME);
-    std::fs::write(&path, "old").unwrap();
+    std::fs::copy(fixture("valid/full.toml"), &path).unwrap();
     config::save(&path, &load("valid/minimal.toml")).unwrap();
-    assert!(config::load(&path).is_ok());
+    assert_eq!(
+        config::load(&path).unwrap().config,
+        load("valid/minimal.toml")
+    );
+}
+
+#[test]
+fn save_never_overwrites_a_file_that_is_not_toml() {
+    let dir = temp_dir("not-toml");
+    let path = dir.join(config::FILE_NAME);
+    std::fs::write(&path, "old = [").unwrap();
+    let err = config::save(&path, &load("valid/minimal.toml")).unwrap_err();
+    assert!(matches!(err, ConfigError::Syntax(_)), "{err}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "old = [");
+    assert!(!dir.join("config.toml.tmp").exists());
 }
 
 #[test]

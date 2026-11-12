@@ -11,8 +11,13 @@ code that is ported; `docs/design.md` describes the Python-era UI and is revised
   executable stays small.
 - Several remote PCs, each optionally behind a tunnel. A tunnel may serve several PCs; PCs
   without a tunnel form their own group. Old `config.json` files are not migrated.
-- The configuration file is TOML (final): readable, with comments. The wizard rewrites the
-  file with the plain `toml` crate, so comments are not preserved when it saves.
+- The configuration file is TOML (final): readable, with comments. Saving never loses what
+  the user wrote by hand: the file is edited by key, not re-rendered (section 8).
+- Tunnel lifecycle (final): the program never drops a tunnel by itself; only the tunnel
+  button does. A tunnel that disappeared on its own could cut an RDP session or a file copy
+  that the program does not know about. So there is no reference counting of "wanted" PCs, no
+  idle timeout and no automatic disconnect when the last PC goes off or is put to sleep; a PC
+  going offline never changes its tunnel.
 - One command raises the tunnel and wakes an inactive PC.
 - Wake methods per PC: a MikroTik router over SSH (`/tool wol`), direct magic packet,
   arbitrary command; more later. The MikroTik REST API is not used at all.
@@ -63,7 +68,8 @@ rust/
 ```
 
 Dependency rule: `app -> core`, never the reverse. `core` depends only on std, `serde`, a
-`toml`, `thiserror` and `log` (plus `serde_json` for the locale catalogs). It has no
+`toml_edit` (the only TOML crate: parsing with error positions, writing and in-place editing),
+`thiserror` and `log` (plus `serde_json` for the locale catalogs). It has no
 HTTP or TLS client. It builds and tests on Linux; only `app` needs Windows. The prototype in
 `rust/src` and `rust/ui` moves into `rust/app` in phase 4 (tray, panel placement and
 focus-loss logic are reused, `model.rs` sample data is deleted).
@@ -433,6 +439,33 @@ Validation (all problems are collected and reported together, each with its path
     opened at load; a missing key file surfaces as an `ssh` error in a notice.
 13. `log.file` and `rdp` paths stay inside the config directory (no `..`, no absolute paths).
 
+**Saving.** `save` never re-renders an existing file; it edits it by key (`toml_edit`, only in
+`config/format.rs`):
+
+- Comments, blank lines, key order and formatting of everything that did not change are kept
+  byte for byte. A table, array or value that means the same as the new one is not touched
+  at all (an inline table equals the same content written as a table; `AA-BB-…` equals
+  `aa:bb:…` for a MAC address), so saving an unchanged configuration gives identical bytes and
+  does not even rewrite the file.
+- A changed value is replaced and keeps its spacing and trailing comment. (Comments inside a
+  changed multi-line array are lost with the array's old text.) Keys that are gone are removed;
+  new keys are appended to their table.
+- `[[tunnels]]`, `[[routers]]` and `[[pcs]]` entries are matched by `id`, never by position.
+  A deleted entry is removed together with its sub-tables and the comments written above it. A
+  new entry is appended after the last entry of its kind (or, if the file has none, before the
+  first entry of a later kind). Reordered entries move as a whole, with their comments.
+  A per-PC `[pcs.timing]` appears inside its PC when an override is needed and disappears
+  when no value differs from `[defaults]` any more.
+- A changed `id` is a removal plus an addition (the old entry's comments are lost) unless the
+  caller lists the rename (`Renames`, `save_with`): then the entry keeps its place, comments
+  and unchanged keys, and only the `id` value changes. The saved configuration must already use
+  the new id everywhere it is referenced.
+- No file, or an empty one: the file is rendered from scratch. A file that exists but is not
+  valid TOML: an error, never an overwrite.
+- Before anything is written, the resulting text is parsed and validated and must equal the
+  configuration being saved exactly; otherwise nothing is written and an error is returned.
+  The write itself is atomic (temporary file in the same folder, then rename).
+
 Loading yields a `Config` of validated domain types (invalid states unrepresentable after
 this point); the rest of core never re-validates. The engine accepts `Reload(Config)` (phase 5):
 entities with unchanged ids keep their state, removed ones are dropped.
@@ -546,10 +579,6 @@ any password.
 3. **Panel and wizard styling.** To a designer: layout of the two columns, tunnel button states,
    PC row with four actions, wizard steps, About, and the tray icon rule for several tunnels
    and PCs (section 7 is provisional).
-4. **Tunnel lifecycle with several PCs on one tunnel.** When to drop it: never automatically
-   (only the toggle), when the last attached PC goes off or is told to sleep, after an idle
-   timeout, or a per-tunnel setting. Until decided, the machine never drops a tunnel by
-   itself, which is the v0.3 behaviour. The reference count of "wanted" PCs is not kept.
 
 ## 13. Testing strategy
 
@@ -568,6 +597,10 @@ tests prove only the thin adapters.
   `PcLost` never follows an accepted power command; no notice without a transition cause.
 - **Config:** valid and invalid fixture files; every rule of section 8 has a failing case with the
   expected issue path; the documented example is parsed in a test; round trip load-save-load.
+  Saving in place is tested on a heavily commented fixture: no change gives identical bytes;
+  one changed value, additions, deletions, renames and reorders change only what they should;
+  timing overrides appear and disappear; and a randomised test applies many edits in a row and
+  checks that editing in place and rendering from scratch describe the same configuration.
 - **Adapters:** magic packet bytes (6 x `FF` + 16 x MAC) and a loopback socket; the MikroTik
   `ssh` argument list and RouterOS command built exactly as specified, with hostile MAC and
   interface values rejected before they reach the command (done in `core::wake`, with a fake

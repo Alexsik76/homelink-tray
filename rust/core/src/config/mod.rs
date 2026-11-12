@@ -115,6 +115,10 @@ pub enum ConfigError {
     /// The file is well formed but its contents are wrong; every problem is listed.
     #[error("{}", .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))]
     Invalid(Vec<Issue>),
+    /// The text prepared for writing does not describe the configuration being saved. Nothing
+    /// is written.
+    #[error("refusing to write: {0}")]
+    Inconsistent(String),
 }
 
 /// Parses and validates configuration text.
@@ -135,17 +139,124 @@ pub fn load(path: &Path) -> Result<Loaded, ConfigError> {
     parse(&text)
 }
 
-/// Renders a configuration as file text. The result is checked by parsing it back, so an
-/// invalid configuration is never produced.
+/// Ids that changed since the file was written, so that an entry keeps its place and its
+/// comments when its `id` changes. Without a listed rename a changed id is a removal of the
+/// old entry (with the comments above it) and an addition of a new one at the end.
+///
+/// The configuration passed to [`save_with`] must already use the new ids everywhere
+/// (including `pcs[].tunnel` and `wake.router`); this only tells the editor which old entry
+/// the new id continues.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Renames {
+    /// Renamed tunnels as `(old, new)`.
+    pub tunnels: Vec<(TunnelId, TunnelId)>,
+    /// Renamed routers as `(old, new)`.
+    pub routers: Vec<(RouterId, RouterId)>,
+    /// Renamed PCs as `(old, new)`.
+    pub pcs: Vec<(PcId, PcId)>,
+}
+
+impl Renames {
+    fn to_format(&self) -> format::EntryRenames {
+        fn pairs<T: ToString>(list: &[(T, T)]) -> Vec<(String, String)> {
+            list.iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect()
+        }
+        format::EntryRenames {
+            tunnels: pairs(&self.tunnels),
+            routers: pairs(&self.routers),
+            pcs: pairs(&self.pcs),
+        }
+    }
+}
+
+/// Whether two spellings of a string value are the same value: the editor leaves a value
+/// alone when the user's spelling and the program's mean the same (`AA-BB-…` and `aa:bb:…`
+/// are one MAC address; `pc.lan.` and `pc.lan` are one host).
+fn same_spelling(key: &str, old: &str, new: &str) -> bool {
+    use crate::domain::{Host, MacAddr};
+    old == new
+        || match key {
+            "mac" => matches!(
+                (MacAddr::parse(old), MacAddr::parse(new)),
+                (Ok(a), Ok(b)) if a == b
+            ),
+            "host" | "probe_host" => matches!(
+                (Host::parse(old), Host::parse(new)),
+                (Ok(a), Ok(b)) if a == b
+            ),
+            _ => false,
+        }
+}
+
+/// Checks that `text` parses and validates to exactly `config`.
+fn verify(text: &str, config: &Config) -> Result<(), ConfigError> {
+    let loaded = parse(text)?;
+    if loaded.config == *config {
+        Ok(())
+    } else {
+        Err(ConfigError::Inconsistent(
+            "the text to write does not describe the configuration being saved".into(),
+        ))
+    }
+}
+
+/// Renders a configuration as a new file text. The result is checked by parsing it back:
+/// it must validate to exactly `config`, so an invalid configuration is never produced.
 pub fn render(config: &Config) -> Result<String, ConfigError> {
     let text = format::render(&convert::to_raw(config))?;
-    parse(&text)?;
+    verify(&text, config)?;
     Ok(text)
 }
 
-/// Writes a configuration atomically: a temporary file in the same folder, then a rename.
+/// Edits the text of an existing file so that it describes `config`, keeping everything the
+/// user wrote by hand that did not change (see the `format` module for the rules). The
+/// result is checked: it must validate to exactly `config`.
+pub fn edit(existing: &str, config: &Config, renames: &Renames) -> Result<String, ConfigError> {
+    let text = format::edit(
+        existing,
+        &convert::to_raw(config),
+        &renames.to_format(),
+        &same_spelling,
+    )?;
+    verify(&text, config)?;
+    Ok(text)
+}
+
+/// Saves a configuration; see [`save_with`] (no renames).
 pub fn save(path: &Path, config: &Config) -> Result<(), ConfigError> {
-    let text = render(config)?;
+    save_with(path, config, &Renames::default())
+}
+
+/// Saves a configuration to `path`.
+///
+/// - No file (or an empty one): the file is rendered from scratch.
+/// - An existing file: it is edited by key, so comments, blank lines, key order and the
+///   formatting of everything that did not change survive. If nothing changed the file is
+///   not touched.
+/// - An existing file that cannot be read or is not valid TOML: an error is returned and
+///   the file is left alone.
+///
+/// Before anything is written the text is checked to parse and validate to exactly
+/// `config`. The write is atomic: a temporary file in the same folder, then a rename.
+pub fn save_with(path: &Path, config: &Config, renames: &Renames) -> Result<(), ConfigError> {
+    let io = |source| ConfigError::Io {
+        path: path.to_owned(),
+        source,
+    };
+    let existing = match std::fs::read_to_string(path) {
+        Ok(text) => Some(text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(io(err)),
+    };
+    let text = match &existing {
+        Some(old) if !old.trim().is_empty() => edit(old, config, renames)?,
+        _ => render(config)?,
+    };
+    if existing.as_deref() == Some(text.as_str()) {
+        return Ok(());
+    }
     let io = |source| ConfigError::Io {
         path: path.to_owned(),
         source,
@@ -161,4 +272,40 @@ pub fn save(path: &Path, config: &Config) -> Result<(), ConfigError> {
             source,
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{multi_config, single_config};
+
+    #[test]
+    fn text_that_describes_another_configuration_is_refused() {
+        let text = render(&multi_config()).unwrap();
+        assert!(matches!(
+            verify(&text, &single_config()),
+            Err(ConfigError::Inconsistent(_))
+        ));
+        assert!(verify(&text, &multi_config()).is_ok());
+    }
+
+    #[test]
+    fn spellings_of_one_value_are_the_same() {
+        assert!(same_spelling(
+            "mac",
+            "AA-BB-CC-DD-EE-FF",
+            "aa:bb:cc:dd:ee:ff"
+        ));
+        assert!(same_spelling("host", "pc.lan.", "pc.lan"));
+        assert!(!same_spelling(
+            "name",
+            "AA-BB-CC-DD-EE-FF",
+            "aa:bb:cc:dd:ee:ff"
+        ));
+        assert!(!same_spelling(
+            "mac",
+            "AA-BB-CC-DD-EE-FF",
+            "AA-BB-CC-DD-EE-00"
+        ));
+    }
 }
