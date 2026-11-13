@@ -169,9 +169,7 @@ def build_graph(meta):
     packages = {package["id"]: package for package in meta["packages"]}
     nodes = {node["id"]: node for node in meta["resolve"]["nodes"]}
     members = set(meta["workspace_members"])
-    app_id = next(
-        member for member in members if packages[member]["name"] == APP
-    )
+    app_id = next(member for member in members if packages[member]["name"] == APP)
 
     reached = {app_id}
     pending = [app_id]
@@ -303,7 +301,9 @@ def main():
     if args.check:
         current = NOTICES.read_bytes().decode("utf-8") if NOTICES.exists() else ""
         if current != text:
-            print("THIRD-PARTY-NOTICES.txt is out of date: run python3 tools/third_party_notices.py")
+            print(
+                "THIRD-PARTY-NOTICES.txt is out of date: run python3 tools/third_party_notices.py"
+            )
             return 1
         print("Policy holds and THIRD-PARTY-NOTICES.txt is up to date.")
         return 0
