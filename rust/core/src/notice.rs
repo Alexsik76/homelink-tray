@@ -17,6 +17,13 @@ pub enum Notice {
         /// Reason reported by the system.
         detail: String,
     },
+    /// The tunnel service could not be stopped.
+    TunnelStopFailed {
+        /// Tunnel name.
+        tunnel: String,
+        /// Reason reported by the system.
+        detail: String,
+    },
     /// A tunnel that was up stopped without being asked to.
     TunnelLost {
         /// Tunnel name.
@@ -81,8 +88,9 @@ pub enum Notice {
 
 impl Notice {
     /// Every key, one per variant, for tests and tooling.
-    pub const KEYS: [&'static str; 11] = [
+    pub const KEYS: [&'static str; 12] = [
         "notify.tunnel_failed",
+        "notify.tunnel_stop_failed",
         "notify.tunnel_lost",
         "notify.tunnel_timeout",
         "notify.wake_failed",
@@ -99,6 +107,7 @@ impl Notice {
     pub fn key(&self) -> &'static str {
         match self {
             Self::TunnelFailed { .. } => "notify.tunnel_failed",
+            Self::TunnelStopFailed { .. } => "notify.tunnel_stop_failed",
             Self::TunnelLost { .. } => "notify.tunnel_lost",
             Self::TunnelTimeout { .. } => "notify.tunnel_timeout",
             Self::WakeFailed { .. } => "notify.wake_failed",
@@ -115,7 +124,7 @@ impl Notice {
     /// Values for the placeholders of the texts. `detail` is cut to [`DETAIL_LIMIT`].
     pub fn params(&self) -> Vec<(&'static str, String)> {
         match self {
-            Self::TunnelFailed { tunnel, detail } => {
+            Self::TunnelFailed { tunnel, detail } | Self::TunnelStopFailed { tunnel, detail } => {
                 vec![("tunnel", tunnel.clone()), ("detail", limit_detail(detail))]
             }
             Self::TunnelLost { tunnel } | Self::TunnelTimeout { tunnel } => {
@@ -147,6 +156,10 @@ pub(crate) fn samples() -> Vec<Notice> {
     let s = |x: &str| x.to_owned();
     vec![
         Notice::TunnelFailed {
+            tunnel: s("t"),
+            detail: s("d"),
+        },
+        Notice::TunnelStopFailed {
             tunnel: s("t"),
             detail: s("d"),
         },

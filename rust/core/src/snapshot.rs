@@ -1,7 +1,17 @@
 //! What the engine publishes to the UI: plain, comparable data with the availability of
-//! every action already decided, so the UI holds no rules.
+//! every action and the display state already decided, so the UI holds no rules.
 
-use crate::domain::{PcId, PcState, TunnelId, TunnelState};
+use std::net::Ipv4Addr;
+use std::time::Duration;
+
+use crate::domain::{PcId, PcState, RelayKind, TunnelId, TunnelState};
+use crate::notice::Notice;
+use crate::ports::Time;
+
+/// Check times in a snapshot are rounded down to this step, so that idle polling does not
+/// change the snapshot (and so is not published) every few seconds. Showing "last check"
+/// with this precision is enough.
+pub const CHECK_STEP: Duration = Duration::from_secs(30);
 
 /// The whole state at one moment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +32,57 @@ pub struct GroupView {
     pub pcs: Vec<PcView>,
 }
 
+/// How a tunnel or a PC is shown: the five states of the state marker.
+///
+/// Decided in the core (section 5.6 of `docs/rust-architecture.md`); the UI only maps it to
+/// a colour and a word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayState {
+    /// Tunnel up, PC online.
+    Ok,
+    /// Tunnel connecting, PC waking or an action on it in progress.
+    Busy,
+    /// Tunnel stopped, PC off.
+    Off,
+    /// Not known yet.
+    Unknown,
+    /// The last requested action failed (section 5.6).
+    Fail,
+}
+
+impl DisplayState {
+    /// Suffix of the locale key `state.<name>`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Busy => "busy",
+            Self::Off => "off",
+            Self::Unknown => "unknown",
+            Self::Fail => "fail",
+        }
+    }
+}
+
+/// What the toggle button of a tunnel would do now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TunnelToggle {
+    /// Bring the tunnel up (it is down).
+    Raise,
+    /// Bring the tunnel down (it is starting or up).
+    Lower,
+}
+
+impl TunnelToggle {
+    /// The action `ToggleTunnel` takes in `state`.
+    pub fn for_state(state: TunnelState) -> Self {
+        if state == TunnelState::Down {
+            Self::Raise
+        } else {
+            Self::Lower
+        }
+    }
+}
+
 /// A tunnel as shown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TunnelView {
@@ -33,6 +94,44 @@ pub struct TunnelView {
     pub state: TunnelState,
     /// Whether the toggle button is enabled (no start or stop is running).
     pub can_toggle: bool,
+    /// The state for the marker, with failure and "never checked" taken into account.
+    pub display: DisplayState,
+    /// When the last check that counted finished (see [`CHECK_STEP`]); `None` before the
+    /// first one. A time of the engine's clock.
+    pub last_checked: Option<Time>,
+    /// The error of the failed action while `display` is [`DisplayState::Fail`]; render it
+    /// with `Translator::notice`.
+    pub last_error: Option<Notice>,
+    /// The kind of tunnel, e.g. `WireGuard`.
+    pub kind: &'static str,
+    /// Names of the PCs behind the tunnel, in configuration order.
+    pub pcs: Vec<String>,
+    /// What the toggle would do now.
+    pub toggle: TunnelToggle,
+}
+
+/// How a PC is woken, without secrets or paths; render it with `Translator::wake_summary`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WakeSummary {
+    /// Through a relay host over SSH.
+    Relay {
+        /// Id of the relay.
+        relay: String,
+        /// Its preset.
+        kind: RelayKind,
+    },
+    /// A magic packet sent from this computer.
+    MagicPacket {
+        /// Destination address.
+        address: Ipv4Addr,
+        /// UDP port.
+        port: u16,
+    },
+    /// An arbitrary command.
+    Command {
+        /// Its program (first element).
+        program: String,
+    },
 }
 
 /// A PC as shown.
@@ -46,11 +145,31 @@ pub struct PcView {
     pub state: PcState,
     /// An action (connect, wake or power command) is running.
     pub busy: bool,
-    /// Which actions are enabled.
+    /// Which actions are enabled now.
     pub actions: Actions,
+    /// The state for the marker, with failure and in-progress actions taken into account.
+    pub display: DisplayState,
+    /// When the last check that counted finished (see [`CHECK_STEP`]); `None` before the
+    /// first one. A time of the engine's clock.
+    pub last_checked: Option<Time>,
+    /// The error of the failed action while `display` is [`DisplayState::Fail`]; render it
+    /// with `Translator::notice`.
+    pub last_error: Option<Notice>,
+    /// Address (IP or host name).
+    pub address: String,
+    /// Name of the tunnel the PC is reached through, if any.
+    pub tunnel_name: Option<String>,
+    /// How it is woken; `None` when it has no wake method.
+    pub wake: Option<WakeSummary>,
+    /// TCP ports that must be open for the PC to count as online.
+    pub ports: Vec<u16>,
+    /// Which actions exist in the configuration at all, whatever the state: an action that
+    /// is configured but not enabled in `actions` is "not available now"; one that is not
+    /// configured is "not configured".
+    pub configured: Actions,
 }
 
-/// Enabled actions of a PC.
+/// Actions of a PC: the enabled ones, or the configured ones.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Actions {
     /// Wake (with the tunnel brought up first when needed).
@@ -63,73 +182,167 @@ pub struct Actions {
     pub rdp: bool,
 }
 
-/// The summary shown by the tray icon.
+/// The corner square of the tray icon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Attention {
+    /// Nothing to show.
+    None,
+    /// A PC is in progress.
+    Busy,
+    /// A PC failed.
+    Fail,
+}
+
+/// The summary shown by the tray icon (section 9 of `docs/design/ui-handoff.md`).
 ///
-/// The tunnel badge is `Starting` if any tunnel is starting, else `Up` if any is up, else
-/// `Down`. The PC screen is the first that applies of waking, online, offline, unknown.
+/// `screen` is the first that applies of: any tunnel failed, any connecting, any up, all
+/// stopped, else unknown (also with no tunnels). `corner` is `Fail` if any PC failed, else
+/// `Busy` if any is in progress, else `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrayState {
-    /// Tunnel badge.
-    pub tunnel: TunnelState,
-    /// PC screen.
-    pub pc: PcState,
+    /// Fill of the screen: the aggregate of the tunnels.
+    pub screen: DisplayState,
+    /// The corner square: PC attention.
+    pub corner: Attention,
+    /// Tunnels that are up.
+    pub tunnels_up: usize,
+    /// All tunnels.
+    pub tunnels_total: usize,
+    /// PCs that are online.
+    pub pcs_online: usize,
+    /// All PCs.
+    pub pcs_total: usize,
 }
 
 impl TrayState {
     pub(crate) fn summarise(
-        tunnels: impl Iterator<Item = TunnelState>,
-        pcs: impl Iterator<Item = PcState>,
+        tunnels: impl Iterator<Item = (DisplayState, TunnelState)>,
+        pcs: impl Iterator<Item = (DisplayState, PcState)>,
     ) -> Self {
-        let tunnels: Vec<TunnelState> = tunnels.collect();
-        let pcs: Vec<PcState> = pcs.collect();
-        let tunnel = [TunnelState::Starting, TunnelState::Up]
-            .into_iter()
-            .find(|s| tunnels.contains(s))
-            .unwrap_or(TunnelState::Down);
-        let pc = [PcState::Waking, PcState::Online, PcState::Offline]
-            .into_iter()
-            .find(|s| pcs.contains(s))
-            .unwrap_or(PcState::Unknown);
-        Self { tunnel, pc }
+        let tunnels: Vec<(DisplayState, TunnelState)> = tunnels.collect();
+        let pcs: Vec<(DisplayState, PcState)> = pcs.collect();
+        let any = |d: DisplayState| tunnels.iter().any(|(x, _)| *x == d);
+        let screen = if any(DisplayState::Fail) {
+            DisplayState::Fail
+        } else if any(DisplayState::Busy) {
+            DisplayState::Busy
+        } else if any(DisplayState::Ok) {
+            DisplayState::Ok
+        } else if !tunnels.is_empty() && tunnels.iter().all(|(x, _)| *x == DisplayState::Off) {
+            DisplayState::Off
+        } else {
+            DisplayState::Unknown
+        };
+        let pc_any = |d: DisplayState| pcs.iter().any(|(x, _)| *x == d);
+        let corner = if pc_any(DisplayState::Fail) {
+            Attention::Fail
+        } else if pc_any(DisplayState::Busy) {
+            Attention::Busy
+        } else {
+            Attention::None
+        };
+        Self {
+            screen,
+            corner,
+            tunnels_up: tunnels
+                .iter()
+                .filter(|(_, s)| *s == TunnelState::Up)
+                .count(),
+            tunnels_total: tunnels.len(),
+            pcs_online: pcs.iter().filter(|(_, s)| *s == PcState::Online).count(),
+            pcs_total: pcs.len(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use DisplayState as D;
+
+    fn tray(t: &[(D, TunnelState)], p: &[(D, PcState)]) -> TrayState {
+        TrayState::summarise(t.iter().copied(), p.iter().copied())
+    }
 
     #[test]
-    fn tray_summary_priorities() {
-        use PcState as P;
+    fn tray_screen_first_match_wins() {
         use TunnelState as T;
-        let s = |t: &[T], p: &[P]| TrayState::summarise(t.iter().copied(), p.iter().copied());
+        let screen = |t: &[(D, T)]| tray(t, &[]).screen;
+        assert_eq!(screen(&[]), D::Unknown, "no tunnels: nothing to fill");
+        assert_eq!(screen(&[(D::Unknown, T::Down)]), D::Unknown);
         assert_eq!(
-            s(&[], &[]),
-            TrayState {
-                tunnel: T::Down,
-                pc: P::Unknown
-            }
+            screen(&[(D::Off, T::Down), (D::Unknown, T::Down)]),
+            D::Unknown
+        );
+        assert_eq!(screen(&[(D::Off, T::Down), (D::Off, T::Down)]), D::Off);
+        assert_eq!(screen(&[(D::Off, T::Down), (D::Ok, T::Up)]), D::Ok);
+        assert_eq!(
+            screen(&[(D::Ok, T::Up), (D::Busy, T::Starting), (D::Off, T::Down)]),
+            D::Busy
         );
         assert_eq!(
-            s(&[T::Up, T::Starting], &[P::Online, P::Waking]),
-            TrayState {
-                tunnel: T::Starting,
-                pc: P::Waking
-            }
+            screen(&[(D::Busy, T::Starting), (D::Fail, T::Down), (D::Ok, T::Up)]),
+            D::Fail
+        );
+    }
+
+    #[test]
+    fn tray_corner_is_pc_attention() {
+        use PcState as P;
+        let corner = |p: &[(D, P)]| tray(&[], p).corner;
+        assert_eq!(corner(&[]), Attention::None);
+        assert_eq!(
+            corner(&[(D::Ok, P::Online), (D::Off, P::Offline)]),
+            Attention::None
         );
         assert_eq!(
-            s(&[T::Down, T::Up], &[P::Unknown, P::Offline, P::Online]),
-            TrayState {
-                tunnel: T::Up,
-                pc: P::Online
-            }
+            corner(&[(D::Ok, P::Online), (D::Busy, P::Waking)]),
+            Attention::Busy
         );
         assert_eq!(
-            s(&[T::Down], &[P::Unknown, P::Offline]),
-            TrayState {
-                tunnel: T::Down,
-                pc: P::Offline
-            }
+            corner(&[
+                (D::Busy, P::Waking),
+                (D::Fail, P::Offline),
+                (D::Ok, P::Online)
+            ]),
+            Attention::Fail
+        );
+    }
+
+    #[test]
+    fn tray_counts() {
+        let t = tray(
+            &[
+                (D::Ok, TunnelState::Up),
+                (D::Fail, TunnelState::Up),
+                (D::Off, TunnelState::Down),
+            ],
+            &[
+                (D::Ok, PcState::Online),
+                (D::Busy, PcState::Online),
+                (D::Off, PcState::Offline),
+                (D::Busy, PcState::Waking),
+            ],
+        );
+        assert_eq!(
+            (t.tunnels_up, t.tunnels_total, t.pcs_online, t.pcs_total),
+            (2, 3, 2, 4)
+        );
+    }
+
+    #[test]
+    fn toggle_follows_the_state() {
+        assert_eq!(
+            TunnelToggle::for_state(TunnelState::Down),
+            TunnelToggle::Raise
+        );
+        assert_eq!(
+            TunnelToggle::for_state(TunnelState::Starting),
+            TunnelToggle::Lower
+        );
+        assert_eq!(
+            TunnelToggle::for_state(TunnelState::Up),
+            TunnelToggle::Lower
         );
     }
 }

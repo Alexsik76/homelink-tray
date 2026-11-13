@@ -291,16 +291,17 @@ Per tunnel. `expect_down` is set by a user disconnect (the old `user_stopped`).
 
 | # | From | Event | To | Effects / notices | controller.py |
 | --- | --- | --- | --- | --- | --- |
-| T1 | Down | `ToggleTunnel` or `Wake(pc)` | Starting | job `TunnelUp`; deadline = now + timeout; `pending += pc` | `_start_tunnel` |
+| T1 | Down | `ToggleTunnel` or `Wake(pc)` | Starting | job `TunnelUp`; deadline = now + timeout; `pending += pc`; **failure cleared (F1)** | `_start_tunnel` |
 | T2 | Starting | `Wake(pc)` | Starting | `pending += pc` | busy gate |
 | T3 | Up | `Wake(pc)` | Up | probe PC (see P4) | `connect_and_wake` |
-| T4 | Starting/Up | `ToggleTunnel` | (observed next) | job `TunnelDown`; `expect_down = true`; `pending = {}` | `toggle_tunnel` |
-| T5 | Starting | `JobDone(TunnelUp, Err)` | observed next | notice `TunnelFailed(detail)`; `pending = {}`; probe at once | `_start_tunnel` |
-| T6 | Starting (deadline open) | probe: probe host answers | Up | start PC probes for `pending` and attached PCs | `_start_tunnel` loop |
-| T7 | Starting (deadline passed) | still silent | Starting | `pending = {}`; deadline-less polling goes on (T9); only logged in v0.3 | `_start_tunnel` end |
-| T8 | any | probe: service not running | Down | attached PCs to `Unknown`, clear `waking_until` and failure counters; if previous state was `Up` and not `expect_down`: notice `TunnelLost`; clear `expect_down` | `_refresh` first branch |
-| T9 | any | probe: service running, probe host silent | Starting | attached PCs to `Unknown`, counters cleared; no notice | `_refresh` second branch |
-| T10 | any | probe: probe host answers | Up | start attached PCs' probes | `_refresh` rest |
+| T4 | Starting/Up | `ToggleTunnel` | (observed next) | job `TunnelDown`; `expect_down = true`; `pending = {}`; **failure cleared (F1)** | `toggle_tunnel` |
+| T5 | Starting | `JobDone(TunnelUp, Err)` | observed next | notice `TunnelFailed(detail)`; `pending = {}`; probe at once; **start failure (F2)** | `_start_tunnel` |
+| T6 | Starting (deadline open) | probe: probe host answers | Up | start PC probes for `pending` and attached PCs; **start failure cleared (F5)** | `_start_tunnel` loop |
+| T7 | Starting (deadline passed) | still silent | Starting | notice `TunnelTimeout`; `pending = {}`; deadline-less polling goes on (T9); **start failure (F3)** | `_start_tunnel` end |
+| T8 | any | probe: service not running | Down | attached PCs to `Unknown`, clear `waking_until` and failure counters (**and their failures, F13**); if previous state was `Up` and not `expect_down`: notice `TunnelLost`; clear `expect_down`; **stop failure cleared (F6)** | `_refresh` first branch |
+| T9 | any | probe: service running, probe host silent | Starting | attached PCs to `Unknown`, counters cleared (**and failures, F13**); no notice | `_refresh` second branch |
+| T10 | any | probe: probe host answers | Up | start attached PCs' probes; **start failure cleared (F5)** | `_refresh` rest |
+| T11 | Starting/Up | `JobDone(TunnelDown, Err)` | (observed next) | notice `TunnelStopFailed(detail)`; probe at once; **stop failure (F4)** | (new: v0.3 only logged it) |
 
 While Starting with an open deadline only the reachability probe runs (the Python loop
 ignored the service state), at 1 s intervals; otherwise the tunnel is polled every
@@ -315,19 +316,22 @@ Per PC, evaluated on a PC probe result (`ready` = all ports open). Counters: `fa
 
 | # | State | Event | New state | Notices / counters | controller.py |
 | --- | --- | --- | --- | --- | --- |
-| P1 | any | `ready` | Online | `failures = 0`, `waking_until` cleared; if was `Waking`: notice `PcOnline` | `_refresh` |
+| P1 | any | `ready` | Online | `failures = 0`, `waking_until` cleared; if was `Waking`: notice `PcOnline`; **wake failure cleared (F11)** | `_refresh` |
 | P2 | Online | not ready, `failures` after the increment `< N` | Online | `failures += 1`, logged | `_refresh` |
 | P3 | Waking | not ready, `now < waking_until` | Waking | `failures += 1` | `_refresh` |
-| P4 | Unknown/Offline/Online/Waking after deadline | not ready | Offline | `failures += 1`; if was `Online` and not `power_sent`: `PcLost`; if was `Waking`: `PcTimeout` | `_refresh` |
-| P5 | any | tunnel T8/T9 | Unknown | `failures = 0`, `waking_until` cleared, no `PcLost` | `_refresh` |
+| P4 | Unknown/Offline/Online/Waking after deadline | not ready | Offline | `failures += 1`; if was `Online` and not `power_sent`: `PcLost`; if was `Waking`: `PcTimeout` and **wake failure (F9)**; if was `Online`: **power failure cleared (F12)** | `_refresh` |
+| P5 | any | tunnel T8/T9 | Unknown | `failures = 0`, `waking_until` cleared, no `PcLost`; **failure cleared (F13)** | `_refresh` |
 | P6 | any | connect-and-wake probe: `ready` | Online | `failures = 0`; no `PcOnline` | `connect_and_wake` |
 | P7 | any | connect-and-wake probe: not ready | (unchanged) | job `Wake` | `connect_and_wake` |
 | P8 | any | `JobDone(Wake, Ok)` | Waking | `waking_until = now + wake_timeout` | `_send_wol` |
-| P9 | any | `JobDone(Wake, Err)` | (unchanged) | notice `WakeFailed(detail)` | `_send_wol` |
-| P10 | Online | `Power(a)` | (unchanged) | job `Power(a)` | `_power` |
+| P9 | any | `JobDone(Wake, Err)` | (unchanged) | notice `WakeFailed(detail)`; **wake failure (F8)** | `_send_wol` |
+| P10 | Online | `Power(a)` | (unchanged) | job `Power(a)`; **failure cleared (F7)** | `_power` |
 | P11 | other | `Power(a)` | (unchanged) | notice `PowerUnavailable` | `_power` |
 | P12 | any | `JobDone(Power, exit 0)` | (unchanged) | `power_sent = true`; notice `SleepSent`/`ShutdownSent` | `_power` |
-| P13 | any | `JobDone(Power, failure)` | (unchanged) | notice `PowerFailed(detail)` | `_power` |
+| P13 | any | `JobDone(Power, failure)` | (unchanged) | notice `PowerFailed(detail)`; **power failure (F10)** | `_power` |
+
+`Wake(pc)` that is taken up (P7 or T1-T3 path, i.e. not dropped by a guard) also clears the PC's
+failure (F7).
 
 `N` = `offline_after_failures`. P2 compares the counter after the increment, matching
 `self._pc_failures < offline_after_failures`. Power commands do not set
@@ -351,9 +355,60 @@ state; the next probe does.
 3. `wol_failed` becomes `wake_failed` because wake is no longer relay-only (the relay is now
    reached over SSH, so its detail text is `ssh` output or an exit code, not an HTTP status).
 4. Connect-and-wake on an `Up` tunnel does not flip the tunnel to `Starting` for an instant.
+5. T11: a failed tunnel stop (v0.3 logged it) now produces a notice `TunnelStopFailed` and a
+   failed state (section 5.6).
 
 Everything else (rules P1-P13, T8-T10, the 200 character detail limit, silence for user
 disconnects and for PCs that were told to power off) is kept.
+
+### 5.6 Failed state, display state and check times
+
+**Failed.** An entity (a tunnel or a PC) is *failed* when its last requested action ended in an
+error: a tunnel start or stop failed or the start timed out; a wake request failed or the wake
+timeout expired; a sleep or shutdown command failed. The failure keeps the notice that was shown
+for it (`last_error`) and lasts until the entity is *seen in the situation the failed request was
+meant to produce*, or a new request is taken up. A probe that merely completes is not enough: T5
+and T7 are followed by an immediate probe that finds the tunnel still down, and a failed power
+command leaves the PC online and polled every few seconds, so ending the failure at the next
+probe would hide it at once. Failures are independent of the state (`TunnelState`/`PcState`
+are unchanged by them).
+
+| # | Entity | Event | Effect on the failure |
+| --- | --- | --- | --- |
+| F1 | tunnel | a toggle or connect-and-wake is taken up (T1, T4) | cleared |
+| F2 | tunnel | T5: start job failed | *start failure*, notice `TunnelFailed` |
+| F3 | tunnel | T7: start timed out | *start failure*, notice `TunnelTimeout` |
+| F4 | tunnel | T11: stop job failed (also a panicked job) | *stop failure*, notice `TunnelStopFailed` |
+| F5 | tunnel | probe sees the host answer (T6, T10) | a start failure is cleared; a stop failure stays |
+| F6 | tunnel | full probe sees the service not running (T8) | a stop failure is cleared; a start failure stays |
+| F7 | PC | a `Wake` or `Power` is taken up (not dropped by a guard) | cleared |
+| F8 | PC | P9: wake request failed (also a panicked job) | *wake failure*, notice `WakeFailed` |
+| F9 | PC | P4: `Waking` and the wake timeout expired | *wake failure*, notice `PcTimeout` |
+| F10 | PC | P13: power command failed (also a panicked job) | *power failure*, notice `PowerFailed` |
+| F11 | PC | P1: ports answer | a wake failure is cleared; a power failure stays (the PC is simply still online) |
+| F12 | PC | P4 from `Online`: the PC stopped answering | a power failure is cleared |
+| F13 | PC | its tunnel was reset (P5) | cleared (the state is unknown again) |
+
+A PC that waits for its tunnel (`pending`) does not inherit a tunnel failure: its wake was never
+sent. The failure of the tunnel is shown on the tunnel.
+
+**Display state.** Both kinds of entity are published with one `DisplayState`
+(`ok | busy | off | unknown | fail`), the first that applies:
+
+| | Tunnel | PC |
+| --- | --- | --- |
+| `fail` | failed | failed |
+| `busy` | `Starting` | an action is running (check, wake, power), it waits for its tunnel, or `Waking` |
+| `ok` | `Up` | `Online` |
+| `off` | `Down`, checked at least once | `Offline` |
+| `unknown` | `Down`, never checked | `Unknown` |
+
+**Check times.** `last_checked` is the time of the last probe result that counted (one that was
+applied, not one ignored while an action runs or because the tunnel is not up). It is published
+rounded down to 30 s (`CHECK_STEP`): with the exact time every idle poll would change the
+snapshot and be published. The value is a time of the engine's `Clock`; the UI turns it into an
+age with the same clock.
+
 
 ## 6. Traits that isolate side effects (`core/src/ports.rs`)
 
@@ -389,15 +444,23 @@ processes; `app` contains everything that needs the `windows` crate.
 - No async runtime. All I/O is blocking with explicit timeouts on pool threads; one job per
   entity in flight bounds the thread count.
 - UI to engine: `std::sync::mpsc::Sender<Command>`; handlers never block.
-- Engine to UI: `Snapshot` is plain `Send + PartialEq` data (groups, tunnel views, PC views with
-  state, busy flag and enabled actions, derived aggregate for the tray). The engine publishes
-  only when it changed. The `Sink` adapter calls `Weak::upgrade_in_event_loop` and rebuilds the
-  Slint models there (Slint models are not `Send`).
-- Tray aggregate (provisional, for the designer): badge = Starting if any tunnel is Starting,
-  else Up if any is Up, else Down; screen = Waking, else Online, else Offline, else Unknown
-  (any, in that priority). The twelve existing `<pc>_<tunnel>` icons are reused.
-  The tooltip lists one line per tunnel and PC and is truncated to the 127 characters
-  Windows allows.
+- Engine to UI: `Snapshot` is plain `Send + PartialEq` data: groups, tunnel views and PC views.
+  Each view carries the state, the display state (`ok | busy | off | unknown | fail`, section
+  5.6), the enabled actions, the time of the last check, the last error (a `Notice`, worded by
+  the UI's `Translator`) and the facts the details window shows (PC: address, tunnel name, wake
+  summary, ports, which actions are configured at all; tunnel: kind, names of its PCs, what the
+  toggle would do). There is a derived aggregate for the tray. The UI holds no rules: it maps
+  these values to colours, words and labels. The engine publishes only when the snapshot
+  changed (check times are rounded to 30 s for this reason, section 5.6). The `Sink` adapter
+  calls `Weak::upgrade_in_event_loop` and rebuilds the Slint models there (Slint models are not
+  `Send`).
+- Tray aggregate (`TrayState`, handoff section 9). Screen fill = the aggregate of the tunnels'
+  display states, the first that applies: any failed (`fail`), any connecting (`busy`), any up
+  (`ok`), all stopped (`off`), otherwise `unknown` (including no tunnels at all, so no fill).
+  Corner square = PC attention: `fail` if any PC failed, else `busy` if any PC is in progress
+  (waking, waiting for its tunnel, or running an action), else none. Tooltip counts: tunnels up
+  of all tunnels, PCs online of all PCs; the lines are `tooltip.tunnels_up` and
+  `tooltip.pcs_online`. The tooltip is truncated to the 127 characters Windows allows.
 - Job panics are caught (`catch_unwind`) and delivered as a failed `JobDone`; the engine thread
   never runs user-supplied code. A panic hook writes to the log.
 - Shutdown: `Command::Shutdown` stops the timer, drops the queue and joins workers with a

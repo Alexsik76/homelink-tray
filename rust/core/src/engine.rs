@@ -269,11 +269,10 @@ fn run_effect(deps: &Deps, config: &Config, effect: &Effect) -> Input {
             let Some(t) = config.tunnel(tunnel) else {
                 return lost();
             };
-            if let Err(err) = deps.tunnel.down(t) {
-                log::warn!("stopping tunnel {} failed: {err}", t.id);
-            }
+            let result = deps.tunnel.down(t).map_err(|err| err.to_string());
             Input::TunnelDownDone {
                 tunnel: tunnel.clone(),
+                result,
             }
         }
         Effect::Wake(pc) => {

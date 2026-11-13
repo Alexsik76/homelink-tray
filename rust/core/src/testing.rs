@@ -5,7 +5,7 @@
 //! manual clock.
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -87,8 +87,28 @@ impl Clock for FakeClock {
 pub struct FakeTunnel {
     running: Mutex<HashSet<TunnelId>>,
     up_error: Mutex<Option<String>>,
+    down_error: Mutex<Option<String>>,
+    up_errors: Mutex<HashMap<TunnelId, String>>,
+    down_errors: Mutex<HashMap<TunnelId, String>>,
     ups: Mutex<Vec<TunnelId>>,
     downs: Mutex<Vec<TunnelId>>,
+}
+
+/// Sets or clears the entry of `id` in a per-entity error map.
+fn set_error<K: std::hash::Hash + Eq + Clone>(
+    map: &Mutex<HashMap<K, String>>,
+    id: &K,
+    reason: Option<&str>,
+) {
+    let mut map = lock(map);
+    match reason {
+        Some(reason) => {
+            map.insert(id.clone(), reason.to_owned());
+        }
+        None => {
+            map.remove(id);
+        }
+    }
 }
 
 impl FakeTunnel {
@@ -112,6 +132,22 @@ impl FakeTunnel {
         *lock(&self.up_error) = reason.map(str::to_owned);
     }
 
+    /// Makes every stop fail with this reason (`None` to stop failing). The tunnel keeps
+    /// running, as when a real stop fails.
+    pub fn fail_down_with(&self, reason: Option<&str>) {
+        *lock(&self.down_error) = reason.map(str::to_owned);
+    }
+
+    /// Makes the start of one tunnel fail with this reason (`None` to stop failing).
+    pub fn fail_up_for(&self, id: &TunnelId, reason: Option<&str>) {
+        set_error(&self.up_errors, id, reason);
+    }
+
+    /// Makes the stop of one tunnel fail with this reason (`None` to stop failing).
+    pub fn fail_down_for(&self, id: &TunnelId, reason: Option<&str>) {
+        set_error(&self.down_errors, id, reason);
+    }
+
     /// Tunnels started so far.
     pub fn ups(&self) -> Vec<TunnelId> {
         lock(&self.ups).clone()
@@ -130,7 +166,10 @@ impl TunnelDriver for FakeTunnel {
 
     fn up(&self, tunnel: &Tunnel) -> Result<(), TunnelError> {
         lock(&self.ups).push(tunnel.id.clone());
-        if let Some(reason) = lock(&self.up_error).clone() {
+        let reason = lock(&self.up_error)
+            .clone()
+            .or_else(|| lock(&self.up_errors).get(&tunnel.id).cloned());
+        if let Some(reason) = reason {
             return Err(TunnelError(reason));
         }
         self.set_running(&tunnel.id, true);
@@ -139,6 +178,12 @@ impl TunnelDriver for FakeTunnel {
 
     fn down(&self, tunnel: &Tunnel) -> Result<(), TunnelError> {
         lock(&self.downs).push(tunnel.id.clone());
+        let reason = lock(&self.down_error)
+            .clone()
+            .or_else(|| lock(&self.down_errors).get(&tunnel.id).cloned());
+        if let Some(reason) = reason {
+            return Err(TunnelError(reason));
+        }
         self.set_running(&tunnel.id, false);
         Ok(())
     }
@@ -183,9 +228,15 @@ impl PortProbe for FakeNetwork {
 pub struct FakeWake {
     calls: Mutex<Vec<(PcId, WakeKind)>>,
     error: Mutex<Option<String>>,
+    errors: Mutex<HashMap<PcId, String>>,
 }
 
 impl FakeWake {
+    /// Makes the wake requests for one PC fail with this reason (`None` to stop failing).
+    pub fn fail_for(&self, pc: &PcId, reason: Option<&str>) {
+        set_error(&self.errors, pc, reason);
+    }
+
     /// Makes every request fail with this reason (`None` to stop failing).
     pub fn fail_with(&self, reason: Option<&str>) {
         *lock(&self.error) = reason.map(str::to_owned);
@@ -204,7 +255,10 @@ impl FakeWake {
 
 impl WakeSender for FakeWake {
     fn wake(&self, request: &WakeRequest<'_>) -> Result<(), WakeError> {
-        if let Some(reason) = lock(&self.error).clone() {
+        let reason = lock(&self.error)
+            .clone()
+            .or_else(|| lock(&self.errors).get(&request.pc.id).cloned());
+        if let Some(reason) = reason {
             return Err(WakeError::Failed(reason));
         }
         lock(&self.calls).push((request.pc.id.clone(), request.method.kind()));
@@ -217,9 +271,15 @@ impl WakeSender for FakeWake {
 pub struct FakePower {
     calls: Mutex<Vec<(PcId, PowerAction)>>,
     error: Mutex<Option<String>>,
+    errors: Mutex<HashMap<PcId, String>>,
 }
 
 impl FakePower {
+    /// Makes the commands for one PC fail with this reason (`None` to stop failing).
+    pub fn fail_for(&self, pc: &PcId, reason: Option<&str>) {
+        set_error(&self.errors, pc, reason);
+    }
+
     /// Makes every command fail with this reason (`None` to stop failing).
     pub fn fail_with(&self, reason: Option<&str>) {
         *lock(&self.error) = reason.map(str::to_owned);
@@ -234,7 +294,10 @@ impl FakePower {
 impl PowerRunner for FakePower {
     fn run(&self, pc: &Pc, action: PowerAction) -> Result<(), PowerError> {
         lock(&self.calls).push((pc.id.clone(), action));
-        match lock(&self.error).clone() {
+        let reason = lock(&self.error)
+            .clone()
+            .or_else(|| lock(&self.errors).get(&pc.id).cloned());
+        match reason {
             Some(reason) => Err(PowerError(reason)),
             None => Ok(()),
         }
@@ -514,6 +577,62 @@ mac = "00:11:22:33:44:66"
 address = "10.0.5.255"
 "#;
 
+const LAB: &str = r#"
+[[tunnels]]
+id = "lab"
+name = "Lab"
+kind = "wireguard"
+conf = 'C:\WG\lab.conf.dpapi'
+wireguard_exe = 'C:\WG\wireguard.exe'
+probe_host = "172.16.0.1"
+timeout = 20
+ping_timeout_ms = 1000
+
+[[pcs]]
+id = "build"
+name = "Build server"
+os = "linux"
+host = "172.16.0.20"
+tunnel = "lab"
+ports = [22]
+
+[pcs.wake]
+method = "magic_packet"
+mac = "AA:BB:CC:00:00:20"
+address = "172.16.0.20"
+port = 9
+
+[pcs.power]
+method = "ssh"
+user = "alex"
+port = 22
+identity_file = 'C:\HomeLink\pc_key'
+
+[[pcs]]
+id = "printer"
+name = "Archive"
+os = "linux"
+host = "10.0.0.9"
+ports = [445]
+"#;
+
+/// [`multi_config`] plus what the demo needs to show every display state:
+///
+/// - tunnel `lab` with `build` (`172.16.0.20`) behind it; make `lab` fail to start with
+///   [`FakeTunnel::fail_up_for`] and `build` fail to wake with [`FakeWake::fail_for`];
+/// - `printer` ("Archive", `10.0.0.9`) with no tunnel and no wake, power or Remote Desktop
+///   configured, to show an action that is not configured (as against one that is
+///   not available now).
+///
+/// A power command fails with [`FakePower::fail_for`]. Tunnels start unknown, a stopped
+/// tunnel is off, a started one is ok, a connecting tunnel or a waking PC is busy.
+pub fn demo_config() -> Config {
+    let text = format!("{BASE}{MORE}{LAB}");
+    config::parse(&text)
+        .expect("the built-in test configuration is valid")
+        .config
+}
+
 /// The single-PC configuration plus one PC for each of the other relay presets: `desktop`
 /// (a RouterOS relay), `media` (etherwake on `br-lan`) and `kiosk` (wakeonlan with an
 /// address).
@@ -703,6 +822,48 @@ mod tests {
             CommandOutcome::Exited(3)
         );
         assert_eq!(runner.calls().len(), 2);
+    }
+
+    #[test]
+    fn the_demo_config_can_show_every_display_state_including_fail() {
+        use crate::snapshot::DisplayState as D;
+        let mut h = Harness::new(demo_config());
+        h.refresh();
+        h.reachable("192.168.88.1", true);
+        h.reachable("192.168.88.10", true);
+        h.refresh();
+        // Busy: a wake request that was taken up but is not answered yet.
+        h.wake_pc("laptop");
+        // Fail: a tunnel that cannot start, a PC that cannot be woken, a power command that
+        // fails.
+        h.tunnel
+            .fail_up_for(&tunnel_id("lab"), Some("no such tunnel"));
+        h.toggle_tunnel("lab");
+        h.wake.fail_for(&pc_id("nas"), Some("unreachable"));
+        h.wake_pc("nas");
+        h.power.fail_for(&pc_id("desktop"), Some("refused"));
+        h.power_pc("desktop", PowerAction::Sleep);
+
+        let (mut tunnels, mut pcs) = (HashSet::new(), Vec::new());
+        for snapshot in h.sink.snapshots() {
+            for group in &snapshot.groups {
+                tunnels.extend(group.tunnel.iter().map(|t| t.display.as_str()));
+                pcs.extend(group.pcs.iter().map(|p| p.display.as_str()));
+            }
+        }
+        for d in [D::Ok, D::Busy, D::Off, D::Unknown, D::Fail] {
+            assert!(tunnels.contains(d.as_str()), "no tunnel was {d:?}");
+            assert!(pcs.contains(&d.as_str()), "no PC was {d:?}");
+        }
+        let last = h.sink.snapshots().pop().unwrap();
+        let printer = last
+            .groups
+            .iter()
+            .flat_map(|g| &g.pcs)
+            .find(|p| p.id == pc_id("printer"))
+            .unwrap();
+        assert_eq!(printer.configured, crate::snapshot::Actions::default());
+        assert_eq!(demo_config().pcs.len(), 6);
     }
 
     #[test]

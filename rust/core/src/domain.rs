@@ -329,6 +329,14 @@ pub enum TunnelKind {
 }
 
 impl TunnelKind {
+    /// The kind as shown to the user (a product name, not translated). Paths and other
+    /// settings are not part of it.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::WireGuardService { .. } => "WireGuard",
+        }
+    }
+
     /// The tunnel name as WireGuard derives it from the file name.
     pub fn wireguard_name(conf: &str) -> Result<String, InvalidValue> {
         let file = conf.rsplit(['/', '\\']).next().unwrap_or_default();

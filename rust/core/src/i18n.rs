@@ -7,6 +7,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::notice::Notice;
+use crate::snapshot::{DisplayState, WakeSummary};
 
 const EN: &str = include_str!("../locales/en.json");
 const UK: &str = include_str!("../locales/uk.json");
@@ -188,6 +189,31 @@ impl Translator {
         }
     }
 
+    /// The text for a display state (`state.<name>`).
+    pub fn state(&self, state: DisplayState) -> String {
+        self.t(&format!("state.{}", state.as_str()), &[])
+    }
+
+    /// One line describing how a PC is woken.
+    pub fn wake_summary(&self, wake: &WakeSummary) -> String {
+        match wake {
+            WakeSummary::Relay { relay, kind } => self.t(
+                "details.wake_relay",
+                &[("relay", relay.as_str()), ("kind", kind.code())],
+            ),
+            WakeSummary::MagicPacket { address, port } => self.t(
+                "details.wake_magic_packet",
+                &[
+                    ("address", &address.to_string()),
+                    ("port", &port.to_string()),
+                ],
+            ),
+            WakeSummary::Command { program } => {
+                self.t("details.wake_command", &[("program", program.as_str())])
+            }
+        }
+    }
+
     /// Title and body of a notice.
     pub fn notice(&self, notice: &Notice) -> (String, String) {
         let owned = notice.params();
@@ -292,6 +318,97 @@ mod tests {
             PcState::Online,
         ] {
             assert!(c.template(&format!("pc.{}", s.as_str())).is_some());
+        }
+    }
+
+    #[test]
+    fn every_display_state_has_a_word_in_every_language() {
+        use DisplayState as D;
+        for lang in Lang::ALL {
+            let tr = Translator::new(lang);
+            for s in [D::Ok, D::Busy, D::Off, D::Unknown, D::Fail] {
+                assert_eq!(
+                    tr.t(&format!("state.{}", s.as_str()), &[]),
+                    tr.state(s),
+                    "{}",
+                    lang.code()
+                );
+                assert!(
+                    tr.state(s) != format!("state.{}", s.as_str()),
+                    "{} lacks the word for {s:?}",
+                    lang.code()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ui_labels_exist_in_every_language() {
+        let keys = [
+            "tooltip.tunnels_up",
+            "tooltip.pcs_online",
+            "details.state",
+            "details.address",
+            "details.tunnel",
+            "details.wake",
+            "details.ports",
+            "details.last_check",
+            "details.last_error",
+            "details.kind",
+            "details.pcs",
+            "details.none",
+            "panel.no_tunnel",
+            "panel.settings",
+            "action.tunnel_raise",
+            "action.tunnel_lower",
+            "action.wake",
+            "action.sleep",
+            "action.shutdown",
+            "action.rdp",
+            "action.sleep_confirm",
+            "action.shutdown_confirm",
+        ];
+        for lang in Lang::ALL {
+            let c = catalog(lang);
+            for key in keys {
+                assert!(c.template(key).is_some(), "{} lacks '{key}'", lang.code());
+            }
+        }
+        let uk = Translator::new(Lang::Uk);
+        assert_eq!(uk.t("action.wake", &[]), "Розбудити");
+        assert_eq!(uk.t("action.tunnel_raise", &[]), "Підняти");
+        assert_eq!(uk.t("action.shutdown_confirm", &[]), "Так, вимкнути");
+        assert_eq!(uk.t("details.none", &[]), "немає");
+        assert_eq!(
+            uk.t("tooltip.pcs_online", &[("online", "1"), ("total", "4")]),
+            "ПК у мережі: 1 з 4"
+        );
+    }
+
+    #[test]
+    fn wake_summaries_render_in_both_languages() {
+        let relay = WakeSummary::Relay {
+            relay: "gateway".into(),
+            kind: crate::domain::RelayKind::RouterOs,
+        };
+        let magic = WakeSummary::MagicPacket {
+            address: std::net::Ipv4Addr::new(192, 168, 88, 255),
+            port: 9,
+        };
+        let command = WakeSummary::Command {
+            program: "wakeonlan".into(),
+        };
+        let en = Translator::new(Lang::En);
+        assert_eq!(en.wake_summary(&relay), "Relay gateway (routeros)");
+        assert_eq!(en.wake_summary(&magic), "Magic packet to 192.168.88.255:9");
+        assert_eq!(en.wake_summary(&command), "Command: wakeonlan");
+        let uk = Translator::new(Lang::Uk);
+        for w in [&relay, &magic, &command] {
+            let text = uk.wake_summary(w);
+            assert!(
+                !text.contains('{') && !text.starts_with("details."),
+                "{text}"
+            );
         }
     }
 

@@ -16,9 +16,14 @@
 //! | P12 | any                   | `PowerDone(Ok)`                | same      | `power_sent = true`; `SleepSent` / `ShutdownSent`       |
 //! | P13 | any                   | `PowerDone(Err)`               | same      | `PowerFailed`                                           |
 //!
+//! Failed state (F7-F13, section 5.6 of the architecture): a `Wake` or `Power` that is taken
+//! up clears a failure; P9 and P4 from `Waking` (the wake timeout) set a wake failure and P13
+//! a power failure; P1 clears a wake failure, P4 from `Online` a power failure, and P5 any
+//! failure.
+//!
 //! `N` is `offline_after_failures`; P2 compares the counter after the increment.
 
-use super::{Effect, Machine, Output, PcAction, PcProbe};
+use super::{Effect, Failure, Machine, Output, PcAction, PcFailKind, PcProbe};
 use crate::domain::{PcId, PcState, PowerAction, TunnelState};
 use crate::notice::Notice;
 use crate::ports::Time;
@@ -53,6 +58,12 @@ impl Machine {
                 }
             }
         }
+        // F7: a request that was taken up ends the failure of the previous one.
+        if let Some(p) = self.pcs.get_mut(pi)
+            && (p.action.is_some() || p.connect_pending)
+        {
+            p.failed = None;
+        }
     }
 
     /// `Power(pc, action)`: P10 or P11.
@@ -80,6 +91,7 @@ impl Machine {
             log::info!("skipped: {} has no {action:?} command", p.id);
             return;
         }
+        p.failed = None;
         p.action = Some(PcAction::Power(action));
         out.effects.push(Effect::Power {
             pc: p.id.clone(),
@@ -112,6 +124,7 @@ impl Machine {
                 if p.action.is_some() || !tunnel_up {
                     return;
                 }
+                p.last_check = Some(now);
                 self.poll_result(pi, ready, now, out);
             }
             PcProbe::Check => {
@@ -122,6 +135,7 @@ impl Machine {
                     p.action = None;
                     return;
                 }
+                p.last_check = Some(now);
                 if ready {
                     // P6
                     p.action = None;
@@ -148,6 +162,12 @@ impl Machine {
             // P1
             p.waking_until = None;
             p.failures = 0;
+            if p.failed
+                .as_ref()
+                .is_some_and(|f| f.kind == PcFailKind::Wake)
+            {
+                p.failed = None;
+            }
             let notice = was_waking.then(|| Notice::PcOnline {
                 pc: p.name.clone(),
                 host: p.host.to_string(),
@@ -168,6 +188,13 @@ impl Machine {
                 let power_sent = p.power_sent;
                 let name = p.name.clone();
                 let host = p.host.to_string();
+                if was == PcState::Online
+                    && p.failed
+                        .as_ref()
+                        .is_some_and(|f| f.kind == PcFailKind::Power)
+                {
+                    p.failed = None;
+                }
                 self.set_pc_state(pi, PcState::Offline);
                 if was == PcState::Online && !power_sent {
                     log::warn!("pc {host} stopped responding");
@@ -175,7 +202,14 @@ impl Machine {
                 }
                 if was_waking {
                     log::warn!("pc {host} did not answer within the wake timeout");
-                    out.notices.push(Notice::PcTimeout { pc: name });
+                    let notice = Notice::PcTimeout { pc: name };
+                    if let Some(p) = self.pcs.get_mut(pi) {
+                        p.failed = Some(Failure {
+                            kind: PcFailKind::Wake,
+                            notice: notice.clone(),
+                        });
+                    }
+                    out.notices.push(notice);
                 }
             }
         }
@@ -213,10 +247,15 @@ impl Machine {
             }
             Err(detail) => {
                 log::error!("wake of {} failed: {detail}", p.id);
-                out.notices.push(Notice::WakeFailed {
+                let notice = Notice::WakeFailed {
                     pc: p.name.clone(),
                     detail,
+                };
+                p.failed = Some(Failure {
+                    kind: PcFailKind::Wake,
+                    notice: notice.clone(),
                 });
+                out.notices.push(notice);
             }
         }
     }
@@ -245,10 +284,15 @@ impl Machine {
             }
             Err(detail) => {
                 log::error!("{action:?} command for {} failed: {detail}", p.id);
-                out.notices.push(Notice::PowerFailed {
+                let notice = Notice::PowerFailed {
                     pc: p.name.clone(),
                     detail,
+                };
+                p.failed = Some(Failure {
+                    kind: PcFailKind::Power,
+                    notice: notice.clone(),
                 });
+                out.notices.push(notice);
             }
         }
     }

@@ -28,6 +28,18 @@ impl Time {
         Self(Duration::from_millis(millis))
     }
 
+    /// This time rounded down to a multiple of `step` (unchanged if `step` is zero).
+    pub fn floor_to(self, step: Duration) -> Time {
+        let step = step.as_millis();
+        if step == 0 {
+            return self;
+        }
+        let millis = self.0.as_millis() / step * step;
+        Time(Duration::from_millis(
+            u64::try_from(millis).unwrap_or(u64::MAX),
+        ))
+    }
+
     /// The time elapsed since `earlier`, zero if `earlier` is later.
     pub fn since(self, earlier: Time) -> Duration {
         self.0.saturating_sub(earlier.0)

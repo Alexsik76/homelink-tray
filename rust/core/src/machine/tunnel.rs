@@ -12,13 +12,21 @@
 //! | T8  | any             | full probe: service not running        | Down        | PCs Unknown; `TunnelLost` if it was Up unasked     |
 //! | T9  | any             | full probe: running, host silent       | Starting    | PCs Unknown; no notice                             |
 //! | T10 | any             | full probe: host answers               | Up          | PC probes for due PCs                              |
+//! | T11 | Starting/Up     | `TunnelDownDone(Err)`                  | (observed)  | notice `TunnelStopFailed`; probe now; stop failure |
+//!
+//! Failed state (F1-F6, section 5.6 of the architecture): T1 and T4 clear a failure; T5 and
+//! T7 set a start failure and T11 a stop failure; a probe that finds the host answering (T6,
+//! T10) clears a start failure and one that finds the service not running (T8) clears a stop
+//! failure. T8 and T9 also clear the failures of the PCs behind the tunnel (F13).
 
 use super::{
-    Effect, Machine, Observation, Output, PcAction, PcProbe, START_POLL, TunnelAction, TunnelProbe,
+    Effect, Failure, Machine, Observation, Output, PcAction, PcProbe, START_POLL, TunnelAction,
+    TunnelFailKind, TunnelProbe,
 };
 use crate::domain::{PcId, PcState, TunnelId, TunnelState};
 use crate::notice::Notice;
 use crate::ports::Time;
+use crate::snapshot::TunnelToggle;
 
 impl Machine {
     /// `ToggleTunnel`: T1 or T4.
@@ -35,10 +43,9 @@ impl Machine {
             log::info!("skipped: another action is in progress");
             return;
         }
-        if t.state == TunnelState::Down {
-            self.start_tunnel(ti, now, out);
-        } else {
-            self.stop_tunnel(ti, out);
+        match TunnelToggle::for_state(t.state) {
+            TunnelToggle::Raise => self.start_tunnel(ti, now, out),
+            TunnelToggle::Lower => self.stop_tunnel(ti, out),
         }
     }
 
@@ -47,6 +54,7 @@ impl Machine {
         let Some(t) = self.tunnels.get_mut(ti) else {
             return;
         };
+        t.failed = None;
         t.state = TunnelState::Starting;
         t.awaiting = Some(now + t.timeout);
         t.expect_down = false;
@@ -60,6 +68,7 @@ impl Machine {
         let Some(t) = self.tunnels.get_mut(ti) else {
             return;
         };
+        t.failed = None;
         t.expect_down = true;
         t.awaiting = None;
         t.action = Some(TunnelAction::Down);
@@ -83,6 +92,7 @@ impl Machine {
             .collect();
         for pi in ids {
             if let Some(p) = self.pcs.get_mut(pi) {
+                p.failed = None;
                 p.failures = 0;
                 p.next_probe = now;
                 if clear_waking {
@@ -113,6 +123,7 @@ impl Machine {
             // Like `refresh()` while busy: the result is ignored, the action decides.
             return;
         }
+        t.last_check = Some(now);
         let deadline = t.awaiting;
         let mut immediate = false;
         match (kind, observation) {
@@ -146,6 +157,12 @@ impl Machine {
         t.expect_down = false;
         t.awaiting = None;
         t.state = TunnelState::Down;
+        if t.failed
+            .as_ref()
+            .is_some_and(|f| f.kind == TunnelFailKind::Stop)
+        {
+            t.failed = None;
+        }
         let name = t.name.clone();
         self.clear_pending(ti);
         self.reset_pcs(ti, now, true);
@@ -170,6 +187,12 @@ impl Machine {
             t.awaiting = None;
             t.expect_down = false;
             t.state = TunnelState::Up;
+            if t.failed
+                .as_ref()
+                .is_some_and(|f| f.kind == TunnelFailKind::Start)
+            {
+                t.failed = None;
+            }
         }
         for p in self.pcs.iter_mut().filter(|p| p.tunnel == Some(ti)) {
             if p.action.is_some() || p.probing {
@@ -199,9 +222,14 @@ impl Machine {
         };
         t.awaiting = None;
         log::warn!("tunnel {} did not answer within {:?}", t.name, t.timeout);
-        out.notices.push(Notice::TunnelTimeout {
+        let notice = Notice::TunnelTimeout {
             tunnel: t.name.clone(),
+        };
+        t.failed = Some(Failure {
+            kind: TunnelFailKind::Start,
+            notice: notice.clone(),
         });
+        out.notices.push(notice);
         self.clear_pending(ti);
         true
     }
@@ -223,20 +251,43 @@ impl Machine {
             if let Err(detail) = result {
                 log::error!("tunnel start failed: {detail}");
                 t.awaiting = None;
-                out.notices.push(Notice::TunnelFailed {
+                let notice = Notice::TunnelFailed {
                     tunnel: t.name.clone(),
                     detail,
+                };
+                t.failed = Some(Failure {
+                    kind: TunnelFailKind::Start,
+                    notice: notice.clone(),
                 });
+                out.notices.push(notice);
                 self.clear_pending(ti);
             }
         }
     }
 
-    /// The result of stopping a tunnel: observe the real state at once.
-    pub(super) fn tunnel_down_done(&mut self, id: &TunnelId, now: Time) {
+    /// The result of stopping a tunnel: T11 on an error, then observe the real state at once.
+    pub(super) fn tunnel_down_done(
+        &mut self,
+        id: &TunnelId,
+        result: Result<(), String>,
+        now: Time,
+        out: &mut Output,
+    ) {
         if let Some(t) = self.tunnel_idx(id).and_then(|i| self.tunnels.get_mut(i)) {
             t.action = None;
             t.next_probe = now;
+            if let Err(detail) = result {
+                log::error!("tunnel stop failed: {detail}");
+                let notice = Notice::TunnelStopFailed {
+                    tunnel: t.name.clone(),
+                    detail,
+                };
+                t.failed = Some(Failure {
+                    kind: TunnelFailKind::Stop,
+                    notice: notice.clone(),
+                });
+                out.notices.push(notice);
+            }
         }
     }
 

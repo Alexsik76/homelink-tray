@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::domain::{PcState as P, TunnelState as T};
+use crate::snapshot::DisplayState as D;
 use crate::testing::{multi_config, pc_id, single_config, tunnel_id};
 
 const SEC: Duration = Duration::from_secs(1);
@@ -179,7 +180,13 @@ fn t4_toggle_while_up_stops_it_and_a_later_loss_is_silent() {
     let now = online(&mut m);
     let out = m.step(Input::Command(Command::ToggleTunnel(home())), now);
     assert_eq!(out.effects, [Effect::TunnelDown(home())]);
-    m.step(Input::TunnelDownDone { tunnel: home() }, now);
+    m.step(
+        Input::TunnelDownDone {
+            tunnel: home(),
+            result: Ok(()),
+        },
+        now,
+    );
     let out = tunnel_probed(
         &mut m,
         &home(),
@@ -1033,4 +1040,459 @@ fn snapshot_decides_the_available_actions() {
     let snap = m.snapshot();
     assert!(snap.groups[0].pcs[0].busy);
     assert_eq!(snap.groups[0].pcs[0].actions, Actions::default());
+}
+
+// ---------- failure state (section 5.6) ----------
+
+fn tunnel_view(m: &Machine) -> TunnelView {
+    m.snapshot().groups.remove(0).tunnel.expect("tunnel group")
+}
+
+fn desktop_view(m: &Machine) -> PcView {
+    m.snapshot().groups.remove(0).pcs.remove(0)
+}
+
+fn start_failed(m: &mut Machine, now: Time) {
+    m.step(Input::Command(Command::Wake(desktop())), now);
+    m.step(
+        Input::TunnelUpDone {
+            tunnel: home(),
+            result: Err("access denied".into()),
+        },
+        now,
+    );
+}
+
+fn tunnel_seen(m: &mut Machine, o: Observation, now: Time) {
+    tunnel_probed(m, &home(), TunnelProbe::Full, o, now);
+}
+
+/// Desktop online, then a power command that failed.
+fn power_failed(m: &mut Machine) -> Time {
+    let now = online(m);
+    m.step(
+        Input::Command(Command::Power(desktop(), PowerAction::Sleep)),
+        now,
+    );
+    m.step(
+        Input::PowerDone {
+            pc: desktop(),
+            action: PowerAction::Sleep,
+            result: Err("denied".into()),
+        },
+        now,
+    );
+    now
+}
+
+#[test]
+fn f2_a_failed_start_is_fail_and_survives_the_probe_that_follows_it() {
+    let mut m = single();
+    start_failed(&mut m, at(1));
+    let v = tunnel_view(&m);
+    assert_eq!(v.display, D::Fail);
+    assert_eq!(
+        v.last_error,
+        Some(Notice::TunnelFailed {
+            tunnel: "Home".into(),
+            detail: "access denied".into()
+        })
+    );
+    // T5 schedules a probe at once; it reads "stopped" and that is not a recovery.
+    tunnel_seen(&mut m, Observation::NotRunning, at(1));
+    assert_eq!(m.tunnel_state(&home()), Some(T::Down));
+    assert_eq!(tunnel_view(&m).display, D::Fail);
+    // Neither is a running service that does not answer yet.
+    tunnel_seen(&mut m, Observation::Silent, at(6));
+    assert_eq!(tunnel_view(&m).display, D::Fail);
+    // F5: seen up.
+    tunnel_seen(&mut m, Observation::Reachable, at(11));
+    let v = tunnel_view(&m);
+    assert_eq!((v.display, v.last_error), (D::Ok, None));
+}
+
+#[test]
+fn f3_a_start_timeout_is_fail_until_the_tunnel_is_seen_up() {
+    let mut m = single();
+    m.step(Input::Command(Command::ToggleTunnel(home())), Time::ZERO);
+    m.step(
+        Input::TunnelUpDone {
+            tunnel: home(),
+            result: Ok(()),
+        },
+        Time::ZERO,
+    );
+    assert_eq!(tunnel_view(&m).display, D::Busy);
+    tunnel_probed(
+        &mut m,
+        &home(),
+        TunnelProbe::ReachOnly,
+        Observation::Silent,
+        at(20),
+    );
+    let v = tunnel_view(&m);
+    assert_eq!(v.display, D::Fail);
+    assert_eq!(
+        v.last_error,
+        Some(Notice::TunnelTimeout {
+            tunnel: "Home".into()
+        })
+    );
+    // The full probe that follows still finds the service silent.
+    tunnel_seen(&mut m, Observation::Silent, at(20));
+    assert_eq!(tunnel_view(&m).display, D::Fail);
+    tunnel_seen(&mut m, Observation::Reachable, at(25));
+    assert_eq!(tunnel_view(&m).display, D::Ok);
+}
+
+#[test]
+fn f1_a_new_request_ends_the_failure_of_a_tunnel() {
+    let mut m = single();
+    start_failed(&mut m, Time::ZERO);
+    tunnel_seen(&mut m, Observation::NotRunning, Time::ZERO);
+    m.step(Input::Command(Command::ToggleTunnel(home())), at(2));
+    let v = tunnel_view(&m);
+    assert_eq!((v.display, v.last_error), (D::Busy, None));
+
+    // Connect-and-wake is a request too, and so is a stop.
+    let mut m = single();
+    start_failed(&mut m, Time::ZERO);
+    tunnel_seen(&mut m, Observation::NotRunning, Time::ZERO);
+    m.step(Input::Command(Command::Wake(desktop())), at(2));
+    assert_eq!(tunnel_view(&m).display, D::Busy);
+
+    let mut m = single();
+    let now = online(&mut m);
+    m.step(Input::Command(Command::ToggleTunnel(home())), now);
+    m.step(
+        Input::TunnelDownDone {
+            tunnel: home(),
+            result: Err("busy".into()),
+        },
+        now,
+    );
+    assert_eq!(tunnel_view(&m).display, D::Fail);
+    m.step(Input::Command(Command::ToggleTunnel(home())), at(1));
+    assert_eq!(tunnel_view(&m).last_error, None);
+}
+
+#[test]
+fn f4_a_failed_stop_is_fail_until_the_tunnel_is_seen_down() {
+    let mut m = single();
+    let now = online(&mut m);
+    let out = m.step(Input::Command(Command::ToggleTunnel(home())), now);
+    assert_eq!(out.effects, [Effect::TunnelDown(home())]);
+    let out = m.step(
+        Input::TunnelDownDone {
+            tunnel: home(),
+            result: Err("access denied".into()),
+        },
+        now,
+    );
+    let notice = Notice::TunnelStopFailed {
+        tunnel: "Home".into(),
+        detail: "access denied".into(),
+    };
+    assert_eq!(out.notices.as_slice(), std::slice::from_ref(&notice));
+    let v = tunnel_view(&m);
+    assert_eq!((v.display, v.state), (D::Fail, T::Up));
+    assert_eq!(v.last_error, Some(notice));
+    // F6: the tunnel still answers, so the stop did not work; seen down it did.
+    tunnel_seen(&mut m, Observation::Reachable, at(1));
+    assert_eq!(tunnel_view(&m).display, D::Fail);
+    tunnel_seen(&mut m, Observation::NotRunning, at(2));
+    let v = tunnel_view(&m);
+    assert_eq!((v.display, v.last_error), (D::Off, None));
+}
+
+#[test]
+fn f4_a_panicked_stop_job_is_a_failed_stop() {
+    let mut m = single();
+    let now = online(&mut m);
+    m.step(Input::Command(Command::ToggleTunnel(home())), now);
+    let out = m.step(Input::Panicked(Effect::TunnelDown(home())), now);
+    assert_eq!(out.notices.len(), 1);
+    assert_eq!(tunnel_view(&m).display, D::Fail);
+}
+
+#[test]
+fn f8_a_failed_wake_request_is_fail_until_the_pc_is_seen_online() {
+    let mut m = single();
+    m.step(Input::Tick, Time::ZERO);
+    tunnel_seen(&mut m, Observation::Reachable, Time::ZERO);
+    pc_probed(&mut m, &desktop(), PcProbe::Poll, false, Time::ZERO);
+    m.step(Input::Command(Command::Wake(desktop())), Time::ZERO);
+    pc_probed(&mut m, &desktop(), PcProbe::Check, false, Time::ZERO);
+    m.step(
+        Input::WakeDone {
+            pc: desktop(),
+            result: Err("connection refused".into()),
+        },
+        Time::ZERO,
+    );
+    let v = desktop_view(&m);
+    assert_eq!((v.display, v.state), (D::Fail, P::Offline));
+    assert_eq!(
+        v.last_error,
+        Some(Notice::WakeFailed {
+            pc: "Desktop".into(),
+            detail: "connection refused".into()
+        })
+    );
+    // Still not answering: still failed. F11: answering ends it.
+    pc_probed(&mut m, &desktop(), PcProbe::Poll, false, at(5));
+    assert_eq!(desktop_view(&m).display, D::Fail);
+    pc_probed(&mut m, &desktop(), PcProbe::Poll, true, at(10));
+    let v = desktop_view(&m);
+    assert_eq!((v.display, v.last_error), (D::Ok, None));
+}
+
+#[test]
+fn f9_a_wake_timeout_is_fail_until_the_pc_answers_or_a_new_request() {
+    let mut m = single();
+    let now = waking(&mut m);
+    assert_eq!(desktop_view(&m).display, D::Busy);
+    pc_probed(&mut m, &desktop(), PcProbe::Poll, false, now + 180 * SEC);
+    let v = desktop_view(&m);
+    assert_eq!((v.display, v.state), (D::Fail, P::Offline));
+    assert_eq!(
+        v.last_error,
+        Some(Notice::PcTimeout {
+            pc: "Desktop".into()
+        })
+    );
+    pc_probed(&mut m, &desktop(), PcProbe::Poll, false, now + 190 * SEC);
+    assert_eq!(desktop_view(&m).display, D::Fail);
+    // F7: a new wake request.
+    m.step(Input::Command(Command::Wake(desktop())), now + 200 * SEC);
+    let v = desktop_view(&m);
+    assert_eq!((v.display, v.last_error), (D::Busy, None));
+    // F11: answering ends the failure too.
+    let mut m = single();
+    let now = waking(&mut m);
+    pc_probed(&mut m, &desktop(), PcProbe::Poll, false, now + 180 * SEC);
+    pc_probed(&mut m, &desktop(), PcProbe::Poll, true, now + 185 * SEC);
+    assert_eq!(desktop_view(&m).display, D::Ok);
+}
+
+#[test]
+fn f10_a_failed_power_command_is_fail_and_survives_polls_that_still_find_the_pc_online() {
+    let mut m = single();
+    let now = power_failed(&mut m);
+    let v = desktop_view(&m);
+    assert_eq!((v.display, v.state), (D::Fail, P::Online));
+    assert_eq!(
+        v.last_error,
+        Some(Notice::PowerFailed {
+            pc: "Desktop".into(),
+            detail: "denied".into()
+        })
+    );
+    for n in 1..4 {
+        pc_probed(&mut m, &desktop(), PcProbe::Poll, true, now + n * SEC);
+        assert_eq!(desktop_view(&m).display, D::Fail, "poll {n}");
+    }
+}
+
+#[test]
+fn f12_a_power_failure_ends_when_the_pc_is_seen_leaving_online() {
+    let mut m = single();
+    let now = power_failed(&mut m);
+    for n in 1..3 {
+        pc_probed(&mut m, &desktop(), PcProbe::Poll, false, now + n * SEC);
+        assert_eq!(desktop_view(&m).display, D::Fail, "a blip changes nothing");
+    }
+    pc_probed(&mut m, &desktop(), PcProbe::Poll, false, now + 3 * SEC);
+    let v = desktop_view(&m);
+    assert_eq!(
+        (v.display, v.state, v.last_error),
+        (D::Off, P::Offline, None)
+    );
+}
+
+#[test]
+fn f7_a_power_request_ends_the_failure() {
+    let mut m = single();
+    let now = power_failed(&mut m);
+    m.step(
+        Input::Command(Command::Power(desktop(), PowerAction::Shutdown)),
+        now + SEC,
+    );
+    let v = desktop_view(&m);
+    assert_eq!((v.display, v.last_error), (D::Busy, None));
+    m.step(
+        Input::PowerDone {
+            pc: desktop(),
+            action: PowerAction::Shutdown,
+            result: Ok(()),
+        },
+        now + 2 * SEC,
+    );
+    assert_eq!(desktop_view(&m).display, D::Ok);
+}
+
+#[test]
+fn f13_losing_the_tunnel_ends_the_failure_of_its_pcs() {
+    let mut m = single();
+    power_failed(&mut m);
+    tunnel_seen(&mut m, Observation::NotRunning, at(5));
+    let v = desktop_view(&m);
+    assert_eq!(
+        (v.display, v.state, v.last_error),
+        (D::Unknown, P::Unknown, None)
+    );
+}
+
+#[test]
+fn a_pc_waiting_for_its_tunnel_is_busy_and_does_not_inherit_the_tunnel_failure() {
+    let mut m = single();
+    m.step(Input::Command(Command::Wake(desktop())), Time::ZERO);
+    assert_eq!(desktop_view(&m).display, D::Busy, "waiting for the tunnel");
+    m.step(
+        Input::TunnelUpDone {
+            tunnel: home(),
+            result: Err("access denied".into()),
+        },
+        at(1),
+    );
+    assert_eq!(tunnel_view(&m).display, D::Fail);
+    let v = desktop_view(&m);
+    assert_eq!((v.display, v.last_error), (D::Unknown, None));
+}
+
+#[test]
+fn display_states_follow_the_observations() {
+    let mut m = single();
+    assert_eq!(tunnel_view(&m).display, D::Unknown, "never checked");
+    assert_eq!(desktop_view(&m).display, D::Unknown);
+    m.step(Input::Tick, Time::ZERO);
+    tunnel_seen(&mut m, Observation::NotRunning, Time::ZERO);
+    assert_eq!(tunnel_view(&m).display, D::Off);
+    tunnel_seen(&mut m, Observation::Silent, at(5));
+    assert_eq!(tunnel_view(&m).display, D::Busy);
+    tunnel_seen(&mut m, Observation::Reachable, at(10));
+    assert_eq!(tunnel_view(&m).display, D::Ok);
+    pc_probed(&mut m, &desktop(), PcProbe::Poll, false, at(10));
+    assert_eq!(desktop_view(&m).display, D::Off);
+    pc_probed(&mut m, &desktop(), PcProbe::Poll, true, at(15));
+    assert_eq!(desktop_view(&m).display, D::Ok);
+}
+
+#[test]
+fn the_check_time_is_the_last_result_that_counted_rounded_down() {
+    let mut m = single();
+    assert_eq!(tunnel_view(&m).last_checked, None);
+    assert_eq!(desktop_view(&m).last_checked, None);
+    m.step(Input::Tick, Time::ZERO);
+    tunnel_seen(&mut m, Observation::Reachable, at(37));
+    assert_eq!(tunnel_view(&m).last_checked, Some(at(30)));
+    pc_probed(&mut m, &desktop(), PcProbe::Poll, true, at(95));
+    assert_eq!(desktop_view(&m).last_checked, Some(at(90)));
+    // A result that is ignored while an action runs is not a completed check.
+    m.step(
+        Input::Command(Command::Power(desktop(), PowerAction::Sleep)),
+        at(96),
+    );
+    pc_probed(&mut m, &desktop(), PcProbe::Poll, true, at(130));
+    assert_eq!(desktop_view(&m).last_checked, Some(at(90)));
+}
+
+#[test]
+fn idle_polling_within_a_step_does_not_change_the_snapshot() {
+    let mut m = single();
+    m.step(Input::Tick, Time::ZERO);
+    tunnel_seen(&mut m, Observation::Reachable, at(1));
+    pc_probed(&mut m, &desktop(), PcProbe::Poll, true, at(1));
+    let before = m.snapshot();
+    tunnel_seen(&mut m, Observation::Reachable, at(6));
+    pc_probed(&mut m, &desktop(), PcProbe::Poll, true, at(6));
+    assert_eq!(m.snapshot(), before);
+}
+
+#[test]
+fn the_snapshot_describes_each_pc_and_tunnel() {
+    let m = multi();
+    let snap = m.snapshot();
+    let home_view = snap.groups[0].tunnel.as_ref().unwrap();
+    assert_eq!(home_view.kind, "WireGuard");
+    assert_eq!(home_view.pcs, ["Desktop", "Laptop"]);
+    assert_eq!(home_view.toggle, TunnelToggle::Raise);
+
+    let desktop_v = &snap.groups[0].pcs[0];
+    assert_eq!(desktop_v.address, "192.168.88.10");
+    assert_eq!(desktop_v.tunnel_name.as_deref(), Some("Home"));
+    assert_eq!(desktop_v.ports, [3389]);
+    assert_eq!(
+        desktop_v.wake,
+        Some(WakeSummary::Relay {
+            relay: "gateway".into(),
+            kind: crate::domain::RelayKind::RouterOs
+        })
+    );
+    let laptop = &snap.groups[0].pcs[1];
+    assert_eq!(laptop.ports, [3389, 445]);
+    assert_eq!(
+        laptop.wake,
+        Some(WakeSummary::MagicPacket {
+            address: "192.168.88.255".parse().unwrap(),
+            port: 9
+        })
+    );
+    // Configured is independent of the state: laptop has a shutdown command only.
+    assert_eq!(
+        laptop.configured,
+        Actions {
+            wake: true,
+            sleep: false,
+            shutdown: true,
+            rdp: false
+        }
+    );
+    assert!(!laptop.actions.shutdown, "not online: not available now");
+    let office_pc = &snap.groups[1].pcs[0];
+    assert_eq!(
+        office_pc.wake,
+        Some(WakeSummary::Command {
+            program: "wakeonlan".into()
+        })
+    );
+    let nas = &snap.groups[2].pcs[0];
+    assert_eq!(nas.tunnel_name, None);
+    assert_eq!(nas.address, "10.0.0.7");
+}
+
+#[test]
+fn the_toggle_names_what_it_would_do() {
+    let mut m = single();
+    assert_eq!(tunnel_view(&m).toggle, TunnelToggle::Raise);
+    m.step(Input::Command(Command::ToggleTunnel(home())), Time::ZERO);
+    assert_eq!(tunnel_view(&m).toggle, TunnelToggle::Lower, "starting");
+}
+
+#[test]
+fn the_tray_follows_the_displayed_states() {
+    use crate::snapshot::Attention;
+    let mut m = single();
+    assert_eq!(m.snapshot().tray.screen, D::Unknown);
+    let now = online(&mut m);
+    let tray = m.snapshot().tray;
+    assert_eq!(
+        (tray.screen, tray.corner, tray.tunnels_up, tray.pcs_online),
+        (D::Ok, Attention::None, 1, 1)
+    );
+    m.step(
+        Input::Command(Command::Power(desktop(), PowerAction::Sleep)),
+        now,
+    );
+    assert_eq!(m.snapshot().tray.corner, Attention::Busy);
+    m.step(
+        Input::PowerDone {
+            pc: desktop(),
+            action: PowerAction::Sleep,
+            result: Err("x".into()),
+        },
+        now,
+    );
+    assert_eq!(m.snapshot().tray.corner, Attention::Fail);
+    assert_eq!(m.snapshot().tray.screen, D::Ok, "the tunnel is fine");
 }

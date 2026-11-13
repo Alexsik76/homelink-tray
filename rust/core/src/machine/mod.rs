@@ -17,10 +17,15 @@
 use std::time::Duration;
 
 use crate::config::Config;
-use crate::domain::{Host, PcId, PcState, PowerAction, PowerMethod, Timing, TunnelId, TunnelState};
+use crate::domain::{
+    Host, PcId, PcState, PowerAction, PowerMethod, Timing, TunnelId, TunnelState, WakeMethod,
+};
 use crate::notice::Notice;
 use crate::ports::Time;
-use crate::snapshot::{Actions, GroupView, PcView, Snapshot, TrayState, TunnelView};
+use crate::snapshot::{
+    Actions, CHECK_STEP, DisplayState, GroupView, PcView, Snapshot, TrayState, TunnelToggle,
+    TunnelView, WakeSummary,
+};
 
 mod pc;
 mod tunnel;
@@ -138,6 +143,8 @@ pub enum Input {
     TunnelDownDone {
         /// The tunnel.
         tunnel: TunnelId,
+        /// `Err` carries the reason.
+        result: Result<(), String>,
     },
     /// Sending a wake request finished.
     WakeDone {
@@ -185,10 +192,40 @@ enum PcAction {
     Power(PowerAction),
 }
 
+/// What a failed tunnel action was after; decides which observation ends the failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TunnelFailKind {
+    /// Start failed or timed out: ends when the tunnel is seen up.
+    Start,
+    /// Stop failed: ends when the tunnel is seen down.
+    Stop,
+}
+
+/// What a failed PC action was after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PcFailKind {
+    /// The wake request failed or the wake timeout expired: ends when the PC is seen online.
+    Wake,
+    /// A power command failed: ends when the PC is seen leaving `Online`.
+    Power,
+}
+
+/// The failure of an entity's last requested action (section 5.6 of the architecture).
+#[derive(Debug, Clone)]
+struct Failure<K> {
+    kind: K,
+    /// The notice that was shown for it; also what the details window shows.
+    notice: Notice,
+}
+
 #[derive(Debug)]
 struct TunnelRt {
     id: TunnelId,
     name: String,
+    kind: &'static str,
+    failed: Option<Failure<TunnelFailKind>>,
+    /// When the last probe result that counted was applied.
+    last_check: Option<Time>,
     timeout: Duration,
     poll: Duration,
     state: TunnelState,
@@ -212,6 +249,11 @@ struct PcRt {
     can_sleep: bool,
     can_shutdown: bool,
     can_rdp: bool,
+    ports: Vec<u16>,
+    wake: Option<WakeSummary>,
+    failed: Option<Failure<PcFailKind>>,
+    /// When the last probe result that counted was applied.
+    last_check: Option<Time>,
     state: PcState,
     failures: u32,
     waking_until: Option<Time>,
@@ -240,6 +282,9 @@ impl Machine {
             .map(|t| TunnelRt {
                 id: t.id.clone(),
                 name: t.name.clone(),
+                kind: t.kind.label(),
+                failed: None,
+                last_check: None,
                 timeout: t.timeout,
                 poll: config.defaults.poll,
                 state: TunnelState::Down,
@@ -266,6 +311,10 @@ impl Machine {
                 can_sleep: supports(p.power.as_ref(), PowerAction::Sleep),
                 can_shutdown: supports(p.power.as_ref(), PowerAction::Shutdown),
                 can_rdp: p.rdp.is_some(),
+                ports: p.ports.clone(),
+                wake: p.wake.as_ref().and_then(|w| wake_summary(config, w)),
+                failed: None,
+                last_check: None,
                 state: PcState::Unknown,
                 failures: 0,
                 waking_until: None,
@@ -297,7 +346,9 @@ impl Machine {
             Input::TunnelUpDone { tunnel, result } => {
                 self.tunnel_up_done(&tunnel, result, now, &mut out);
             }
-            Input::TunnelDownDone { tunnel } => self.tunnel_down_done(&tunnel, now),
+            Input::TunnelDownDone { tunnel, result } => {
+                self.tunnel_down_done(&tunnel, result, now, &mut out);
+            }
             Input::WakeDone { pc, result } => self.wake_done(&pc, result, now, &mut out),
             Input::PowerDone { pc, action, result } => {
                 self.power_done(&pc, action, result, &mut out);
@@ -347,23 +398,41 @@ impl Machine {
                     shutdown: idle && online && p.can_shutdown,
                     rdp: idle && online && p.can_rdp,
                 },
+                display: p.display(),
+                last_checked: p.last_check.map(|t| t.floor_to(CHECK_STEP)),
+                last_error: p.failed.as_ref().map(|f| f.notice.clone()),
+                address: p.host.to_string(),
+                tunnel_name: p
+                    .tunnel
+                    .and_then(|ti| self.tunnels.get(ti))
+                    .map(|t| t.name.clone()),
+                wake: p.wake.clone(),
+                ports: p.ports.clone(),
+                configured: Actions {
+                    wake: p.can_wake,
+                    sleep: p.can_sleep,
+                    shutdown: p.can_shutdown,
+                    rdp: p.can_rdp,
+                },
             }
         };
         let mut groups: Vec<GroupView> = Vec::new();
         for (i, t) in self.tunnels.iter().enumerate() {
+            let behind: Vec<&PcRt> = self.pcs.iter().filter(|p| p.tunnel == Some(i)).collect();
             groups.push(GroupView {
                 tunnel: Some(TunnelView {
                     id: t.id.clone(),
                     name: t.name.clone(),
                     state: t.state,
                     can_toggle: t.action.is_none(),
+                    display: t.display(),
+                    last_checked: t.last_check.map(|c| c.floor_to(CHECK_STEP)),
+                    last_error: t.failed.as_ref().map(|f| f.notice.clone()),
+                    kind: t.kind,
+                    pcs: behind.iter().map(|p| p.name.clone()).collect(),
+                    toggle: TunnelToggle::for_state(t.state),
                 }),
-                pcs: self
-                    .pcs
-                    .iter()
-                    .filter(|p| p.tunnel == Some(i))
-                    .map(pc_view)
-                    .collect(),
+                pcs: behind.into_iter().map(pc_view).collect(),
             });
         }
         let loose: Vec<PcView> = self
@@ -379,8 +448,8 @@ impl Machine {
             });
         }
         let tray = TrayState::summarise(
-            self.tunnels.iter().map(|t| t.state),
-            self.pcs.iter().map(|p| p.state),
+            self.tunnels.iter().map(|t| (t.display(), t.state)),
+            self.pcs.iter().map(|p| (p.display(), p.state)),
         );
         Snapshot { groups, tray }
     }
@@ -486,14 +555,46 @@ impl Machine {
                 }
             }
             Effect::TunnelUp(tunnel) => self.tunnel_up_done(&tunnel, failed(), now, out),
-            Effect::TunnelDown(tunnel) => self.tunnel_down_done(&tunnel, now),
+            Effect::TunnelDown(tunnel) => self.tunnel_down_done(&tunnel, failed(), now, out),
             Effect::Wake(pc) => self.wake_done(&pc, failed(), now, out),
             Effect::Power { pc, action } => self.power_done(&pc, action, failed(), out),
         }
     }
 }
 
+impl TunnelRt {
+    /// The marker state: a failure first, then connecting, up and stopped; a tunnel that has
+    /// not been checked yet is unknown.
+    fn display(&self) -> DisplayState {
+        if self.failed.is_some() {
+            return DisplayState::Fail;
+        }
+        match self.state {
+            TunnelState::Starting => DisplayState::Busy,
+            TunnelState::Up => DisplayState::Ok,
+            TunnelState::Down if self.last_check.is_none() => DisplayState::Unknown,
+            TunnelState::Down => DisplayState::Off,
+        }
+    }
+}
+
 impl PcRt {
+    /// The marker state: a failure first, then in progress (an action runs, the PC waits for
+    /// its tunnel, or it is waking), online, off, unknown.
+    fn display(&self) -> DisplayState {
+        if self.failed.is_some() {
+            return DisplayState::Fail;
+        }
+        if self.action.is_some() || self.connect_pending || self.state == PcState::Waking {
+            return DisplayState::Busy;
+        }
+        match self.state {
+            PcState::Online => DisplayState::Ok,
+            PcState::Offline => DisplayState::Off,
+            PcState::Unknown | PcState::Waking => DisplayState::Unknown,
+        }
+    }
+
     fn interval(&self) -> Duration {
         if self.state == PcState::Waking {
             self.timing.wake_poll
@@ -501,6 +602,24 @@ impl PcRt {
             self.timing.poll
         }
     }
+}
+
+/// How a wake method is summarised for the UI; `None` for a relay that is not configured
+/// (the configuration validation rules that out).
+fn wake_summary(config: &Config, wake: &WakeMethod) -> Option<WakeSummary> {
+    Some(match wake {
+        WakeMethod::Relay { relay, .. } => WakeSummary::Relay {
+            relay: relay.to_string(),
+            kind: config.relay(relay)?.kind,
+        },
+        WakeMethod::MagicPacket { address, port, .. } => WakeSummary::MagicPacket {
+            address: *address,
+            port: *port,
+        },
+        WakeMethod::Command { argv, .. } => WakeSummary::Command {
+            program: argv.items().first().cloned().unwrap_or_default(),
+        },
+    })
 }
 
 fn supports(power: Option<&PowerMethod>, action: PowerAction) -> bool {

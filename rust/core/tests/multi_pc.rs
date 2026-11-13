@@ -11,6 +11,7 @@
 use homelink_core::domain::{PcState, PowerAction, TunnelState, WakeKind};
 use homelink_core::machine::Command;
 use homelink_core::notice::Notice;
+use homelink_core::snapshot::{Attention, DisplayState};
 use homelink_core::testing::{Harness, multi_config, pc_id, tunnel_id};
 
 const HOME_PROBE: &str = "192.168.88.1";
@@ -368,8 +369,17 @@ fn the_snapshot_groups_pcs_by_tunnel_and_summarises_for_the_tray() {
         [vec!["Desktop", "Laptop"], vec!["Office PC"], vec!["NAS"]]
     );
     assert!(snapshot.groups[2].tunnel.is_none());
-    assert_eq!(snapshot.tray.tunnel, TunnelState::Down);
-    assert_eq!(snapshot.tray.pc, PcState::Online, "the NAS is online");
+    assert_eq!(snapshot.tray.screen, DisplayState::Off);
+    assert_eq!(snapshot.tray.corner, Attention::None);
+    assert_eq!(
+        (snapshot.tray.tunnels_up, snapshot.tray.tunnels_total),
+        (0, 2)
+    );
+    assert_eq!(
+        (snapshot.tray.pcs_online, snapshot.tray.pcs_total),
+        (1, 4),
+        "the NAS is online"
+    );
 }
 
 #[test]

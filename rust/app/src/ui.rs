@@ -191,8 +191,9 @@ impl Ui {
         let (Some(panel), Some(tray)) = (self.panel.upgrade(), self.tray.upgrade()) else {
             return;
         };
-        tray.set_pc_screen(view_state(snapshot.tray.pc));
-        tray.set_badge(link_state(snapshot.tray.tunnel));
+        let (pc_screen, badge) = legacy_tray(snapshot);
+        tray.set_pc_screen(view_state(pc_screen));
+        tray.set_badge(link_state(badge));
         tray.set_tip(self.tooltip(snapshot).into());
         let groups: Vec<GroupRow> = snapshot
             .groups
@@ -416,6 +417,30 @@ fn action_enabled(snapshot: &Snapshot, pc: &PcId, action: PowerAction) -> bool {
             PowerAction::Sleep => view.actions.sleep,
             PowerAction::Shutdown => view.actions.shutdown,
         })
+}
+
+/// The old tray rule (the PC screen: the first of waking, online, offline, unknown; the
+/// badge: starting, else up, else down), until the tray icon follows `Snapshot::tray`.
+fn legacy_tray(snapshot: &Snapshot) -> (PcState, TunnelState) {
+    let pcs: Vec<PcState> = snapshot
+        .groups
+        .iter()
+        .flat_map(|g| g.pcs.iter().map(|p| p.state))
+        .collect();
+    let tunnels: Vec<TunnelState> = snapshot
+        .groups
+        .iter()
+        .filter_map(|g| g.tunnel.as_ref().map(|t| t.state))
+        .collect();
+    let pc = [PcState::Waking, PcState::Online, PcState::Offline]
+        .into_iter()
+        .find(|s| pcs.contains(s))
+        .unwrap_or(PcState::Unknown);
+    let tunnel = [TunnelState::Starting, TunnelState::Up]
+        .into_iter()
+        .find(|s| tunnels.contains(s))
+        .unwrap_or(TunnelState::Down);
+    (pc, tunnel)
 }
 
 fn view_state(state: PcState) -> ViewState {
