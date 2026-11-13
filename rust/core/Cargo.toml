@@ -38,3 +38,11 @@ required-features = ["testing"]
 [[test]]
 name = "real_engine"
 required-features = ["testing"]
+
+[[test]]
+name = "reload"
+required-features = ["testing"]
+
+[[test]]
+name = "wizard_roundtrip"
+required-features = ["testing"]

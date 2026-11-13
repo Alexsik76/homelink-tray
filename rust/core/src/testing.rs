@@ -745,6 +745,13 @@ impl Harness {
         self.send(Command::Power(pc_id(pc), action));
     }
 
+    /// `Handle::reload` with a new configuration, then lets everything that can happen happen.
+    pub fn reload(&mut self, config: Config) {
+        assert!(self.handle.reload(config.clone()), "the engine has stopped");
+        self.config = config;
+        self.settle();
+    }
+
     /// Processes everything ready now; while a started tunnel is awaited, advances the
     /// clock by the start polling interval (as v0.3 slept 1 s per attempt) and repeats.
     pub fn settle(&mut self) {

@@ -17,6 +17,7 @@ use crate::domain::{
     RelayId, RelayKind, Timing, Tunnel, TunnelId, TunnelKind, WakeMethod,
 };
 use crate::i18n::{Lang, LanguageSetting};
+use crate::rules::{self, Fault};
 
 /// Upper bound of every timeout and interval, in seconds. A technical sanity limit.
 pub const MAX_SECONDS: u64 = 3600;
@@ -63,21 +64,23 @@ impl Ctx {
     }
 
     fn bounded(&mut self, path: &str, value: u64, max: u64, unit: &str) -> Option<u64> {
-        if value == 0 {
-            self.err(path, "must be greater than 0");
-            None
-        } else if value > max {
-            self.err(path, format!("must be at most {max} {unit}, got {value}"));
-            None
-        } else {
-            Some(value)
+        match rules::bounded(value, max) {
+            Ok(value) => Some(value),
+            Err(Fault::Zero) => {
+                self.err(path, "must be greater than 0");
+                None
+            }
+            Err(_) => {
+                self.err(path, format!("must be at most {max} {unit}, got {value}"));
+                None
+            }
         }
     }
 
     fn port(&mut self, path: &str, value: i64) -> Option<u16> {
-        match u16::try_from(value) {
-            Ok(port) if port != 0 => Some(port),
-            _ => {
+        match rules::port(value) {
+            Ok(port) => Some(port),
+            Err(_) => {
                 self.err(
                     path,
                     format!("must be a port number from 1 to 65535, got {value}"),
@@ -394,10 +397,9 @@ fn validate_relays(ctx: &mut Ctx, raw: &[RawRelay]) -> Vec<Relay> {
         let kind = relay_kind(r.kind);
         // `sudo` is a required yes/no for presets whose tool may need root and does not
         // exist for the others; there is no default.
-        let sudo = match (kind.supports_sudo(), r.sudo) {
-            (true, Some(value)) => Some(value),
-            (false, None) => Some(false),
-            (true, None) => {
+        let sudo = match rules::sudo_for(kind, r.sudo) {
+            Ok(value) => Some(value),
+            Err(Fault::Missing) => {
                 ctx.err(
                     at("sudo"),
                     format!(
@@ -407,7 +409,7 @@ fn validate_relays(ctx: &mut Ctx, raw: &[RawRelay]) -> Vec<Relay> {
                 );
                 None
             }
-            (false, Some(_)) => {
+            Err(_) => {
                 ctx.err(
                     at("sudo"),
                     format!("is not used by the '{}' preset; remove it", kind.code()),
@@ -576,21 +578,26 @@ fn validate_wake(
             let mut preset_ok = true;
             if let Some(kind) = known.map(|r| relay_kind(r.kind)) {
                 let name = kind.code();
-                if kind.uses_interface() && interface.is_none() {
-                    ctx.err(
-                        format!("{path}.interface"),
-                        format!("is required by the '{name}' preset of relay '{relay}'"),
-                    );
-                    preset_ok = false;
+                match rules::interface_for(kind, interface.is_some()) {
+                    Ok(()) => {}
+                    Err(Fault::Missing) => {
+                        ctx.err(
+                            format!("{path}.interface"),
+                            format!("is required by the '{name}' preset of relay '{relay}'"),
+                        );
+                        preset_ok = false;
+                    }
+                    Err(_) => {
+                        ctx.err(
+                            format!("{path}.interface"),
+                            format!(
+                                "is not used by the '{name}' preset of relay '{relay}'; remove it"
+                            ),
+                        );
+                        preset_ok = false;
+                    }
                 }
-                if !kind.uses_interface() && interface.is_some() {
-                    ctx.err(
-                        format!("{path}.interface"),
-                        format!("is not used by the '{name}' preset of relay '{relay}'; remove it"),
-                    );
-                    preset_ok = false;
-                }
-                if !kind.uses_address() && address.is_some() {
+                if rules::address_for(kind, address.is_some()).is_err() {
                     ctx.err(
                         format!("{path}.address"),
                         format!("is not used by the '{name}' preset of relay '{relay}'; remove it"),
@@ -690,36 +697,40 @@ fn validate_power(ctx: &mut Ctx, path: &str, raw: &RawPower) -> Option<PowerMeth
 /// profile `ssh` would resolve a relative or `~` path in. Recognises Windows (`C:\`, `C:/`,
 /// `\\server`) and Unix (`/`) forms regardless of the platform the program runs on.
 fn check_absolute_path(ctx: &mut Ctx, path: &str, value: &str) -> bool {
-    if !ctx.non_empty(path, value) {
-        return false;
+    match rules::absolute_path(value) {
+        Ok(()) => true,
+        Err(Fault::Empty) => {
+            ctx.err(path, "must not be empty");
+            false
+        }
+        Err(_) => {
+            ctx.err(
+                path,
+                format!(
+                    "must be an absolute path (such as C:\\Users\\me\\.ssh\\key), got '{value}'"
+                ),
+            );
+            false
+        }
     }
-    let bytes = value.as_bytes();
-    let drive = bytes.first().is_some_and(u8::is_ascii_alphabetic)
-        && bytes.get(1) == Some(&b':')
-        && matches!(bytes.get(2), Some(b'\\' | b'/'));
-    if !(value.starts_with(['/', '\\']) || drive) || value.chars().any(char::is_control) {
-        ctx.err(
-            path,
-            format!("must be an absolute path (such as C:\\Users\\me\\.ssh\\key), got '{value}'"),
-        );
-        return false;
-    }
-    true
 }
 
 /// An SSH user becomes part of a command line: no blanks, no `@`, no leading `-`.
 fn check_ssh_user(ctx: &mut Ctx, path: &str, user: &str) -> bool {
-    if !ctx.non_empty(path, user) {
-        return false;
+    match rules::ssh_user(user) {
+        Ok(()) => true,
+        Err(Fault::Empty) => {
+            ctx.err(path, "must not be empty");
+            false
+        }
+        Err(_) => {
+            ctx.err(
+                path,
+                format!("'{user}' must not contain blanks or '@' or start with '-'"),
+            );
+            false
+        }
     }
-    if user.starts_with('-') || user.contains('@') || user.chars().any(|c| c.is_whitespace()) {
-        ctx.err(
-            path,
-            format!("'{user}' must not contain blanks or '@' or start with '-'"),
-        );
-        return false;
-    }
-    true
 }
 
 fn validate_rdp(ctx: &mut Ctx, path: &str, raw: &RawRdp) -> Option<Rdp> {

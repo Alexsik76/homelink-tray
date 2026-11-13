@@ -48,7 +48,9 @@ pub struct Deps {
 
 enum Message {
     Command(Command),
-    Done(Input),
+    /// A finished job and the generation (the number of reloads so far) it was started in.
+    Done(u64, Input),
+    Reload(Box<Config>),
     Stop,
 }
 
@@ -62,6 +64,19 @@ impl Handle {
     /// Queues a command. Returns false if the engine has stopped.
     pub fn send(&self, command: Command) -> bool {
         self.tx.send(Message::Command(command)).is_ok()
+    }
+
+    /// Replaces the configuration of the running engine (after the settings were changed).
+    /// Returns false if the engine has stopped.
+    ///
+    /// The engine starts over with the new configuration: every tunnel and PC begins as
+    /// unknown and is probed at once (a running tunnel is found running and a PC that
+    /// answers is found online, with no notice), a new snapshot is published, and the
+    /// results of jobs started under the old configuration are dropped. Pending
+    /// wake requests and action markers of the old configuration are forgotten. The
+    /// handle, the thread, the sink and the UI stay as they are.
+    pub fn reload(&self, config: Config) -> bool {
+        self.tx.send(Message::Reload(Box::new(config))).is_ok()
     }
 
     /// Asks the engine to stop; [`Engine::run`] returns after finishing the current step.
@@ -79,6 +94,7 @@ pub struct Engine {
     rx: Receiver<Message>,
     last: Option<Snapshot>,
     stopped: bool,
+    generation: u64,
 }
 
 impl Engine {
@@ -95,6 +111,7 @@ impl Engine {
             rx,
             last: None,
             stopped: false,
+            generation: 0,
         };
         (engine, handle)
     }
@@ -168,7 +185,23 @@ impl Engine {
         let now = self.deps.clock.now();
         let input = match message {
             Message::Command(command) => Input::Command(command),
-            Message::Done(input) => input,
+            Message::Done(generation, input) => {
+                if generation != self.generation {
+                    // Started under an earlier configuration: nothing here asked for it.
+                    log::debug!("dropped a result of an earlier configuration");
+                    return true;
+                }
+                input
+            }
+            Message::Reload(config) => {
+                log::info!("applying a new configuration");
+                self.generation += 1;
+                self.machine = Machine::new(&config, now);
+                self.config = Arc::new(*config);
+                self.last = None;
+                self.publish_if_changed();
+                return true;
+            }
             Message::Stop => {
                 self.stopped = true;
                 return false;
@@ -203,13 +236,14 @@ impl Engine {
         let deps = self.deps.clone();
         let config = Arc::clone(&self.config);
         let tx = self.tx.clone();
+        let generation = self.generation;
         self.deps.executor.spawn(Box::new(move || {
             let result = catch_unwind(AssertUnwindSafe(|| run_effect(&deps, &config, &effect)));
             let input = result.unwrap_or_else(|_| {
                 log::error!("job panicked: {effect:?}");
                 Input::Panicked(effect.clone())
             });
-            let _ = tx.send(Message::Done(input));
+            let _ = tx.send(Message::Done(generation, input));
         }));
     }
 }

@@ -226,7 +226,7 @@ probed directly and is `Unknown` only until its first probe.
 
 Commands (UI to engine): `ToggleTunnel(id)`, `Wake(pc)`, `Power(pc, action)` are machine
 commands; stopping is `Handle::stop`; `OpenRdp(pc)` is handled by the app (it only launches
-`mstsc`) and `Reload(config)` arrives with phase 5. Semantics of `Wake(pc)`: tunnel PC with the
+`mstsc`); a new configuration is applied with `Handle::reload(config)` (section 8). Semantics of `Wake(pc)`: tunnel PC with the
 tunnel not `Up` means connect-and-wake (the old `connect_and_wake`); otherwise send the
 wake request. Ignored while the PC is `Online` or `Waking`.
 
@@ -610,8 +610,31 @@ Validation (all problems are collected and reported together, each with its path
   The write itself is atomic (temporary file in the same folder, then rename).
 
 Loading yields a `Config` of validated domain types (invalid states unrepresentable after
-this point); the rest of core never re-validates. The engine accepts `Reload(Config)` (phase 5):
-entities with unchanged ids keep their state, removed ones are dropped.
+this point); the rest of core never re-validates.
+
+**Applying a changed configuration.** `Handle::reload(Config)` is an engine message (like
+`stop`), not a machine command, so the UI keeps the same handle, thread, sink and windows.
+The engine starts over with the new configuration: a fresh `Machine` (every tunnel and PC
+unknown and due at once), a new snapshot, and a generation counter that makes it drop the
+results of jobs started under the old configuration (so no stale result reaches a machine
+that never asked for it). A running tunnel is found running by the first full probe and a PC
+that answers is found online, both without a notice; a wake or a start that was in flight is
+forgotten (the PC then shows as it really is a poll later). Entities are *not* matched by id
+to carry state over: that would keep the in-flight flags of jobs whose results are dropped.
+After the settings window saves (`settings::Change::save`) the app calls
+`Handle::reload(change.config)` and refreshes anything it built from the startup
+configuration (the RDP launcher: `RdpLauncher::update`). `rdp/<pc id>.rdp` files are never
+rewritten or renamed, so a renamed PC starts a new file and a changed address does not reach
+an existing one.
+
+**Forms.** `core::settings` (lists, tunnel and PC add/edit/delete as pure operations that
+return a `Change`), `core::wizard` (the add-PC draft), `core::tunnel_form`, `core::checks` and
+`core::about` are the logic behind the settings window and the wizard. Their field rules are
+the same code as the validator above (`core::rules`; the domain parsers), their errors are
+`problem::Problem` values (field, code, parameters) worded by `Translator::problem` from the
+keys `problem.<code>`; the tests assert that a form accepts a value exactly when the file
+would. Ids are derived from names (slug, transliterated, unique per kind), stable on edit
+unless the name changes.
 
 ## 9. Errors and notifications
 
@@ -671,30 +694,37 @@ https://slint.dev (required by the royalty-free licence) and the third-party lic
 ## 11. Wizard
 
 The wizard is a second Slint window; its logic (`core::wizard`) is pure and tested on Linux. A
-`PcDraft` moves through steps; each step validates its slice with the same validators as section 8,
-and the last step converts the draft to a `Pc` (plus a `Tunnel`/`Relay` if created) and saves.
-It also edits an existing PC.
+`PcDraft` moves through five steps; each step validates its slice with the same rules as section 8
+(`validate_step`), and `build` converts the draft to a `Pc` (plus a new `Relay` if the wake method
+needs one) that `settings::save_pc` adds to the configuration and saves in place. "Змінити" on
+a PC reuses the wizard, filled by `PcDraft::from_pc`. The step structure follows
+`docs/design/ui-handoff.md` section 8, which is authoritative (the older six-step list of the
+first proposal is gone: no new tunnel in the wizard, tunnels are made in the settings window;
+the operating system is a parameter of the SSH power method; there is no summary step).
 
-1. Name, OS, address.
-2. Tunnel: none / existing / new. New WireGuard: auto-detect `wireguard.exe` and list
-   `*.conf.dpapi` from its `Data\Configurations`; ask for `probe_host`.
-3. Readiness ports (presets: RDP 3389, SSH 22, custom) and "Check now" (raises the tunnel for the check if needed).
-4. Wake method: none / through a relay host over SSH / direct magic packet / command; MAC and
-   method fields.
-   - *Relay host:* pick or create a relay (host, port, user, key; see "SSH setup" below) and
-     choose its **preset**: RouterOS, etherwake or wakeonlan (`wizard.relay.*`). The preset
+1. Address and ports: name, IP address or host name, readiness ports (comma separated).
+2. Tunnel: an existing tunnel or none (`wizard::tunnel_options`).
+3. Wake method: none / through a relay host over SSH / direct magic packet / command, then the
+   parameters of the chosen method.
+   - *Relay host:* pick an existing relay or create one (host, port, user, key file, preset,
+     sudo; see "SSH setup" below) and choose its **preset**: RouterOS, etherwake or wakeonlan (`wizard.relay.*`). The preset
      decides which fields the step shows: an interface for RouterOS and etherwake, an optional
-     destination address for wakeonlan. The step then shows the setup commands for that preset
-     (below).
-   - *Direct magic packet:* a destination address (default: broadcast) and port; when the PC is
+     destination address for wakeonlan, the sudo question for etherwake and wakeonlan. The step
+     then shows the setup commands for that preset (below).
+   - *Direct magic packet:* MAC, a destination address (default: broadcast) and port; when the PC is
      behind a tunnel or in another VLAN the step shows the routed-setup help (unicast to the
      PC's IP and a static ARP entry on the last router, `wizard.magic.routed_help`).
-5. Power: none / SSH (user, key; "Test connection" as below) / command.
-6. RDP (optional): user name only. The step says that HomeLink never handles the RDP password:
-   it is typed in the Remote Desktop window, which can remember it (`wizard.rdp.note`).
-7. Summary and save.
+   - *Command:* a command line (`{host}`, and `{mac}` when a MAC is given), optional MAC, timeout.
+4. Sleep and shutdown: the boxes "Дозволити сон", "Дозволити вимкнення", "Дозволити RDP", then
+   the control parameters: SSH (user, port, key file, operating system preset) or commands
+   (one per allowed action), and the RDP user name. The step says that HomeLink never handles
+   the RDP password (`wizard.rdp.note`). Over SSH sleep and shutdown always come together
+   (`PowerMethod::Ssh`), so both boxes must be ticked; with commands each stands alone.
+5. Checks (`core::checks`): readiness ports, SSH to the relay, SSH to the PC, each with a marker
+   and a short result; "Перевірити знову"; the PC can be saved without a successful check. The
+   checks need the tunnel up: with it down every row says so and nothing is run.
 
-**SSH setup** (steps 4 and 5; shared by relay hosts and PCs). The wizard does not ask for or store
+**SSH setup** (steps 3 and 4; shared by relay hosts and PCs). The wizard does not ask for or store
 any password.
 
 - *OpenSSH client check.* Before any SSH step the wizard looks for the client (`ssh.exe` and
@@ -727,7 +757,8 @@ any password.
   The text of each set lives in one place in core so tests and the wizard share it.
 - *PC side.* For an SSH power method the wizard shows the line to add to `authorized_keys`
   and, for Linux, the `sudoers` line from the README.
-- *Test connection.* Runs `ssh` with the same options as at run time (`BatchMode=yes`,
+- *Test connection* (step 5, `core::checks`; implemented up to reporting an unknown host key as
+  `CheckResult::SshHostKeyUnknown`; the consent flow below is **not built yet**). Runs `ssh` with the same options as at run time (`BatchMode=yes`,
   `IdentitiesOnly=yes`, `-i <key>`, `StrictHostKeyChecking=yes`). If the
   host key is unknown, the wizard shows its fingerprint and asks for explicit consent
   (`wizard.ssh.host_key_unknown`, `wizard.ssh.trust`); only on consent does it repeat the test
@@ -827,7 +858,7 @@ must equal `homelink.__version__`. Changes (the Python jobs stay until phase 7):
 | 3a Portable adapters (done) | `core::adapters`: TCP probe, magic packet, `StdCommandRunner`, command wake, SSH and command power runner, relay `sudo`; Linux integration tests against local stand-ins and a fake `ssh`; the real engine over them | tests green on Linux; the real-engine test passes |
 | 3b Windows adapters (code written, unit-tested on Linux; not yet run on Windows) | In `app/src/windows/`, as pure functions plus a thin layer over `CommandRunner`, no new Win32 binding: WireGuard service (`wireguard.exe` install/uninstall, state from `sc query`, parsed independently of the display language), ping (`TTL=`), OEM output decoder (code pages 437, 850, 866 from the registry value `OEMCP`; other pages decode ASCII only) plugged into `StdCommandRunner`, `.rdp` file and `mstsc`, elevation check and restart, display language from `reg query`. **Still open:** OpenSSH client detection (wizard); verify the RouterOS commands on RouterOS 7; real `sc query` output in a non-English OEM code page (the test samples follow the documented format and were not captured on Windows); decoders for other code pages if needed | adapter tests green in the Windows CI job (the CI `rust-app` job does not run the app's tests yet); a real `/tool wol` over SSH works |
 | 4 App shell (real mode works in code, not yet proven on Windows) | Done: panel on the real engine, tray with aggregate icon, `config.toml` with a template on the first start and every validation problem shown in the catalog language, rotating log file, single instance (file lock), elevation restart, RDP button, `--config`, cargo feature `demo` for the fake-driven mode. **Remaining:** tray balloons for notices (no Slint API found; notices go to the log), `requireAdministrator` manifest, taskbar theme (light/dark icon set), icons moved from `src/homelink/assets`, joining the engine thread on quit, local time in the log, app tests in CI | a single PC with a tunnel works end to end on Windows |
-| 5 Multi-PC and wizard | Groups, shared tunnel, PC without a tunnel, wizard (add/edit/delete), About with the Slint credit, config reload | tunnel groups, a shared tunnel and a PC without a tunnel work by hand |
+| 5 Multi-PC and wizard | Groups, shared tunnel, PC without a tunnel, wizard (add/edit/delete), About with the Slint credit, config reload. **Done (C1, core logic, tested on Linux):** `core::settings`, `core::wizard` (five steps of the handoff), `core::tunnel_form`, `core::checks`, `core::about`, `Handle::reload`, locale keys. **Open:** the settings and wizard windows, SSH host-key consent, key creation, third-party notices file | tunnel groups, a shared tunnel and a PC without a tunnel work by hand |
 | 6 Hardening | Manual checklist on Windows 10 LTSC and 11 (Linux and Windows remote PCs), docs rewrite (`README*.md`, `design.md`, relay and router setup, SSH for Windows), size and licence check, `v1.0.0-rc.1` | no open defects; parity checklist complete |
 | 7 Release | Remove `src/homelink/`, `tests/`, `pyproject.toml`, `build.bat`, `run_homelink.pyw`, Python CI jobs; decide the future of `tools/generate_icons.py` (keep as a dev tool or port); tag `v1.0.0` | release published, README links verified |
 

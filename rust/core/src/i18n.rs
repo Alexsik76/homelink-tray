@@ -214,6 +214,92 @@ impl Translator {
         }
     }
 
+    /// The message of a form problem (`problem.<code>`), to show under its field.
+    pub fn problem(&self, problem: &crate::problem::Problem) -> String {
+        let params: Vec<(&str, &str)> = problem
+            .params
+            .iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
+        self.t(&format!("problem.{}", problem.code.as_str()), &params)
+    }
+
+    /// The secondary text of a row of the settings lists.
+    pub fn secondary(&self, secondary: &crate::settings::Secondary) -> String {
+        use crate::settings::Secondary;
+        match secondary {
+            Secondary::PcCount(n) => {
+                let key = match n {
+                    0 => "settings.pc_count_zero",
+                    1 => "settings.pc_count_one",
+                    _ => "settings.pc_count_other",
+                };
+                self.t(key, &[("count", &n.to_string())])
+            }
+            Secondary::Tunnel(name) => name.clone(),
+            Secondary::NoTunnel => self.t("settings.no_tunnel", &[]),
+        }
+    }
+
+    /// The name of a check in the wizard's list.
+    pub fn check_name(&self, kind: crate::checks::CheckKind) -> String {
+        self.t(kind.name_key(), &[])
+    }
+
+    /// The short result text of a check (`check.result.*`).
+    pub fn check_result(&self, result: &crate::checks::CheckResult) -> String {
+        use crate::checks::CheckResult as R;
+        let list = |ports: &[u16]| {
+            ports
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        match result {
+            R::PortsOpen(ports) => self.t("check.result.ports_open", &[("ports", &list(ports))]),
+            R::PortsClosed(ports) => {
+                self.t("check.result.ports_closed", &[("ports", &list(ports))])
+            }
+            R::SshOk => self.t("check.result.ssh_ok", &[]),
+            R::SshHostKeyUnknown => self.t("check.result.ssh_host_key_unknown", &[]),
+            R::SshHostKeyChanged => self.t("check.result.ssh_host_key_changed", &[]),
+            R::SshAuthFailed => self.t("check.result.ssh_auth_failed", &[]),
+            R::SshRefused { detail } => {
+                self.t("check.result.ssh_refused", &[("detail", detail.as_str())])
+            }
+            R::SshNotInstalled => self.t("check.result.ssh_not_installed", &[]),
+            R::SshTimedOut => self.t("check.result.ssh_timed_out", &[]),
+            R::SshRemoteFailed { code, detail } => self.t(
+                "check.result.ssh_remote_failed",
+                &[("code", &code.to_string()), ("detail", detail.as_str())],
+            ),
+            R::TunnelDown => self.t("check.result.tunnel_down", &[]),
+        }
+    }
+
+    /// A relay in the list of step 3: host and preset.
+    pub fn relay_option(&self, option: &crate::wizard::RelayOption) -> String {
+        let kind = self.t(&format!("wizard.relay.{}", option.kind.code()), &[]);
+        self.t(
+            "wizard.relay.option",
+            &[("host", option.host.as_str()), ("kind", &kind)],
+        )
+    }
+
+    /// "Крок N з 5 · name" for the wizard header.
+    pub fn wizard_step(&self, step: crate::wizard::Step) -> String {
+        let name = self.t(step.name_key(), &[]);
+        self.t(
+            "wizard.step_of",
+            &[
+                ("n", &step.number().to_string()),
+                ("total", &crate::wizard::STEP_COUNT.to_string()),
+                ("name", &name),
+            ],
+        )
+    }
+
     /// Title and body of a notice.
     pub fn notice(&self, notice: &Notice) -> (String, String) {
         let owned = notice.params();
@@ -455,5 +541,78 @@ mod tests {
     fn placeholder_scan() {
         let found = placeholders("{a} and {b_1} but not { c } or {");
         assert_eq!(found.into_iter().collect::<Vec<_>>(), ["a", "b_1"]);
+    }
+
+    #[test]
+    fn secondary_texts_follow_the_handoff() {
+        use crate::settings::Secondary;
+        let uk = Translator::new(Lang::Uk);
+        assert_eq!(uk.secondary(&Secondary::NoTunnel), "без тунелю");
+        assert_eq!(uk.secondary(&Secondary::Tunnel("Home".into())), "Home");
+        assert_eq!(uk.secondary(&Secondary::PcCount(2)), "2 ПК");
+        let en = Translator::new(Lang::En);
+        assert_eq!(en.secondary(&Secondary::PcCount(0)), "no PCs");
+        assert_eq!(en.secondary(&Secondary::PcCount(1)), "1 PC");
+        assert_eq!(en.secondary(&Secondary::PcCount(3)), "3 PCs");
+    }
+
+    #[test]
+    fn the_wizard_header_and_step_names() {
+        use crate::wizard::Step;
+        let uk = Translator::new(Lang::Uk);
+        assert_eq!(uk.wizard_step(Step::Wake), "Крок 3 з 5 · Пробудження");
+        assert_eq!(uk.t("wizard.finish", &[]), "Готово");
+        assert_eq!(uk.t("wizard.step.power", &[]), "Сон і вимкнення");
+        for lang in Lang::ALL {
+            let tr = Translator::new(lang);
+            for step in Step::ALL {
+                assert!(!tr.t(step.name_key(), &[]).starts_with("wizard."));
+            }
+        }
+    }
+
+    #[test]
+    fn every_label_of_handoff_sections_7_and_8_exists() {
+        let keys = [
+            "settings.nav.tunnels_pcs",
+            "settings.nav.help",
+            "settings.nav.about",
+            "settings.section.tunnels",
+            "settings.section.pcs",
+            "settings.add_tunnel",
+            "settings.add_pc",
+            "settings.no_tunnel",
+            "action.edit",
+            "action.delete",
+            "about.version",
+            "about.description",
+            "about.slint",
+            "about.slint_version",
+            "about.font",
+            "about.license",
+            "about.third_party",
+            "wizard.title_add",
+            "wizard.back",
+            "wizard.next",
+            "wizard.finish",
+            "wizard.cancel",
+            "wizard.tunnel.none",
+            "wizard.wake.none",
+            "wizard.power.allow_sleep",
+            "wizard.power.allow_shutdown",
+            "wizard.power.allow_rdp",
+            "wizard.test.again",
+            "wizard.test.note",
+            "wizard.hint.ports",
+            "tunnel.field.conf",
+            "tunnel.field.probe_host",
+            "tunnel.form.save",
+        ];
+        for lang in Lang::ALL {
+            let c = catalog(lang);
+            for key in keys {
+                assert!(c.template(key).is_some(), "{} lacks '{key}'", lang.code());
+            }
+        }
     }
 }

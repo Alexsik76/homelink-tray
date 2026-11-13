@@ -6,16 +6,25 @@
 //! engine that drives it. The program stores no secrets: remote access uses SSH keys
 //! through the system OpenSSH client. See `docs/rust-architecture.md`.
 
+pub mod about;
 pub mod adapters;
+pub mod checks;
 pub mod config;
 pub mod domain;
 pub mod engine;
+mod forms;
 pub mod i18n;
+mod ids;
 pub mod machine;
 pub mod notice;
 pub mod ports;
+pub mod problem;
+mod rules;
+pub mod settings;
 pub mod snapshot;
 pub mod ssh;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod tunnel_form;
 pub mod wake;
+pub mod wizard;

@@ -12,6 +12,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 
 use homelink_core::config::Config;
 use homelink_core::domain::{Host, PcId, Rdp};
@@ -83,32 +84,51 @@ fn launch(path: &Path) -> io::Result<()> {
 /// The Remote Desktop settings of the PCs that have them, and where to put their files.
 pub(crate) struct RdpLauncher {
     config_dir: PathBuf,
-    pcs: Vec<(PcId, Host, Rdp)>,
+    pcs: Mutex<Vec<(PcId, Host, Rdp)>>,
+}
+
+fn rdp_entries(config: &Config) -> Vec<(PcId, Host, Rdp)> {
+    config
+        .pcs
+        .iter()
+        .filter_map(|pc| Some((pc.id.clone(), pc.host.clone(), pc.rdp.clone()?)))
+        .collect()
 }
 
 impl RdpLauncher {
     /// A launcher for the PCs of `config`; files go next to the configuration file in
     /// `config_dir`.
     pub(crate) fn new(config: &Config, config_dir: &Path) -> Self {
-        let pcs = config
-            .pcs
-            .iter()
-            .filter_map(|pc| Some((pc.id.clone(), pc.host.clone(), pc.rdp.clone()?)))
-            .collect();
         Self {
             config_dir: config_dir.to_owned(),
-            pcs,
+            pcs: Mutex::new(rdp_entries(config)),
+        }
+    }
+
+    /// Follows a configuration that replaced the one the launcher was made for (see
+    /// `Handle::reload`). Existing `.rdp` files are not rewritten.
+    #[allow(dead_code)] // called by the settings window, which is not built yet
+    pub(crate) fn update(&self, config: &Config) {
+        if let Ok(mut pcs) = self.pcs.lock() {
+            *pcs = rdp_entries(config);
         }
     }
 
     /// Makes sure the connection file of a PC exists (it is written only when missing) and
     /// returns its path. The error is ready to show.
     pub(crate) fn prepare_file(&self, id: &PcId) -> Result<PathBuf, String> {
-        let Some((_, host, rdp)) = self.pcs.iter().find(|(pc, _, _)| pc == id) else {
+        let found = self
+            .pcs
+            .lock()
+            .map_err(|_| "the Remote Desktop settings are unavailable".to_owned())?
+            .iter()
+            .find(|(pc, _, _)| pc == id)
+            .cloned();
+        let Some((_, host, rdp)) = found else {
             return Err("this PC has no Remote Desktop settings".into());
         };
         let path = file_path(&self.config_dir, id);
-        let content = encode_utf16le_with_bom(&file_text(host, &rdp.user, &rdp.options));
+        let content = encode_utf16le_with_bom(&file_text(&host, &rdp.user, &rdp.options));
         write_if_missing(&path, &content)
             .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
         Ok(path)
@@ -190,12 +210,26 @@ mod tests {
     fn the_launcher_knows_only_pcs_with_remote_desktop_settings() {
         let dir = temp_dir("pcs");
         let launcher = RdpLauncher::new(&single_config(), &dir);
-        assert_eq!(launcher.pcs.len(), 1);
+        assert_eq!(launcher.pcs.lock().unwrap().len(), 1);
         let unknown = PcId::parse("nobody").unwrap();
         assert_eq!(
             launcher.prepare_file(&unknown),
             Err("this PC has no Remote Desktop settings".into())
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_launcher_follows_a_new_configuration() {
+        let dir = temp_dir("update");
+        let launcher = RdpLauncher::new(&single_config(), &dir);
+        let mut config = single_config();
+        config.pcs.clear();
+        launcher.update(&config);
+        let id = PcId::parse("desktop").unwrap();
+        assert!(launcher.prepare_file(&id).is_err());
+        launcher.update(&single_config());
+        assert!(launcher.prepare_file(&id).is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
 
