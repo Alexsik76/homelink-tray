@@ -74,6 +74,25 @@ pub(crate) enum Armed {
     Pc(String),
 }
 
+/// What a click on a "Видалити" button does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DeleteStep {
+    /// The first click: this delete now waits for its confirmation.
+    Arm(Armed),
+    /// The second click on the same button: delete.
+    Delete,
+}
+
+/// The two-click delete: a click on the button that is armed deletes; a click on any other
+/// button arms that one instead (replacing the armed one).
+pub(crate) fn delete_step(armed: Option<&Armed>, clicked: Armed) -> DeleteStep {
+    if armed == Some(&clicked) {
+        DeleteStep::Delete
+    } else {
+        DeleteStep::Arm(clicked)
+    }
+}
+
 /// The settings, the tunnel form and the wizard, and the state behind them. Lives on the event
 /// loop thread (see [`with_manage`]).
 pub(crate) struct Manage {
@@ -466,8 +485,9 @@ impl Manage {
         let Ok(tunnel) = TunnelId::parse(id) else {
             return;
         };
-        if *self.armed.borrow() != Some(Armed::Tunnel(id.to_owned())) {
-            self.set_armed(Some(Armed::Tunnel(id.to_owned())));
+        let step = delete_step(self.armed.borrow().as_ref(), Armed::Tunnel(id.to_owned()));
+        if let DeleteStep::Arm(armed) = step {
+            self.set_armed(Some(armed));
             return;
         }
         self.set_armed(None);
@@ -483,8 +503,9 @@ impl Manage {
         let Ok(pc) = PcId::parse(id) else {
             return;
         };
-        if *self.armed.borrow() != Some(Armed::Pc(id.to_owned())) {
-            self.set_armed(Some(Armed::Pc(id.to_owned())));
+        let step = delete_step(self.armed.borrow().as_ref(), Armed::Pc(id.to_owned()));
+        if let DeleteStep::Arm(armed) = step {
+            self.set_armed(Some(armed));
             return;
         }
         self.set_armed(None);
@@ -606,6 +627,47 @@ pub(crate) fn show_in_front<C: ComponentHandle>(window: &C) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_second_click_on_the_same_button_deletes_any_other_click_arms() {
+        let tunnel = Armed::Tunnel("home".into());
+        let pc = Armed::Pc("home".into());
+        assert_eq!(
+            delete_step(None, tunnel.clone()),
+            DeleteStep::Arm(tunnel.clone())
+        );
+        assert_eq!(
+            delete_step(Some(&tunnel), tunnel.clone()),
+            DeleteStep::Delete
+        );
+        // The same id in the other list is another button.
+        assert_eq!(delete_step(Some(&tunnel), pc.clone()), DeleteStep::Arm(pc));
+        let other = Armed::Tunnel("office".into());
+        assert_eq!(
+            delete_step(Some(&tunnel), other.clone()),
+            DeleteStep::Arm(other)
+        );
+    }
+
+    #[test]
+    fn the_ids_of_the_rows_are_the_ids_the_actions_parse() {
+        use homelink_core::testing::multi_config;
+        let config = multi_config();
+        let tunnels = settings::tunnel_rows(&config);
+        let pcs = settings::pc_rows(&config);
+        assert!(!tunnels.is_empty() && !pcs.is_empty());
+        for row in &tunnels {
+            let id = TunnelId::parse(&row.id).unwrap();
+            assert!(config.tunnel(&id).is_some(), "{}", row.id);
+            // "Змінити" and "Видалити" find what the row shows.
+            assert!(TunnelForm::from_tunnel(config.tunnel(&id).unwrap()).name == row.name);
+        }
+        for row in &pcs {
+            let id = PcId::parse(&row.id).unwrap();
+            assert_eq!(config.pc(&id).unwrap().name, row.name);
+            assert!(settings::delete_pc(&config, &id).is_some());
+        }
+    }
 
     #[test]
     fn a_problem_goes_under_its_field_and_the_first_one_wins() {

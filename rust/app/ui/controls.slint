@@ -125,19 +125,25 @@ export component Btn inherits Rectangle {
         }
     }
 
-    Text {
-        text: root.label;
-        color: !root.available ? Theme.disabled
-            : root.kind == BtnKind.primary ? Theme.on-ink
-            : root.kind == BtnKind.text ? root.tone
-            : Theme.ink;
-        font-size: root.kind == BtnKind.text ? 12px : 12px;
-        font-weight: root.kind == BtnKind.text ? 400 : 600;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        overflow: elide;
-        width: parent.width;
-        height: parent.height;
+    // The label sits in a layout, so that the button's preferred width is the width of its text
+    // plus padding. Without it a button outside a fixed-width slot has no width at all (its
+    // children were sized from the parent), which made the text buttons of the list rows
+    // zero wide: packed at the left, and with no area to click.
+    HorizontalLayout {
+        padding-left: root.kind == BtnKind.text ? 6px : 16px;
+        padding-right: root.kind == BtnKind.text ? 6px : 16px;
+        Text {
+            text: root.label;
+            color: !root.available ? Theme.disabled
+                : root.kind == BtnKind.primary ? Theme.on-ink
+                : root.kind == BtnKind.text ? root.tone
+                : Theme.ink;
+            font-size: 12px;
+            font-weight: root.kind == BtnKind.text ? 400 : 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
     }
 
     ta := TouchArea {

@@ -81,20 +81,27 @@ component ListRow inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
         }
-        Btn {
-            kind: BtnKind.text;
-            label: Words.edit;
-            tone: Theme.ink;
-            clicked => {
-                root.edit();
+        // The buttons are 28 high: each sits in a column that centres it in the 36 px row.
+        VerticalLayout {
+            alignment: center;
+            Btn {
+                kind: BtnKind.text;
+                label: Words.edit;
+                tone: Theme.ink;
+                clicked => {
+                    root.edit();
+                }
             }
         }
-        Btn {
-            kind: BtnKind.text;
-            label: root.armed ? Words.delete-confirm : Words.delete;
-            tone: Theme.state-fail;
-            clicked => {
-                root.remove();
+        VerticalLayout {
+            alignment: center;
+            Btn {
+                kind: BtnKind.text;
+                label: root.armed ? Words.delete-confirm : Words.delete;
+                tone: Theme.state-fail;
+                clicked => {
+                    root.remove();
+                }
             }
         }
     }
