@@ -52,9 +52,9 @@ pub(crate) struct Real {
     /// Opens Remote Desktop.
     pub(crate) rdp: Arc<RdpLauncher>,
     /// The settings file, where the settings window saves changes.
-    #[allow(dead_code)] // used by the settings window, which is not built yet
     pub(crate) config_path: PathBuf,
-    runner: Arc<dyn CommandRunner>,
+    /// Runs the external programs (the checks of the settings, the links).
+    pub(crate) runner: Arc<dyn CommandRunner>,
     _instance: InstanceGuard,
 }
 

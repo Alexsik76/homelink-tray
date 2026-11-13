@@ -1,0 +1,377 @@
+// The settings window (docs/design/ui-handoff.md, section 7; dark addendum section 3). A plain
+// window with the system frame: a navigation column and three pages. The lists and the delete
+// confirmation are driven by the app; the page only shows what it is given.
+
+import { Theme, StateMark, Mark } from "main.slint";
+import { Words, Btn, BtnKind, Divider } from "controls.slint";
+
+// One row of a list: the id is sent back with the actions.
+export struct SettingsRow {
+    id: string,
+    name: string,
+    secondary: string,
+    // The delete button of this row waits for its confirmation.
+    armed: bool,
+}
+
+// A navigation item: 36 high; the selected one has a bg fill and a 3 px ink bar on its left edge.
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked();
+
+    height: 36px;
+    background: root.selected ? Theme.bg : (ta.has-hover ? Theme.hover : transparent);
+
+    if root.selected : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 3px;
+        height: parent.height;
+        background: Theme.ink;
+    }
+    Text {
+        x: 16px;
+        width: parent.width - 24px;
+        height: parent.height;
+        text: root.label;
+        color: Theme.ink;
+        font-size: 13px;
+        font-weight: root.selected ? 600 : 400;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A row of a list: 36 high, the name (13/600), the secondary text (12/400 muted), and the text
+// buttons "Змінити" (edit) and "Видалити" (delete, which asks again when armed).
+component ListRow inherits Rectangle {
+    in property <string> name;
+    in property <string> secondary;
+    in property <bool> armed;
+    callback edit();
+    callback remove();
+
+    height: 36px;
+    background: transparent;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 12px;
+        alignment: start;
+        Text {
+            text: root.name;
+            color: Theme.ink;
+            font-size: 13px;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: root.secondary;
+            color: Theme.muted;
+            font-size: 12px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Btn {
+            kind: BtnKind.text;
+            label: Words.edit;
+            tone: Theme.ink;
+            clicked => {
+                root.edit();
+            }
+        }
+        Btn {
+            kind: BtnKind.text;
+            label: root.armed ? Words.delete-confirm : Words.delete;
+            tone: Theme.state-fail;
+            clicked => {
+                root.remove();
+            }
+        }
+    }
+}
+
+// A section title with its add button on the right (the button is 28 high).
+component SectionHead inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> button;
+    callback add();
+    height: 28px;
+    alignment: space-between;
+    Text {
+        text: root.title;
+        color: Theme.ink;
+        font-size: 13px;
+        font-weight: 600;
+        vertical-alignment: center;
+    }
+    Btn {
+        label: root.button;
+        height: 28px;
+        clicked => {
+            root.add();
+        }
+    }
+}
+
+export component SettingsWindow inherits Window {
+    in property <[SettingsRow]> tunnels;
+    in property <[SettingsRow]> pcs;
+    // Shown under the lists while a delete waits for its confirmation.
+    in property <string> armed-hint;
+    // The refusal or the failure of the last change, in state-fail.
+    in property <string> page-error;
+    in property <image> glyph;
+    in property <string> version-text;
+    in property <string> slint-version;
+    in property <string> slint-url;
+    // The page: 0 tunnels and PCs, 1 help, 2 about.
+    in-out property <int> page: 0;
+
+    callback add-tunnel();
+    callback add-pc();
+    callback edit-tunnel(string);
+    callback edit-pc(string);
+    callback delete-tunnel(string);
+    callback delete-pc(string);
+    // Any click on the page that is not one of its buttons cancels a waiting delete.
+    callback disarm();
+    callback open-link(string);
+
+    title: Words.settings-title;
+    width: 720px;
+    height: 480px;
+    background: Theme.bg;
+    default-font-family: "Inter";
+    default-font-size: 13px;
+
+    HorizontalLayout {
+        Rectangle {
+            width: 180px;
+            background: Theme.bg-side;
+            VerticalLayout {
+                padding-top: 8px;
+                alignment: start;
+                NavItem {
+                    label: Words.nav-tunnels;
+                    selected: root.page == 0;
+                    clicked => { root.page = 0; root.disarm(); }
+                }
+                NavItem {
+                    label: Words.nav-help;
+                    selected: root.page == 1;
+                    clicked => { root.page = 1; root.disarm(); }
+                }
+                NavItem {
+                    label: Words.nav-about;
+                    selected: root.page == 2;
+                    clicked => { root.page = 2; root.disarm(); }
+                }
+            }
+            Rectangle {
+                x: parent.width - 1px;
+                y: 0px;
+                width: 1px;
+                height: parent.height;
+                background: Theme.line;
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            TouchArea {
+                width: parent.width;
+                height: parent.height;
+                clicked => { root.disarm(); }
+            }
+
+            // Tunnels and PCs.
+            if root.page == 0 : Flickable {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                content-width: parent.width;
+                content-height: pages.preferred-height;
+
+                // Behind the lists, so that a click on the blank page cancels a waiting delete.
+                TouchArea {
+                    width: parent.width;
+                    height: pages.preferred-height;
+                    clicked => { root.disarm(); }
+                }
+
+                pages := VerticalLayout {
+                    padding: 16px;
+                    spacing: 20px;
+                    width: parent.width;
+
+                    VerticalLayout {
+                        spacing: 8px;
+                        SectionHead {
+                            title: Words.section-tunnels;
+                            button: Words.add-tunnel;
+                            add => { root.disarm(); root.add-tunnel(); }
+                        }
+                        if root.tunnels.length > 0 : Rectangle {
+                            background: Theme.surface;
+                            border-width: 1px;
+                            border-color: Theme.line;
+                            VerticalLayout {
+                                for row[i] in root.tunnels : VerticalLayout {
+                                    if i > 0 : Divider {}
+                                    ListRow {
+                                        name: row.name;
+                                        secondary: row.secondary;
+                                        armed: row.armed;
+                                        edit => { root.disarm(); root.edit-tunnel(row.id); }
+                                        remove => { root.delete-tunnel(row.id); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 8px;
+                        SectionHead {
+                            title: Words.section-pcs;
+                            button: Words.add-pc;
+                            add => { root.disarm(); root.add-pc(); }
+                        }
+                        if root.pcs.length > 0 : Rectangle {
+                            background: Theme.surface;
+                            border-width: 1px;
+                            border-color: Theme.line;
+                            VerticalLayout {
+                                for row[i] in root.pcs : VerticalLayout {
+                                    if i > 0 : Divider {}
+                                    ListRow {
+                                        name: row.name;
+                                        secondary: row.secondary;
+                                        armed: row.armed;
+                                        edit => { root.disarm(); root.edit-pc(row.id); }
+                                        remove => { root.delete-pc(row.id); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if root.armed-hint != "" : Text {
+                        text: root.armed-hint;
+                        color: Theme.ink-2;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    if root.page-error != "" : Text {
+                        text: root.page-error;
+                        color: Theme.state-fail;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            // Help: not designed yet, one muted line.
+            if root.page == 1 : Text {
+                x: 16px;
+                y: 16px;
+                width: parent.width - 32px;
+                text: Words.help-empty;
+                color: Theme.muted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+
+            // About (section 7): the glyph, the name, the version, the description and the
+            // licence block.
+            if root.page == 2 : VerticalLayout {
+                x: 16px;
+                y: 16px;
+                width: parent.width - 32px;
+                spacing: 8px;
+                alignment: start;
+
+                Image {
+                    width: 48px;
+                    height: 48px;
+                    source: root.glyph;
+                    image-fit: contain;
+                }
+                Text {
+                    text: Words.about-name;
+                    color: Theme.ink;
+                    font-size: 16px;
+                    font-weight: 600;
+                }
+                Text {
+                    text: root.version-text;
+                    color: Theme.muted;
+                    font-size: 12px;
+                }
+                Text {
+                    text: Words.about-description;
+                    color: Theme.ink-2;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+                Rectangle {
+                    height: 1px;
+                    background: Theme.line;
+                }
+                Text {
+                    text: Words.about-slint;
+                    color: Theme.ink-2;
+                    font-size: 13px;
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    Text {
+                        text: root.slint-version;
+                        color: Theme.ink-2;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        width: link.preferred-width;
+                        height: 18px;
+                        link := Text {
+                            text: root.slint-url;
+                            color: ta-link.has-hover ? Theme.link-hover : Theme.link;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                        ta-link := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+                            clicked => { root.open-link(root.slint-url); }
+                        }
+                    }
+                }
+                Text {
+                    text: Words.about-font;
+                    color: Theme.muted;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: Words.about-license;
+                    color: Theme.muted;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}

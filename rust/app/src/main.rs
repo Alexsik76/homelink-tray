@@ -16,12 +16,15 @@ mod appearance;
 mod demo;
 mod icon;
 mod instance;
+mod links;
 mod logging;
+mod manage;
 mod platform;
 mod real;
 mod ui;
 mod view;
 mod windows;
+mod wizard_ui;
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -29,6 +32,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use homelink_core::adapters::command::StdCommandRunner;
+use homelink_core::adapters::tcp::TcpPortProbe;
 use homelink_core::config::Config;
 use homelink_core::domain::PcId;
 use homelink_core::engine::{Deps, Engine, Handle};
@@ -100,12 +104,20 @@ fn main() -> ExitCode {
         Ok(real) => {
             let translator = real.translator.clone();
             let rdp = Arc::clone(&real.rdp);
+            let persist = manage::Persist {
+                path: Some(real.config_path.clone()),
+                rdp: Some(Arc::clone(&real.rdp)),
+                ports: Arc::new(TcpPortProbe),
+                runner: Arc::clone(&real.runner),
+                opener: Arc::clone(&real.runner),
+            };
             let result = run_ui(
                 real.config.clone(),
                 translator.clone(),
                 options.theme,
                 |sink| real.deps(sink),
                 Box::new(move |pc: &PcId| rdp.open(pc)),
+                persist,
                 |_| {},
             );
             finish(result, &translator)
@@ -142,6 +154,15 @@ fn run_demo(language: Option<LanguageSetting>, theme: ThemeSetting) -> ExitCode 
     let for_deps = config.clone();
     let fakes = demo::Fakes::default();
     let for_cycle = fakes.clone();
+    // The settings work on an in-memory copy: no file is written (`path` is None).
+    let persist = manage::Persist {
+        path: None,
+        rdp: None,
+        ports: fakes.ports(),
+        runner: demo::runner(),
+        // The link opens the real browser even in demo mode.
+        opener: Arc::new(StdCommandRunner::new()),
+    };
     let result = run_ui(
         config,
         translator.clone(),
@@ -151,6 +172,7 @@ fn run_demo(language: Option<LanguageSetting>, theme: ThemeSetting) -> ExitCode 
             log::info!("demo: Remote Desktop for {pc} would open here");
             Ok(())
         }),
+        persist,
         move |handle| demo::cycle(handle, for_cycle),
     );
     finish(result, &translator)
@@ -173,6 +195,7 @@ fn run_ui(
     theme: ThemeSetting,
     deps: impl FnOnce(Arc<dyn Sink>) -> Deps,
     rdp: ui::RdpAction,
+    persist: manage::Persist,
     start: impl FnOnce(Handle),
 ) -> Result<(), Box<dyn Error>> {
     platform::select_backend()?;
@@ -182,6 +205,7 @@ fn run_ui(
     let sink = Arc::new(ui::UiSink::new(translator.clone()));
     let deps = deps(sink);
     let clock = Arc::clone(&deps.clock);
+    let settings_config = config.clone();
     let (engine, handle) = Engine::new(config, deps);
     let appearance = appearance::detect(theme, &StdCommandRunner::new());
     ui::install(
@@ -191,13 +215,23 @@ fn run_ui(
             tray: &tray,
         },
         ui::Setup {
-            translator,
+            translator: translator.clone(),
             handle: handle.clone(),
             rdp,
             clock,
             appearance,
         },
     );
+    manage::install(
+        &panel,
+        manage::Setup {
+            config: settings_config,
+            translator,
+            handle: handle.clone(),
+            dark: appearance.dark,
+            persist,
+        },
+    )?;
     tray.show()?;
     // The engine thread is left to end with the process: `Handle::stop` was sent on quit.
     let _engine_thread = engine.spawn()?;

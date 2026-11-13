@@ -1,0 +1,105 @@
+// The add/edit tunnel form. There is no design for it: it uses the wizard's header, body and
+// footer, the same controls, and no progress bars. The technical fields of a tunnel (the
+// WireGuard path, the timeouts) are kept by the app and not shown.
+
+import { Theme } from "main.slint";
+import { Words, Flow, Btn, BtnKind, Field, Divider } from "controls.slint";
+
+export component TunnelFormWindow inherits Window {
+    // The header: "Додати тунель", or "Змінити тунель <name>".
+    in property <string> heading;
+    in-out property <string> name;
+    in-out property <string> conf;
+    in-out property <string> probe-host;
+    // The problems by field: 0 name, 1 conf, 2 probe host.
+    in property <[string]> errors;
+    // A failure of the save that no field shows.
+    in property <string> general-error;
+
+    callback cancel();
+
+    title: root.heading;
+    width: 420px;
+    height: 380px;
+    background: Theme.bg;
+    default-font-family: "Inter";
+    default-font-size: 13px;
+
+    VerticalLayout {
+        Rectangle {
+            height: 40px;
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding-left: 16px;
+                padding-right: 16px;
+                Text {
+                    text: root.heading;
+                    color: Theme.ink;
+                    font-size: 13px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            Divider {
+                y: parent.height - 1px;
+                width: parent.width;
+            }
+        }
+
+        VerticalLayout {
+            vertical-stretch: 1;
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-top: 20px;
+            spacing: 16px;
+            alignment: start;
+
+            Field {
+                label: Words.field-name;
+                value <=> root.name;
+                error: root.errors[0];            }
+            Field {
+                label: Words.tunnel-field-conf;
+                value <=> root.conf;
+                hint: Words.tunnel-hint-conf;
+                error: root.errors[1];            }
+            Field {
+                label: Words.tunnel-field-probe;
+                value <=> root.probe-host;
+                hint: Words.tunnel-hint-probe;
+                error: root.errors[2];            }
+            if root.general-error != "" : Text {
+                text: root.general-error;
+                color: Theme.state-fail;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+        }
+
+        Rectangle {
+            height: 56px;
+            Divider {
+                width: parent.width;
+            }
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding: 12px;
+                spacing: 8px;
+                alignment: end;
+                Btn {
+                    label: Words.cancel;
+                    kind: BtnKind.secondary;
+                    clicked => { root.cancel(); }
+                }
+                Btn {
+                    label: Words.save;
+                    kind: BtnKind.primary;
+                    clicked => { Flow.advance(); }
+                }
+            }
+        }
+    }
+}

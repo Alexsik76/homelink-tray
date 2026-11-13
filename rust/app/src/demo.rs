@@ -15,10 +15,12 @@ use homelink_core::domain::{Pc, PowerAction, Tunnel, WakeKind};
 use homelink_core::engine::{Deps, Handle, ThreadPool};
 use homelink_core::machine::Command;
 use homelink_core::ports::{
-    Pinger, PortProbe, PowerError, PowerRunner, Sink, SystemClock, TunnelDriver, TunnelError,
-    WakeError, WakeRegistry, WakeRequest, WakeSender,
+    CommandOutput, CommandRunner, Pinger, PortProbe, PowerError, PowerRunner, Sink, SystemClock,
+    TunnelDriver, TunnelError, WakeError, WakeRegistry, WakeRequest, WakeSender,
 };
-use homelink_core::testing::{FakeNetwork, FakePower, FakeTunnel, FakeWake, pc_id, tunnel_id};
+use homelink_core::testing::{
+    FakeCommandRunner, FakeNetwork, FakePower, FakeTunnel, FakeWake, pc_id, tunnel_id,
+};
 
 /// How long a tunnel takes to come up.
 const TUNNEL_UP_DELAY: Duration = Duration::from_secs(3);
@@ -119,6 +121,22 @@ fn flap(net: Arc<FakeNetwork>, host: String) {
             net.set(&host, true);
         }
     });
+}
+
+impl Fakes {
+    /// The fake network as the port probe of the settings' checks, so that they see the same
+    /// PCs as the engine.
+    pub(crate) fn ports(&self) -> Arc<dyn PortProbe> {
+        Arc::clone(&self.net) as Arc<dyn PortProbe>
+    }
+}
+
+/// The command runner of demo mode for the settings: no program is started, and every `ssh`
+/// check reports success, so that the list of the checks shows its results.
+pub(crate) fn runner() -> Arc<dyn CommandRunner> {
+    let runner = FakeCommandRunner::default();
+    runner.set_result(CommandOutput::exited(0, ""));
+    Arc::new(runner)
 }
 
 /// The dependencies of the engine for `config` in demo mode. Fake ports, real clock and a

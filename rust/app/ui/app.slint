@@ -1,0 +1,14 @@
+// The root of the Slint UI: the panel, the details window and the tray icon (main.slint), and
+// the settings, wizard and tunnel form windows. `build.rs` compiles this file, so everything the
+// Rust side uses must be exported here.
+
+import { Panel, DetailsWindow, Tray, Theme, Strings, Motion, Nav, Mark, PowerKind, DetailRow, TunnelRow, PcRow, GroupRow } from "main.slint";
+import { SettingsWindow, SettingsRow } from "settings.slint";
+import { WizardWindow } from "wizard.slint";
+import { TunnelFormWindow } from "tunnel_form.slint";
+import { Words, Flow, BtnKind, CheckLine } from "controls.slint";
+
+export {
+    Panel, DetailsWindow, Tray, Theme, Strings, Motion, Nav, Mark, PowerKind, DetailRow, TunnelRow, PcRow, GroupRow,
+    SettingsWindow, SettingsRow, WizardWindow, TunnelFormWindow, Words, Flow, BtnKind, CheckLine,
+}

@@ -14,7 +14,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use homelink_core::domain::{PcId, PowerAction, TunnelId};
+use homelink_core::domain::{PcId, PowerAction, TunnelId, TunnelState};
 use homelink_core::engine::Handle;
 use homelink_core::i18n::Translator;
 use homelink_core::machine::Command;
@@ -93,6 +93,21 @@ fn with_ui(f: impl FnOnce(&Ui)) {
     if let Some(ui) = ui {
         f(&ui);
     }
+}
+
+/// Whether the tunnel is up in the last snapshot: false before the first one, and for a tunnel
+/// that is not in it. The checks of the settings use it for a PC behind a tunnel.
+pub(crate) fn tunnel_is_up(id: &TunnelId) -> bool {
+    let ui = UI.with(|slot| slot.borrow().clone());
+    ui.is_some_and(|ui| {
+        ui.state.borrow().last.as_ref().is_some_and(|snapshot| {
+            snapshot
+                .groups
+                .iter()
+                .filter_map(|group| group.tunnel.as_ref())
+                .any(|tunnel| tunnel.id == *id && tunnel.state == TunnelState::Up)
+        })
+    })
 }
 
 /// The windows of the application, as the UI wires them.
@@ -285,10 +300,6 @@ fn wire(windows: &Windows<'_>, ui: &Rc<Ui>) {
             let _ = slint::invoke_from_event_loop(|| with_ui(|ui| ui.place_panel()));
         });
     }
-    nav.on_settings_clicked(|| {
-        // The settings window is not built yet (section 7 of the handoff).
-        log::info!("settings: the settings window is not built yet");
-    });
     {
         let u = Rc::clone(ui);
         windows.details.on_close_requested(move || u.hide_details());
@@ -710,6 +721,7 @@ impl Ui {
         if let Some(details) = self.details.upgrade() {
             details.global::<Motion>().set_blink_on(on);
         }
+        crate::manage::with_manage(|m| m.set_blink(on));
     }
 
     /// Places the panel again after its height changed.
@@ -818,7 +830,8 @@ fn action_enabled(snapshot: &Snapshot, pc: &PcId, action: PowerAction) -> bool {
         })
 }
 
-fn mark(display: DisplayState) -> Mark {
+/// The marker of a display state.
+pub(crate) fn mark(display: DisplayState) -> Mark {
     match display {
         DisplayState::Ok => Mark::Ok,
         DisplayState::Busy => Mark::Busy,

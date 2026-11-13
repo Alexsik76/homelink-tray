@@ -137,7 +137,7 @@ export global Nav {
 }
 
 // The marker of a tunnel or a PC: 8 x 8, square, no rounding.
-component StateMark inherits Rectangle {
+export component StateMark inherits Rectangle {
     in property <Mark> mark;
     in property <bool> inactive: false;
     property <bool> outline: root.inactive || root.mark == Mark.unknown || (root.mark == Mark.busy && !Motion.blink-on);
