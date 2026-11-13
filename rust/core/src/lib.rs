@@ -19,10 +19,12 @@ pub mod machine;
 pub mod notice;
 pub mod ports;
 pub mod problem;
+pub mod relay_setup;
 mod rules;
 pub mod settings;
 pub mod snapshot;
 pub mod ssh;
+pub mod ssh_setup;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod tunnel_form;

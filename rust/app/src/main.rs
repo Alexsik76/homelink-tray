@@ -12,6 +12,7 @@
 #![windows_subsystem = "windows"]
 
 mod appearance;
+mod balloon;
 #[cfg(feature = "demo")]
 mod demo;
 mod icon;
@@ -21,6 +22,7 @@ mod logging;
 mod manage;
 mod platform;
 mod real;
+mod ssh_ops;
 mod ui;
 mod view;
 mod windows;
@@ -237,6 +239,7 @@ fn run_ui(
     let _engine_thread = engine.spawn()?;
     start(handle.clone());
     slint::run_event_loop_until_quit()?;
+    platform::remove_balloons();
     handle.stop();
     Ok(())
 }

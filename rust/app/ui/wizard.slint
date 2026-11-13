@@ -10,37 +10,54 @@
 // 22 ssh key, 23 sleep command, 24 shutdown command, 25 rdp user.
 
 import { Theme, StateMark, Mark } from "main.slint";
-import { Words, Flow, Btn, BtnKind, Field, RadioRow, CheckRow, CheckLine, GroupLabel, Divider } from "controls.slint";
+import { Words, Flow, Btn, BtnKind, Field, RadioRow, CheckRow, CheckLine, GroupLabel, Divider, CopyBlock, KeyTools } from "controls.slint";
 
-// One line of the check list: 40 high, the marker, the name, the result on the right.
-component CheckItem inherits Rectangle {
+// One line of the check list: 40 high, the marker, the name, the result on the right. A line
+// whose host key is not known yet has "Довірити вузлу" under it (undesigned: a text button).
+component CheckItem inherits VerticalLayout {
     in property <CheckLine> line;
-    height: 40px;
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 10px;
-        VerticalLayout {
-            alignment: center;
-            StateMark {
-                mark: root.line.mark;
+    in property <bool> trust-available: true;
+    callback trust();
+    Rectangle {
+        height: 40px;
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                StateMark {
+                    mark: root.line.mark;
+                }
+            }
+            Text {
+                text: root.line.name;
+                color: Theme.ink;
+                font-size: 13px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: root.line.result;
+                color: Theme.ink-2;
+                font-size: 12px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
             }
         }
-        Text {
-            text: root.line.name;
-            color: Theme.ink;
-            font-size: 13px;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-        Text {
-            text: root.line.result;
-            color: Theme.ink-2;
-            font-size: 12px;
-            horizontal-alignment: right;
-            vertical-alignment: center;
-            overflow: elide;
-            horizontal-stretch: 1;
+    }
+    if root.line.trust : HorizontalLayout {
+        padding-left: 12px;
+        padding-bottom: 8px;
+        alignment: start;
+        Btn {
+            label: Words.trust-host;
+            kind: BtnKind.text;
+            tone: Theme.link;
+            available: root.trust-available;
+            clicked => { root.trust(); }
         }
     }
 }
@@ -111,12 +128,48 @@ export component WizardWindow inherits Window {
     // Step 5.
     in property <[CheckLine]> checks;
     in property <bool> checks-running;
+    // The host key a check found unknown, offered to the user: the prompt, the fingerprints to
+    // compare with the device, and whether the scan or the saving is going on.
+    in property <string> trust-prompt;
+    in property <[string]> trust-fingerprints;
+    in property <bool> trust-busy;
+    // What went wrong with a host key (it changed, the scan failed, the entry exists), or the
+    // confirmation that it was saved.
+    in property <string> ssh-note;
+
+    // SSH setup. `openssh-missing`: the client is not installed. The public keys are those of the
+    // key files in the fields (read from the `.pub` file beside them); `key-busy` while one is
+    // being made; the errors of making a key; the commands for the relay of step 3.
+    in property <bool> openssh-missing;
+    in property <bool> key-busy;
+    in property <string> relay-key-error;
+    in property <string> relay-public-key;
+    in property <string> power-key-error;
+    in property <string> power-public-key;
+    in property <string> relay-setup-intro;
+    in property <string> relay-setup;
 
     callback back();
     callback cancel();
     callback retest();
+    // 0: the key of the new relay, 1: the key of the PC.
+    callback create-key(int);
+    // The values the commands and the public keys come from changed.
+    callback refresh-help();
+    callback trust-host(int);
+    callback trust-confirm();
+    callback trust-cancel();
 
-    title: root.heading;
+    changed step => { root.refresh-help(); }
+    changed wake-index => { root.refresh-help(); }
+    changed relay-index => { root.refresh-help(); }
+    changed relay-kind => { root.refresh-help(); }
+    changed relay-sudo => { root.refresh-help(); }
+    changed new-user => { root.refresh-help(); }
+    changed new-identity => { root.refresh-help(); }
+    changed ssh-identity => { root.refresh-help(); }
+
+    title: Words.about-name + " — " + root.heading;
     width: 420px;
     height: 430px;
     background: Theme.bg;
@@ -308,10 +361,22 @@ export component WizardWindow inherits Window {
                                     value <=> root.new-user;
                                     error: root.errors[10];
                                 }
+                                if root.openssh-missing : Text {
+                                    text: Words.openssh-missing;
+                                    color: Theme.state-fail;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                }
                                 Field {
                                     label: Words.field-identity;
                                     value <=> root.new-identity;
                                     error: root.errors[11];
+                                }
+                                KeyTools {
+                                    available: !root.openssh-missing && !root.key-busy;
+                                    error: root.relay-key-error;
+                                    public-key: root.relay-public-key;
+                                    create => { root.create-key(0); }
                                 }
                                 if root.relay-kind != 0 : VerticalLayout {
                                     spacing: 6px;
@@ -348,6 +413,19 @@ export component WizardWindow inherits Window {
                                     label: Words.field-timeout;
                                     value <=> root.new-timeout;
                                     error: root.errors[13];
+                                }
+                                // What to run on the relay host (undesigned: text and a copy button).
+                                if root.relay-setup != "" : VerticalLayout {
+                                    spacing: 8px;
+                                    Text {
+                                        text: root.relay-setup-intro;
+                                        color: Theme.muted;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
+                                    CopyBlock {
+                                        text: root.relay-setup;
+                                    }
                                 }
                             }
 
@@ -486,10 +564,22 @@ export component WizardWindow inherits Window {
                                     value <=> root.ssh-port;
                                     error: root.errors[21];
                                 }
+                                if root.openssh-missing : Text {
+                                    text: Words.openssh-missing;
+                                    color: Theme.state-fail;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                }
                                 Field {
                                     label: Words.field-identity;
                                     value <=> root.ssh-identity;
                                     error: root.errors[22];
+                                }
+                                KeyTools {
+                                    available: !root.openssh-missing && !root.key-busy;
+                                    error: root.power-key-error;
+                                    public-key: root.power-public-key;
+                                    create => { root.create-key(1); }
                                 }
                             }
 
@@ -539,9 +629,65 @@ export component WizardWindow inherits Window {
                                     if i > 0 : Divider {}
                                     CheckItem {
                                         line: item;
+                                        trust-available: !root.trust-busy && !root.checks-running;
+                                        trust => { root.trust-host(i); }
                                     }
                                 }
                             }
+                        }
+                        if root.openssh-missing : Text {
+                            text: Words.openssh-missing;
+                            color: Theme.state-fail;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                        // A host key that is not known yet: nothing is trusted until the user
+                        // has compared the fingerprints and pressed "Довіряти".
+                        if root.trust-prompt != "" : Rectangle {
+                            height: trust-box.preferred-height + 24px;
+                            background: Theme.surface;
+                            border-width: 1px;
+                            border-color: Theme.line-strong;
+                            trust-box := VerticalLayout {
+                                x: 12px;
+                                y: 12px;
+                                width: parent.width - 24px;
+                                height: parent.height - 24px;
+                                spacing: 8px;
+                                Text {
+                                    text: root.trust-prompt;
+                                    color: Theme.ink;
+                                    font-size: 12px;
+                                    wrap: word-wrap;
+                                }
+                                for fingerprint in root.trust-fingerprints : Text {
+                                    text: fingerprint;
+                                    color: Theme.ink;
+                                    font-size: 12px;
+                                    font-weight: 600;
+                                    wrap: word-wrap;
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    Btn {
+                                        label: Words.trust;
+                                        kind: BtnKind.primary;
+                                        available: !root.trust-busy;
+                                        clicked => { root.trust-confirm(); }
+                                    }
+                                    Btn {
+                                        label: Words.cancel;
+                                        clicked => { root.trust-cancel(); }
+                                    }
+                                }
+                            }
+                        }
+                        if root.ssh-note != "" : Text {
+                            text: root.ssh-note;
+                            color: Theme.ink-2;
+                            font-size: 11px;
+                            wrap: word-wrap;
                         }
                         HorizontalLayout {
                             alignment: start;

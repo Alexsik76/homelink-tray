@@ -79,12 +79,18 @@ impl Sink for UiSink {
         let _ = slint::invoke_from_event_loop(move || with_ui(|ui| ui.show(&snapshot)));
     }
 
-    /// No tray balloon or toast API was found for Slint 1.18 (the Slint sources could not be
-    /// read to be sure), so a notice goes to the log file only, worded as the user would read
-    /// it. Showing notices on screen is still to do.
+    /// A notice goes to the log file, worded as the user reads it, and to the screen as a tray
+    /// balloon. Slint 1.18's `SystemTrayIcon` has no notification call (its sources were read:
+    /// it only has icon, tooltip, title and menu), so the balloon comes from the icon of
+    /// `platform::show_balloon`. It is shown on the event loop thread: the engine calls this
+    /// from its own thread.
     fn notify(&self, notice: Notice) {
         let (title, body) = self.translator.notice(&notice);
         log::info!(target: "notice", "{title}: {body}");
+        let severity = notice.severity();
+        let _ = slint::invoke_from_event_loop(move || {
+            platform::show_balloon(&title, &body, severity);
+        });
     }
 }
 
@@ -548,6 +554,7 @@ impl Ui {
             return;
         }
         let _ = details.show();
+        platform::hide_from_taskbar(details.window());
         self.place_details();
         details.global::<Motion>().set_blink_on(self.blink.get());
         // The Escape key of the window needs the window to have the focus of the system.
@@ -752,6 +759,7 @@ impl Ui {
         // exists only once it is shown).
         platform::place_panel(&panel);
         let _ = panel.show();
+        platform::hide_from_taskbar(panel.window());
         self.shown_at.set(Some(Instant::now()));
         platform::place_panel(&panel);
         panel.invoke_focus_panel();

@@ -76,6 +76,12 @@ export global Words {
     in-out property <string> rdp-note;
     in-out property <string> test-again;
     in-out property <string> test-note;
+    in-out property <string> create-key;
+    in-out property <string> copy;
+    in-out property <string> public-key-label;
+    in-out property <string> trust-host;
+    in-out property <string> trust;
+    in-out property <string> openssh-missing;
 }
 
 // The primary action of the window: Enter in a field, a radio row or a check row, and the primary
@@ -331,6 +337,8 @@ export struct CheckLine {
     name: string,
     result: string,
     mark: Mark,
+    // The host key of this line is not known yet: the line offers "Довірити вузлу".
+    trust: bool,
 }
 
 // A small heading above a group of controls (12/600, like a field label).
@@ -339,6 +347,79 @@ export component GroupLabel inherits Text {
     font-size: 12px;
     font-weight: 600;
     overflow: elide;
+}
+
+// A read-only block of text the user copies (a public key, the commands for a relay) with a
+// "Копіювати" button. There is no design for it: it is a Field-like box (surface, 1 px line-strong
+// border) with a text button below. The text can also be selected by hand.
+export component CopyBlock inherits VerticalLayout {
+    in property <string> label;
+    in property <string> text;
+    spacing: 6px;
+
+    if root.label != "" : GroupLabel {
+        text: root.label;
+    }
+
+    Rectangle {
+        height: shown.preferred-height + 16px;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.line-strong;
+
+        shown := TextInput {
+            x: 10px;
+            y: 8px;
+            width: parent.width - 20px;
+            read-only: true;
+            single-line: false;
+            wrap: word-wrap;
+            font-size: 11px;
+            color: Theme.ink;
+            text: root.text;
+        }
+    }
+
+    HorizontalLayout {
+        alignment: start;
+        Btn {
+            label: Words.copy;
+            clicked => {
+                shown.select-all();
+                shown.copy();
+            }
+        }
+    }
+}
+
+// What goes under a key-file field: "Створити ключ", the reason when it failed, and the public key
+// of the key file with a copy button once there is one.
+export component KeyTools inherits VerticalLayout {
+    // False while there is no OpenSSH client or a key is being made.
+    in property <bool> available: true;
+    in property <string> error;
+    in property <string> public-key;
+    callback create();
+    spacing: 8px;
+
+    HorizontalLayout {
+        alignment: start;
+        Btn {
+            label: Words.create-key;
+            available: root.available;
+            clicked => { root.create(); }
+        }
+    }
+    if root.error != "" : Text {
+        text: root.error;
+        color: Theme.state-fail;
+        font-size: 11px;
+        wrap: word-wrap;
+    }
+    if root.public-key != "" : CopyBlock {
+        label: Words.public-key-label;
+        text: root.public-key;
+    }
 }
 
 // The 1 px divider used between list rows and in the headers.

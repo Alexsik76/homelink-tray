@@ -7,6 +7,17 @@
 /// Longest `detail` shown in a notification, in characters. The full text goes to the log.
 pub const DETAIL_LIMIT: usize = 200;
 
+/// How serious a notice is; the tray balloon takes its icon from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    /// Something happened as the user asked.
+    Info,
+    /// Something is not as it should be, but nothing the user did failed.
+    Warning,
+    /// An action of the user failed.
+    Error,
+}
+
 /// Something the user should be told about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Notice {
@@ -121,6 +132,25 @@ impl Notice {
         }
     }
 
+    /// How serious it is: a failed action is an error, a tunnel or PC that is gone or silent a
+    /// warning, a confirmation (`PcOnline`, the power commands that were sent) information.
+    pub fn severity(&self) -> Severity {
+        match self {
+            Self::TunnelFailed { .. }
+            | Self::TunnelStopFailed { .. }
+            | Self::WakeFailed { .. }
+            | Self::PowerFailed { .. } => Severity::Error,
+            Self::TunnelLost { .. }
+            | Self::TunnelTimeout { .. }
+            | Self::PcTimeout { .. }
+            | Self::PcLost { .. }
+            | Self::PowerUnavailable { .. } => Severity::Warning,
+            Self::PcOnline { .. } | Self::SleepSent { .. } | Self::ShutdownSent { .. } => {
+                Severity::Info
+            }
+        }
+    }
+
     /// Values for the placeholders of the texts. `detail` is cut to [`DETAIL_LIMIT`].
     pub fn params(&self) -> Vec<(&'static str, String)> {
         match self {
@@ -199,6 +229,21 @@ mod tests {
     fn keys_list_matches_variants() {
         let keys: Vec<&str> = samples().iter().map(Notice::key).collect();
         assert_eq!(keys, Notice::KEYS);
+    }
+
+    #[test]
+    fn severity_follows_what_failed() {
+        for notice in samples() {
+            let expected = match notice.key() {
+                "notify.tunnel_failed"
+                | "notify.tunnel_stop_failed"
+                | "notify.wake_failed"
+                | "notify.power_failed" => Severity::Error,
+                "notify.pc_online" | "notify.sleep_sent" | "notify.shutdown_sent" => Severity::Info,
+                _ => Severity::Warning,
+            };
+            assert_eq!(notice.severity(), expected, "{}", notice.key());
+        }
     }
 
     #[test]

@@ -8,16 +8,21 @@
 
 use std::sync::Arc;
 
-use homelink_core::checks::{self, CheckDeps, CheckRow};
+use homelink_core::checks::{self, CheckDeps, CheckPlan, CheckResult, CheckRow};
 use homelink_core::domain::{Os, PcId, RelayKind};
 use homelink_core::problem::Problem;
+use homelink_core::relay_setup::{self, RelaySetup};
 use homelink_core::settings;
+use homelink_core::ssh_setup::host_pattern;
 use homelink_core::wizard::{
     self, PcDraft, RelayChoice, RelayDraft, RelayOption, Step, TunnelOption, WakeChoice, field,
 };
 use slint::{ComponentHandle, SharedString};
 
+use std::path::PathBuf;
+
 use crate::manage::{Manage, model, place_problems, show_in_front, with_manage};
+use crate::ssh_ops::{self, HostKeyOffer, NewKey, TrustError};
 use crate::ui;
 use crate::view::{CheckLine, Mark};
 
@@ -33,6 +38,10 @@ pub(crate) struct Session {
     tunnels: Vec<TunnelOption>,
     /// The existing relays of step 3, in the order of the window's labels.
     relays: Vec<RelayOption>,
+    /// The checks of the last run on step 5: a row's host and port for the host key.
+    plan: Option<CheckPlan>,
+    /// The host key the user was asked to trust and has not confirmed yet.
+    trust: Option<HostKeyOffer>,
 }
 
 /// The index of a field in the window's errors (see `wizard.slint`).
@@ -174,9 +183,17 @@ impl Manage {
                 step: Step::Address,
                 tunnels: wizard::tunnel_options(&config),
                 relays: wizard::relay_options(&config),
+                plan: None,
+                trust: None,
             }
         };
         *self.session.borrow_mut() = Some(session);
+        self.session_id.set(self.session_id.get() + 1);
+        self.wizard.set_openssh_missing(self.openssh_missing());
+        self.wizard.set_key_busy(false);
+        self.wizard.set_relay_key_error("".into());
+        self.wizard.set_power_key_error("".into());
+        self.clear_trust();
         self.wizard.set_heading(heading.into());
         self.show_draft(&draft);
         self.set_step(Step::Address);
@@ -365,7 +382,233 @@ impl Manage {
             self.check_run.set(self.check_run.get() + 1);
             self.wizard.set_checks(model(Vec::<CheckLine>::new()));
             self.wizard.set_checks_running(false);
+            self.clear_trust();
         }
+    }
+
+    /// Whether the OpenSSH client is missing on this computer. Demo mode has a fake runner and
+    /// never needs the client.
+    fn openssh_missing(&self) -> bool {
+        self.persist.path.is_some() && !ssh_ops::missing_client().is_empty()
+    }
+
+    /// Withdraws the offer of a host key and the notes about host keys.
+    fn clear_trust(&self) {
+        self.trust_run.set(self.trust_run.get() + 1);
+        if let Some(s) = self.session.borrow_mut().as_mut() {
+            s.trust = None;
+        }
+        self.wizard.set_trust_prompt("".into());
+        self.wizard
+            .set_trust_fingerprints(model(Vec::<SharedString>::new()));
+        self.wizard.set_trust_busy(false);
+        self.wizard.set_ssh_note("".into());
+    }
+
+    /// The folder of the settings file; the keys go in its `keys` folder. Demo mode has no file.
+    fn config_dir(&self) -> PathBuf {
+        match &self.persist.path {
+            Some(path) => crate::real::config_dir(path),
+            None => std::env::temp_dir().join("homelink-demo"),
+        }
+    }
+
+    /// Recomputes what depends on the key files and on the relay's values: the public key under
+    /// each key field (read from the `.pub` file beside the file named there; never the private
+    /// key) and the commands to run on a new relay host.
+    pub(crate) fn refresh_help(&self) {
+        let Some((draft, _)) = self.current() else {
+            return;
+        };
+        let w = &self.wizard;
+        let relay_key = ssh_ops::read_public_key(&draft.new_relay.identity_file);
+        let power_key = ssh_ops::read_public_key(&draft.ssh_identity_file);
+        w.set_relay_public_key(relay_key.clone().unwrap_or_default().into());
+        w.set_power_public_key(power_key.unwrap_or_default().into());
+        let (intro, commands) = match (&draft.wake, &draft.relay) {
+            (WakeChoice::Relay, RelayChoice::New) => {
+                let kind = draft.new_relay.kind;
+                let commands = relay_setup::text(&RelaySetup {
+                    kind,
+                    user: &draft.new_relay.user,
+                    public_key: relay_key.as_deref(),
+                    client_address: None,
+                    sudo: draft.new_relay.sudo,
+                });
+                (
+                    self.tr
+                        .t(&format!("wizard.relay.setup.{}", kind.code()), &[]),
+                    commands,
+                )
+            }
+            _ => (String::new(), String::new()),
+        };
+        w.set_relay_setup_intro(intro.into());
+        w.set_relay_setup(commands.into());
+    }
+
+    /// "Створити ключ" next to the key field `which` (0 the new relay's, 1 the PC's).
+    pub(crate) fn create_key(&self, which: i32) {
+        if self.wizard.get_key_busy() || self.wizard.get_openssh_missing() {
+            return;
+        }
+        self.set_key_error(which, "");
+        self.wizard.set_key_busy(true);
+        let runner = Arc::clone(&self.persist.runner);
+        let dir = self.config_dir();
+        let session = self.session_id.get();
+        std::thread::spawn(move || {
+            let result = ssh_ops::create_key(runner.as_ref(), &dir);
+            let _ = slint::invoke_from_event_loop(move || {
+                with_manage(|m| m.key_created(session, which, result));
+            });
+        });
+    }
+
+    fn set_key_error(&self, which: i32, text: &str) {
+        if which == 0 {
+            self.wizard.set_relay_key_error(text.into());
+        } else {
+            self.wizard.set_power_key_error(text.into());
+        }
+    }
+
+    /// A key was made (or not): the field gets its path, or the reason is shown.
+    pub(crate) fn key_created(&self, session: u64, which: i32, result: Result<NewKey, String>) {
+        if session != self.session_id.get() || self.session.borrow().is_none() {
+            return;
+        }
+        self.wizard.set_key_busy(false);
+        match result {
+            Ok(key) => {
+                if which == 0 {
+                    self.wizard.set_new_identity(key.path.into());
+                } else {
+                    self.wizard.set_ssh_identity(key.path.into());
+                }
+                self.refresh_help();
+            }
+            Err(detail) => {
+                let text = self
+                    .tr
+                    .t("wizard.ssh.key_failed", &[("detail", detail.as_str())]);
+                self.set_key_error(which, &text);
+            }
+        }
+    }
+
+    /// "Довірити вузлу" on the check row `index`: fetches the host key and shows its
+    /// fingerprints. Nothing is written until [`Self::trust_confirm`].
+    pub(crate) fn trust_host(&self, index: i32) {
+        let endpoint = self
+            .session
+            .borrow()
+            .as_ref()
+            .and_then(|s| s.plan.as_ref())
+            .and_then(|plan| plan.ssh_endpoint(position(index)));
+        let Some((host, port)) = endpoint else {
+            return;
+        };
+        self.clear_trust();
+        self.wizard.set_trust_busy(true);
+        let run = self.trust_run.get();
+        let runner = Arc::clone(&self.persist.runner);
+        std::thread::spawn(move || {
+            let result = ssh_ops::fetch_host_key(runner.as_ref(), &host, port);
+            let label = host_pattern(&host, port).unwrap_or(host);
+            let _ = slint::invoke_from_event_loop(move || {
+                with_manage(|m| m.host_key_fetched(run, &label, result));
+            });
+        });
+    }
+
+    fn host_key_fetched(&self, run: u64, label: &str, result: Result<HostKeyOffer, String>) {
+        if run != self.trust_run.get() || self.session.borrow().is_none() {
+            return;
+        }
+        self.wizard.set_trust_busy(false);
+        match result {
+            Ok(offer) => {
+                let prompt = self.tr.t(
+                    "wizard.ssh.host_key_unknown",
+                    &[("host", offer.pattern.as_str())],
+                );
+                let fingerprints: Vec<SharedString> = offer
+                    .fingerprints
+                    .iter()
+                    .map(|f| {
+                        self.tr
+                            .t("wizard.ssh.fingerprint", &[("fingerprint", f.as_str())])
+                            .into()
+                    })
+                    .collect();
+                self.wizard.set_trust_fingerprints(model(fingerprints));
+                self.wizard.set_trust_prompt(prompt.into());
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.trust = Some(offer);
+                }
+            }
+            Err(detail) => {
+                let text = self.tr.t(
+                    "wizard.ssh.scan_failed",
+                    &[("host", label), ("detail", detail.as_str())],
+                );
+                self.wizard.set_ssh_note(text.into());
+            }
+        }
+    }
+
+    /// "Довіряти": the user has seen the fingerprints and agrees. Appends exactly the lines
+    /// that were fingerprinted to `known_hosts`, then runs the checks again.
+    pub(crate) fn trust_confirm(&self) {
+        let Some(offer) = self.session.borrow().as_ref().and_then(|s| s.trust.clone()) else {
+            return;
+        };
+        self.wizard.set_trust_busy(true);
+        let run = self.trust_run.get();
+        let runner = Arc::clone(&self.persist.runner);
+        std::thread::spawn(move || {
+            let result = match ssh_ops::profile_dir() {
+                Some(profile) => ssh_ops::trust_host_key(runner.as_ref(), &profile, &offer),
+                None => Err(TrustError::Failed("no profile folder".into())),
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                with_manage(|m| m.host_key_trusted(run, &offer.pattern, result));
+            });
+        });
+    }
+
+    fn host_key_trusted(&self, run: u64, pattern: &str, result: Result<(), TrustError>) {
+        if run != self.trust_run.get() || self.session.borrow().is_none() {
+            return;
+        }
+        match result {
+            Ok(()) => {
+                self.wizard_retest();
+                self.wizard.set_ssh_note(
+                    self.tr
+                        .t("wizard.ssh.trust_done", &[("host", pattern)])
+                        .into(),
+                );
+            }
+            Err(error) => {
+                let text = match error {
+                    TrustError::AlreadyKnown => {
+                        self.tr.t("wizard.ssh.already_known", &[("host", pattern)])
+                    }
+                    TrustError::Failed(detail) => self
+                        .tr
+                        .t("wizard.ssh.trust_failed", &[("detail", detail.as_str())]),
+                };
+                self.clear_trust();
+                self.wizard.set_ssh_note(text.into());
+            }
+        }
+    }
+
+    /// "Скасувати" on the host key prompt: nothing is trusted.
+    pub(crate) fn trust_cancel(&self) {
+        self.clear_trust();
     }
 
     fn show_problems(&self, problems: &[Problem]) {
@@ -423,6 +666,7 @@ impl Manage {
 
     /// "Скасувати" or Esc: closes the wizard with nothing saved.
     pub(crate) fn cancel_wizard(&self) {
+        self.clear_trust();
         *self.session.borrow_mut() = None;
         self.check_run.set(self.check_run.get() + 1);
         let _ = self.wizard.hide();
@@ -461,6 +705,13 @@ impl Manage {
         };
         let plan = checks::plan(&self.config.borrow(), &outcome);
         let tunnel_up = outcome.pc.tunnel.as_ref().is_some_and(ui::tunnel_is_up);
+        // The client may have been installed since the wizard opened.
+        let ssh_missing = self.openssh_missing();
+        self.wizard.set_openssh_missing(ssh_missing);
+        self.clear_trust();
+        if let Some(s) = self.session.borrow_mut().as_mut() {
+            s.plan = Some(plan.clone());
+        }
         let pending: Vec<CheckLine> = plan
             .pending()
             .into_iter()
@@ -468,6 +719,7 @@ impl Manage {
                 name: self.tr.check_name(kind).into(),
                 result: SharedString::default(),
                 mark: Mark::Busy,
+                trust: false,
             })
             .collect();
         let run = self.check_run.get() + 1;
@@ -481,6 +733,7 @@ impl Manage {
             let deps = CheckDeps {
                 ports: ports.as_ref(),
                 runner: runner.as_ref(),
+                ssh_available: !ssh_missing,
             };
             let results = checks::run_all(&plan, tunnel_up, &deps);
             let _ = slint::invoke_from_event_loop(move || {
@@ -500,11 +753,35 @@ impl Manage {
                 name: self.tr.check_name(row.kind).into(),
                 result: self.tr.check_result(&row.result).into(),
                 mark: ui::mark(row.display),
+                trust: offers_trust(&row.result),
             })
             .collect();
         self.wizard.set_checks(model(rows));
         self.wizard.set_checks_running(false);
+        // A key that changed is an error and is never replaced: the row has no button, and the
+        // note says what it can mean and that HomeLink does not touch it.
+        let changed = {
+            let session = self.session.borrow();
+            let plan = session.as_ref().and_then(|s| s.plan.as_ref());
+            results
+                .iter()
+                .position(|row| row.result == CheckResult::SshHostKeyChanged)
+                .and_then(|index| plan.and_then(|plan| plan.ssh_endpoint(index)))
+        };
+        if let Some((host, port)) = changed {
+            let label = host_pattern(&host, port).unwrap_or(host);
+            let text = self
+                .tr
+                .t("wizard.ssh.host_key_changed", &[("host", label.as_str())]);
+            self.wizard.set_ssh_note(text.into());
+        }
     }
+}
+
+/// Whether a check result offers "Довірити вузлу": only a host key that is not known yet. A
+/// changed key never does.
+fn offers_trust(result: &CheckResult) -> bool {
+    matches!(result, CheckResult::SshHostKeyUnknown)
 }
 
 #[cfg(test)]
@@ -550,6 +827,23 @@ mod tests {
     }
 
     #[test]
+    fn only_an_unknown_host_key_offers_to_be_trusted() {
+        assert!(offers_trust(&CheckResult::SshHostKeyUnknown));
+        // A changed key is an error and is never offered for replacement.
+        assert!(!offers_trust(&CheckResult::SshHostKeyChanged));
+        for other in [
+            CheckResult::SshOk,
+            CheckResult::SshAuthFailed,
+            CheckResult::SshNotInstalled,
+            CheckResult::SshTimedOut,
+            CheckResult::TunnelDown,
+            CheckResult::PortsOpen(vec![22]),
+        ] {
+            assert!(!offers_trust(&other), "{other:?}");
+        }
+    }
+
+    #[test]
     fn a_relay_preset_round_trips_through_its_index() {
         for kind in [
             RelayKind::RouterOs,
@@ -581,6 +875,8 @@ mod tests {
                 host: "192.168.1.1".into(),
                 kind: RelayKind::Wakeonlan,
             }],
+            plan: None,
+            trust: None,
         };
         clear_hidden(&mut draft, &session);
         // Wakeonlan takes an address but no interface; an existing relay has no sudo question.

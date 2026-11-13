@@ -79,6 +79,9 @@ enum Spec {
     Ssh {
         argv: Vec<String>,
         timeout: Duration,
+        /// Where the connection goes, to fetch its host key when that is not known yet.
+        host: Host,
+        port: u16,
     },
 }
 
@@ -98,6 +101,14 @@ impl Check {
             Spec::Ports { .. } => None,
         }
     }
+
+    /// The host and port an SSH check connects to; `None` for the ports check.
+    pub fn ssh_endpoint(&self) -> Option<(String, u16)> {
+        match &self.spec {
+            Spec::Ssh { host, port, .. } => Some((host.to_string(), *port)),
+            Spec::Ports { .. } => None,
+        }
+    }
 }
 
 /// The checks of one PC.
@@ -114,6 +125,11 @@ impl CheckPlan {
     /// the results arrive.
     pub fn pending(&self) -> Vec<CheckKind> {
         self.checks.iter().map(|c| c.kind).collect()
+    }
+
+    /// The host and port that the check at `index` connects to over SSH, if it does.
+    pub fn ssh_endpoint(&self, index: usize) -> Option<(String, u16)> {
+        self.checks.get(index).and_then(Check::ssh_endpoint)
     }
 }
 
@@ -141,6 +157,8 @@ pub fn plan_for(pc: &Pc, relay: Option<&Relay>) -> CheckPlan {
             spec: Spec::Ssh {
                 argv: ssh_argv(&target, relay_check_command(relay.kind)),
                 timeout: relay.timeout,
+                host: relay.host.clone(),
+                port: relay.port,
             },
         });
     }
@@ -162,6 +180,8 @@ pub fn plan_for(pc: &Pc, relay: Option<&Relay>) -> CheckPlan {
             spec: Spec::Ssh {
                 argv: ssh_argv(&target, POWER_CHECK_COMMAND),
                 timeout: pc.timing.power_timeout,
+                host: pc.host.clone(),
+                port: *port,
             },
         });
     }
@@ -250,6 +270,9 @@ pub struct CheckDeps<'a> {
     pub ports: &'a dyn PortProbe,
     /// Runs `ssh`.
     pub runner: &'a dyn CommandRunner,
+    /// Whether the OpenSSH client is installed. When it is not, the SSH checks are not run: they
+    /// say [`CheckResult::SshNotInstalled`] (the PC can still be saved).
+    pub ssh_available: bool,
 }
 
 fn shorten(text: &str) -> String {
@@ -311,7 +334,8 @@ pub fn run_check(
                     CheckResult::PortsClosed(closed)
                 }
             }
-            Spec::Ssh { argv, timeout } => {
+            Spec::Ssh { .. } if !deps.ssh_available => CheckResult::SshNotInstalled,
+            Spec::Ssh { argv, timeout, .. } => {
                 ssh_result(&deps.runner.run(argv, command_timeout(*timeout)))
             }
         }
@@ -381,6 +405,19 @@ mod tests {
     }
 
     #[test]
+    fn an_ssh_check_knows_where_it_connects() {
+        let (config, p) = plan_of("desktop");
+        let gateway = config.relay(&RelayId::parse("gateway").unwrap()).unwrap();
+        assert_eq!(p.ssh_endpoint(0), None);
+        assert_eq!(
+            p.ssh_endpoint(1),
+            Some((gateway.host.to_string(), gateway.port))
+        );
+        assert_eq!(p.ssh_endpoint(2), Some(("192.168.88.10".to_owned(), 22)));
+        assert_eq!(p.ssh_endpoint(3), None);
+    }
+
+    #[test]
     fn a_new_relay_is_checked_before_it_is_saved() {
         let config = multi_config();
         let mut d = PcDraft::new(&config);
@@ -410,7 +447,31 @@ mod tests {
         runner: &FakeCommandRunner,
     ) -> Vec<CheckRow> {
         let (_, p) = plan_of(id);
-        run_all(&p, tunnel_up, &CheckDeps { ports: net, runner })
+        run_all(
+            &p,
+            tunnel_up,
+            &CheckDeps {
+                ports: net,
+                runner,
+                ssh_available: true,
+            },
+        )
+    }
+
+    #[test]
+    fn without_the_client_the_ssh_checks_are_not_run() {
+        let (net, runner) = (FakeNetwork::default(), FakeCommandRunner::default());
+        let (_, p) = plan_of("desktop");
+        let deps = CheckDeps {
+            ports: &net,
+            runner: &runner,
+            ssh_available: false,
+        };
+        let rows = run_all(&p, true, &deps);
+        assert_eq!(rows[1].result, CheckResult::SshNotInstalled);
+        assert_eq!(rows[2].result, CheckResult::SshNotInstalled);
+        assert_eq!(rows[0].kind, CheckKind::Ports);
+        assert!(runner.calls().is_empty());
     }
 
     #[test]

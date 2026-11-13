@@ -572,6 +572,49 @@ mod tests {
     }
 
     #[test]
+    fn the_ssh_onboarding_texts_exist_with_the_placeholders_the_app_fills() {
+        let keys: [(&str, &[&str]); 12] = [
+            ("wizard.ssh.openssh_missing", &[]),
+            ("wizard.ssh.create_key", &[]),
+            ("wizard.ssh.key_failed", &["detail"]),
+            ("wizard.ssh.public_key", &[]),
+            ("wizard.ssh.copy", &[]),
+            ("wizard.ssh.trust_host", &[]),
+            ("wizard.ssh.trust", &[]),
+            ("wizard.ssh.host_key_unknown", &["host"]),
+            ("wizard.ssh.fingerprint", &["fingerprint"]),
+            ("wizard.ssh.scan_failed", &["host", "detail"]),
+            ("wizard.ssh.already_known", &["host"]),
+            ("wizard.ssh.host_key_changed", &["host"]),
+        ];
+        let more: [(&str, &[&str]); 2] = [
+            ("wizard.ssh.trust_failed", &["detail"]),
+            ("wizard.ssh.trust_done", &["host"]),
+        ];
+        for lang in Lang::ALL {
+            let c = catalog(lang);
+            for (key, params) in keys.iter().chain(more.iter()) {
+                let template = c.template(key);
+                assert!(template.is_some(), "{} lacks '{key}'", lang.code());
+                let used = placeholders(template.unwrap_or_default());
+                let expected: BTreeSet<String> = params.iter().map(|p| (*p).to_owned()).collect();
+                assert_eq!(used, expected, "{} {key}", lang.code());
+            }
+            // One text of commands per relay preset.
+            for kind in ["routeros", "etherwake", "wakeonlan"] {
+                assert!(
+                    c.template(&format!("wizard.relay.setup.{kind}")).is_some(),
+                    "{} lacks the setup text of {kind}",
+                    lang.code()
+                );
+            }
+        }
+        let uk = Translator::new(Lang::Uk);
+        assert_eq!(uk.t("wizard.ssh.create_key", &[]), "Створити ключ");
+        assert_eq!(uk.t("wizard.ssh.trust_host", &[]), "Довірити вузлу");
+    }
+
+    #[test]
     fn every_label_of_handoff_sections_7_and_8_exists() {
         let keys = [
             "settings.nav.tunnels_pcs",

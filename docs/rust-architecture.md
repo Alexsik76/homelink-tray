@@ -252,8 +252,9 @@ exceptions, by construction:
   pings of the tunnel probe host, UDP magic packets, SSH to relay hosts and PCs, and the commands
   the user wrote. There is no HTTP or TLS client in the program.
 - **SSH host keys are verified.** `StrictHostKeyChecking=yes` everywhere at run time. The wizard
-  may add a host key (`accept-new`) only after showing the fingerprint and receiving explicit
-  consent from the user; nothing else ever accepts a key. Known hosts are read from the
+  may add a host key (fetched with `ssh-keyscan`, appended to `known_hosts` itself; `accept-new`
+  is never used) only after showing the fingerprint and receiving explicit consent from the
+  user; nothing else ever accepts a key, and an existing entry is never replaced. Known hosts are read from the
   profile `ssh` resolves for the (elevated) user; the wizard runs in the same process, so the
   two agree.
 - **Nothing sensitive in logs.** Logs hold states, ids, host names and error texts, never key
@@ -654,19 +655,49 @@ unless the name changes.
 - Silence rules kept: no notice for a user disconnect; none for a PC that goes off after an
   accepted power command (`power_sent`); none for a PC that becomes `Unknown` because its tunnel
   dropped (that is `TunnelLost`).
-- Notice delivery in `app`: tray balloon/toast. Startup errors (invalid config, second
-  instance, not elevated) use `MessageBoxW`, since Slint is not up yet. Status: no
-  notification API was found in Slint 1.18's tray (not verified against the Slint sources), so
-  notices are only written to the log (`target: notice`, worded in the user's language) until
-  a balloon mechanism is chosen; an RDP failure is shown in a message box.
+- Notice delivery in `app`: tray balloon. Startup errors (invalid config, second
+  instance, not elevated) use `MessageBoxW`, since Slint is not up yet. Slint 1.18's
+  `SystemTrayIcon` was checked in its sources: it has an icon, a tooltip, a title and a menu, and
+  no notification call. So every notice the engine reports is written to the log (`target:
+  notice`, worded in the user's language) and shown as a balloon by `Shell_NotifyIconW` with
+  `NIF_INFO` (`windows` crate, `platform.rs`, behind `cfg(windows)`): a hidden message-only
+  window owned by the app on the event loop thread, with its own hidden notify icon (id
+  `0x484C`, `NIS_HIDDEN`) used only for balloons; the notice is handed to the event loop thread
+  first, because the engine reports from its own thread. The text is built by pure functions
+  (`balloon.rs`): title cut to 63 and body to 255 UTF-16 units (the fields hold 64 and 256 with
+  the terminating zero), never inside a surrogate pair, ending with `…`; the icon (info,
+  warning, error) comes from `Notice::severity` (core): a failed action is an error, a tunnel
+  or PC that is gone or silent a warning, a confirmation information. Which notices exist is
+  decided only by the engine, so the silence rules above (no notice for a user disconnect, for a
+  PC that goes off after an accepted power command, for a PC that becomes unknown because its
+  tunnel dropped) hold for balloons too. Not verified on Windows: that a balloon of a hidden
+  icon is shown on Windows 10 LTSC and 11 (if not, the fallback is to show the icon only while a
+  balloon is up). Off Windows there are no balloons, only the log. An RDP failure is shown in a
+  message box.
 - Elevation: v0.3 relaunches itself elevated because the WireGuard service needs admin. The
   app does the same at the start of the real mode: `whoami /groups` shows the integrity level
   (`S-1-16-12288` or higher is elevated; the SID is the same in every language) and, if the
   process is not elevated, `powershell Start-Process -Verb RunAs` starts an elevated copy and
   this one exits. If the level cannot be read the program goes on, so a broken check cannot
-  restart it forever. v1.0 should also keep `requireAdministrator` in the manifest for parity
-  (autostart via a scheduled task stays as in the README); not done yet. Revisit later so PCs
-  without a tunnel work unelevated.
+  restart it forever. That check stays as a fallback. For parity with v0.3 the executable
+  also carries a manifest with `requireAdministrator` (`rust/app/windows/app.manifest`), so
+  Windows shows the UAC prompt before the program starts and the check normally finds it
+  elevated (autostart via a scheduled task stays as in the README). The manifest also declares
+  per-monitor DPI awareness v2 and Windows 10/11 support. It is embedded by `build.rs` with the
+  `winresource` crate (0.1.34, MIT, no default features; it calls `rc.exe` on MSVC), only for a
+  Windows target (the script reads `CARGO_CFG_TARGET_OS`, so the Linux build does nothing) and
+  only for the `HomeLink` binary (`compile_for`), so the test executables of the crate do not
+  ask for elevation. The same resource has the application icon (`rust/app/windows/app.ico`,
+  copied from `src/homelink/assets`) and the version information from `Cargo.toml`. The UTF-8
+  active code page (`activeCodePage`) is deliberately **not** in the manifest: the decoding of
+  console output (section 3b of the roadmap) depends on the OEM code page, and whether the
+  setting leaves the code page a child console program writes in unchanged was not verifiable
+  here, so it is left out. Revisit later so PCs without a tunnel work unelevated.
+- Taskbar: the tray panel and the details window stay off the Windows taskbar; the settings
+  window, the wizard and the tunnel form appear on it with the application icon and the title
+  `HomeLink — <window>`. The window attributes hook of Slint is called for every window alike,
+  so it cannot decide this; `platform::hide_from_taskbar` sets `skip_taskbar` on the winit
+  window (`WindowExtWindows`) of the panel and of the details window after each `show()`.
 - Single instance: a lock on `homelink.lock` in the configuration folder (`File::try_lock`),
   held for the life of the process and released by the system when it ends; this replaces the
   named mutex and needs no Win32 binding. Two copies with different configuration folders can
@@ -727,25 +758,35 @@ the operating system is a parameter of the SSH power method; there is no summary
 **SSH setup** (steps 3 and 4; shared by relay hosts and PCs). The wizard does not ask for or store
 any password.
 
-- *OpenSSH client check.* Before any SSH step the wizard looks for the client (`ssh.exe` and
-  `ssh-keygen.exe`, normally `%SystemRoot%\System32\OpenSSH`). On Windows 10 LTSC it is an
-  optional feature that may be missing; the wizard then shows how to install it (Settings >
-  Apps > Optional features > OpenSSH Client) and does not continue the SSH step until it is
-  found (`wizard.ssh.openssh_missing`).
-- *Key.* Either "create a new key for HomeLink" (the wizard runs `ssh-keygen -t ed25519`
-  with an empty passphrase into a dedicated file, so the elevated program can use it
-  unattended; the file's location is a per-machine folder chosen in phase 4, restricted to
-  the user and administrators) or "use an existing key" (a file picker). The configuration
-  stores only the absolute path. A key is required for every SSH relay and every SSH power
-  method; the wizard does not offer "let ssh choose". The wizard shows the public key for the
-  user to install.
+- *OpenSSH client check (built, `core::ssh_setup`, `app::ssh_ops`).* When the wizard opens and
+  before the checks, it looks for `ssh`, `ssh-keygen` and `ssh-keyscan` in the folders of `PATH`
+  and in `%SystemRoot%\System32\OpenSSH` (the `.exe` files on Windows). On Windows 10 LTSC the
+  client is an optional feature that may be missing; the wizard then shows how to install it
+  (Settings > Apps > Optional features > OpenSSH Client; `wizard.ssh.openssh_missing`) under the
+  key field of the relay (step 3), of the PC (step 4) and on the checks step, disables
+  "Створити ключ", and does not run the SSH checks (their rows say the client is not installed).
+  Saving the PC stays allowed. A client found only in `System32\OpenSSH` and not on `PATH` counts
+  as installed, but the run-time commands start `ssh` through `PATH`, so they would still fail;
+  the optional feature puts the folder on `PATH`.
+- *Key (built).* Next to each key-file field (new relay, PC) "Створити ключ" runs
+  `ssh-keygen -q -t ed25519 -N "" -C homelink -f <path>` with an empty passphrase, so the
+  elevated program can use the key unattended. The file goes to the `keys` folder of the
+  configuration folder (`keys\homelink_ed25519`, then `_2`, `_3`...; a name whose private or
+  `.pub` file exists is never reused, so nothing is overwritten) and fills the field. The
+  window then shows the public key text with a copy button. The program never reads the private
+  key: the text comes from the `.pub` file beside the file named in the field, also when the key
+  was made by hand. The configuration stores only the absolute path. The folder inherits the
+  permissions of the configuration folder (next to the program); `ssh-keygen` itself restricts
+  the private file (on Windows it sets the access list of the file). A per-machine folder
+  restricted to administrators, as the first proposal said, is not done. There is no file
+  picker ("use an existing key" is typing the path); the wizard does not offer "let ssh choose".
 - *Relay side, by preset* (`wizard.relay.setup.*`; the wizard fills in the user name, key
   file name and the address of this computer):
   - `routeros`: the RouterOS commands to create a group that can only log in over SSH and run
     `/tool wol` (policies `ssh`, `read`, `test`), create a user in it that is limited to this
     computer's address, import the public key for that user, and disable password login for
-    SSH (`/ip ssh set always-allow-password-login=no`). To be verified on RouterOS 7 in
-    phase 3.
+    SSH (`/ip ssh set always-allow-password-login=no`). **To be verified on RouterOS 7 in
+    phase 3** (not yet verified).
   - `etherwake`: install `etherwake`, create the SSH user and add the public key to its
     `authorized_keys`. The step asks "run the command with sudo" (`wizard.field.sudo`,
     `wizard.hint.sudo`; there is no default, the user must choose). If yes, it also shows
@@ -754,16 +795,46 @@ any password.
     `sudo -n`, so a missing rule fails at once.
   - `wakeonlan`: the same, for `wakeonlan`.
   - `routeros`: no `sudo` question.
-  The text of each set lives in one place in core so tests and the wizard share it.
+  The text of each set lives in one place in core (`core::relay_setup`, pure and tested) so the
+  wizard and the tests share it. Built for a **new** relay only (an existing relay's user and key
+  are not in the wizard); it is a read-only block with a copy button in step 3 under the relay's
+  fields, refreshed when the preset, user, key file or sudo answer changes. Placeholders in angle
+  brackets stand for what the program cannot know: a user name that is not safe to put in a
+  command, the public key before it exists, and, for RouterOS, the address this computer has in
+  the router's network (not detected: it depends on the tunnel). The generated lines are:
+  RouterOS: `/user group add name=homelink policy=ssh,read,test`, `/user add name=<user>
+  group=homelink address=<address>`, `/file add name=homelink.pub contents="<key>"`,
+  `/user ssh-keys import public-key-file=homelink.pub user=<user>`, `/file remove
+  homelink.pub`, `/ip ssh set always-allow-password-login=no`. etherwake and wakeonlan (as root
+  on the relay): `apt install <tool>` (the text says to use `opkg install` on OpenWrt), the
+  user's `~/.ssh` with mode 700, the key appended to `authorized_keys`, and with sudo a file in
+  `/etc/sudoers.d` for `$(command -v <tool>)` with `NOPASSWD`, checked by `visudo -cf`.
+  **The RouterOS commands are unverified on a real RouterOS 7** (policies, the
+  `/file add ... contents=` and key import forms, whether `address=` takes a bare address,
+  and `always-allow-password-login`); the wizard text says so. The PC side of an SSH power
+  method (the `authorized_keys` line and `sudoers` line) is not built.
 - *PC side.* For an SSH power method the wizard shows the line to add to `authorized_keys`
   and, for Linux, the `sudoers` line from the README.
-- *Test connection* (step 5, `core::checks`; implemented up to reporting an unknown host key as
-  `CheckResult::SshHostKeyUnknown`; the consent flow below is **not built yet**). Runs `ssh` with the same options as at run time (`BatchMode=yes`,
-  `IdentitiesOnly=yes`, `-i <key>`, `StrictHostKeyChecking=yes`). If the
-  host key is unknown, the wizard shows its fingerprint and asks for explicit consent
-  (`wizard.ssh.host_key_unknown`, `wizard.ssh.trust`); only on consent does it repeat the test
-  with `StrictHostKeyChecking=accept-new`. This replaces the manual first `ssh` from the
-  README and is the only place in the program that accepts a host key.
+- *Test connection and host key consent (step 5, built: `core::checks`, `core::ssh_setup`,
+  `app::ssh_ops`).* The checks run `ssh` with the same options as at run time (`BatchMode=yes`,
+  `IdentitiesOnly=yes`, `-i <key>`, `StrictHostKeyChecking=yes`) and report an unknown host key
+  as `CheckResult::SshHostKeyUnknown`; nothing is ever accepted by `ssh` itself, so
+  `accept-new` is not used at all. A row with an unknown key has "Довірити вузлу". Pressing it
+  runs `ssh-keyscan -T 8 -p <port> -- <host>` (a plain TCP connection; the checks need the
+  tunnel up, so it goes through the tunnel as the checks do), builds the `known_hosts` lines
+  from the keys found (the host field of the scan is ignored: the line names the host the user
+  chose, `host` or `[host]:port`), writes them to a temporary file and shows the SHA-256
+  fingerprints that `ssh-keygen -l -E sha256 -f` computes from that very text (one per key
+  type). Only when the user presses "Довіряти" (`wizard.ssh.trust`) are those same lines
+  appended to `%USERPROFILE%\.ssh\known_hosts` (the file the program's `ssh` reads; `$HOME` off
+  Windows), after a line end if the last line had none, and the checks run again. "Скасувати"
+  or leaving the step withdraws the offer. An entry for the host that exists already
+  (`ssh-keygen -F`) is never replaced or doubled: the wizard says so and how to remove it by
+  hand. A changed key (`SshHostKeyChanged`) is an error with no button; the note explains what
+  it may mean and that HomeLink never replaces it. This replaces the manual first `ssh` from the
+  README and is the only place in the program that adds a host key. Not built: the `ssh` of
+  the run-time commands uses the default `known_hosts`; an explicit `UserKnownHostsFile` in the
+  config folder would remove the dependence on the profile (see the risks).
 
 ## 12. Open questions (not decided here)
 
@@ -856,19 +927,29 @@ must equal `homelink.__version__`. Changes (the Python jobs stay until phase 7):
 | 2b SSH-only access (done, owner decision) | REST and every secret removed; relay hosts over SSH with a key; `core::wake` builds the `ssh` argv (pure, tested); locale keys updated | no password, URL or secret type left in core; tests green |
 | 2c Relay presets and routed wake (done, owner decision) | `[[relays]]` with a preset (`routeros`, `etherwake`, `wakeonlan`); `method = "relay"`; magic packet `address` (unicast or broadcast); per-preset validation and exact-argument tests | tests green; section 3 documents the unicast + static ARP setup |
 | 3a Portable adapters (done) | `core::adapters`: TCP probe, magic packet, `StdCommandRunner`, command wake, SSH and command power runner, relay `sudo`; Linux integration tests against local stand-ins and a fake `ssh`; the real engine over them | tests green on Linux; the real-engine test passes |
-| 3b Windows adapters (code written, unit-tested on Linux; not yet run on Windows) | In `app/src/windows/`, as pure functions plus a thin layer over `CommandRunner`, no new Win32 binding: WireGuard service (`wireguard.exe` install/uninstall, state from `sc query`, parsed independently of the display language), ping (`TTL=`), OEM output decoder (code pages 437, 850, 866 from the registry value `OEMCP`; other pages decode ASCII only) plugged into `StdCommandRunner`, `.rdp` file and `mstsc`, elevation check and restart, display language from `reg query`. **Still open:** OpenSSH client detection (wizard); verify the RouterOS commands on RouterOS 7; real `sc query` output in a non-English OEM code page (the test samples follow the documented format and were not captured on Windows); decoders for other code pages if needed | adapter tests green in the Windows CI job (the CI `rust-app` job does not run the app's tests yet); a real `/tool wol` over SSH works |
-| 4 App shell (real mode works in code, not yet proven on Windows) | Done: panel on the real engine, tray with aggregate icon, `config.toml` with a template on the first start and every validation problem shown in the catalog language, rotating log file, single instance (file lock), elevation restart, RDP button, `--config`, cargo feature `demo` for the fake-driven mode. **Remaining:** tray balloons for notices (no Slint API found; notices go to the log), `requireAdministrator` manifest, taskbar theme (light/dark icon set), icons moved from `src/homelink/assets`, joining the engine thread on quit, local time in the log, app tests in CI | a single PC with a tunnel works end to end on Windows |
-| 5 Multi-PC and wizard | Groups, shared tunnel, PC without a tunnel, wizard (add/edit/delete), About with the Slint credit, config reload. **Done (C1, core logic, tested on Linux):** `core::settings`, `core::wizard` (five steps of the handoff), `core::tunnel_form`, `core::checks`, `core::about`, `Handle::reload`, locale keys. **Open:** the settings and wizard windows, SSH host-key consent, key creation, third-party notices file | tunnel groups, a shared tunnel and a PC without a tunnel work by hand |
+| 3b Windows adapters (code written, unit-tested on Linux; not yet run on Windows) | In `app/src/windows/`, as pure functions plus a thin layer over `CommandRunner`, no new Win32 binding: WireGuard service (`wireguard.exe` install/uninstall, state from `sc query`, parsed independently of the display language), ping (`TTL=`), OEM output decoder (code pages 437, 850, 866 from the registry value `OEMCP`; other pages decode ASCII only) plugged into `StdCommandRunner`, `.rdp` file and `mstsc`, elevation check and restart, display language from `reg query`. OpenSSH client detection is done (stage D1, `core::ssh_setup`). **Still open:** verify the RouterOS commands on RouterOS 7; real `sc query` output in a non-English OEM code page (the test samples follow the documented format and were not captured on Windows); decoders for other code pages if needed | adapter tests green in the Windows CI job (the CI `rust-app` job does not run the app's tests yet); a real `/tool wol` over SSH works |
+| 4 App shell (real mode works in code, not yet proven on Windows) | Done: panel on the real engine, tray with aggregate icon, `config.toml` with a template on the first start and every validation problem shown in the catalog language, rotating log file, single instance (file lock), elevation restart, RDP button, `--config`, cargo feature `demo` for the fake-driven mode. **Stage D1 (code written, not run on Windows):** tray balloons for notices (`Shell_NotifyIconW`, section 9; Slint's tray has no such call), the manifest with `requireAdministrator` and per-monitor DPI v2, the application icon and version information embedded by `winresource`, the settings window, wizard and tunnel form on the taskbar (only the panel and details window are hidden from it). **Remaining:** taskbar theme (light/dark icon set), the application icon for the tray and the About window from `src/homelink/assets` (the `.ico` is copied for the executable only), joining the engine thread on quit, local time in the log, app tests in CI | a single PC with a tunnel works end to end on Windows |
+| 5 Multi-PC and wizard | Groups, shared tunnel, PC without a tunnel, wizard (add/edit/delete), About with the Slint credit, config reload. **Done (C1, core logic, tested on Linux):** `core::settings`, `core::wizard` (five steps of the handoff), `core::tunnel_form`, `core::checks`, `core::about`, `Handle::reload`, locale keys. **Done (D1, code written and unit-tested on Linux, not run on Windows):** OpenSSH client detection, key creation, SSH host-key consent, the relay setup commands (section 11); the UI of these has no designer's layout (reused Field/Btn/list styles). **Open:** the PC-side `authorized_keys`/`sudoers` lines, the third-party notices file | tunnel groups, a shared tunnel and a PC without a tunnel work by hand |
 | 6 Hardening | Manual checklist on Windows 10 LTSC and 11 (Linux and Windows remote PCs), docs rewrite (`README*.md`, `design.md`, relay and router setup, SSH for Windows), size and licence check, `v1.0.0-rc.1` | no open defects; parity checklist complete |
 | 7 Release | Remove `src/homelink/`, `tests/`, `pyproject.toml`, `build.bat`, `run_homelink.pyw`, Python CI jobs; decide the future of `tools/generate_icons.py` (keep as a dev tool or port); tag `v1.0.0` | release published, README links verified |
 
-Technical risks to verify in phase 0: tray notifications in Slint 1.18; position of the tray
+Technical risks to verify in phase 0: tray notifications in Slint 1.18 (checked in the sources:
+no call; a `Shell_NotifyIconW` balloon from a hidden notify icon is built, and must be seen
+working on Windows 10 LTSC and 11); position of the tray
 icon (the prototype assumes a bottom-right taskbar); `ssh` reads `known_hosts` from the profile
 of the elevated user, which can differ from the logged-in user when UAC elevates under another
 account (the wizard and the program run in the same elevated process, so they agree, but a
 key or host list prepared by hand in the other profile will not be seen); the OpenSSH client
-may be absent on Windows 10 LTSC (optional feature, may need an offline source); an
-empty-passphrase key file must be protected by file permissions (created under a per-machine
-folder restricted to the user and administrators); the RouterOS user, policy and key-import
+may be absent on Windows 10 LTSC (optional feature, may need an offline source; the wizard
+detects it and says how to install it); an
+empty-passphrase key file must be protected by file permissions (created in the `keys` folder
+of the configuration folder; `ssh-keygen` restricts the file itself, which must be checked on
+Windows; a folder restricted to the user and administrators is not set up); the RouterOS user,
+policy and key-import
 commands must be verified on RouterOS 7; `unstable-winit-030` is an unstable Slint feature (pin
-the exact Slint version).
+the exact Slint version); the manifest and `winresource` (`rc.exe` from the Windows SDK) have
+not been built on Windows yet: the first Windows CI build must succeed and the executable
+must show the UAC prompt and the icon; with
+`requireAdministrator` the app's test executables must not get the manifest (they do not,
+`compile_for` names the binary: to confirm on CI); the taskbar button of the panel may flash for
+one frame on the first show before `skip_taskbar` applies (`skip_taskbar` is set after `show()`).

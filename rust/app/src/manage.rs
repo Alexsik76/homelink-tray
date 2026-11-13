@@ -89,6 +89,10 @@ pub(crate) struct Manage {
     pub(crate) session: RefCell<Option<wizard_ui::Session>>,
     /// Counts the runs of the checks; a result of an older run is dropped.
     pub(crate) check_run: Cell<u64>,
+    /// Counts the opening of the wizard; the result of a key made for an earlier one is dropped.
+    pub(crate) session_id: Cell<u64>,
+    /// Counts the offers of a host key; an answer for an older one is dropped.
+    pub(crate) trust_run: Cell<u64>,
     pub(crate) settings: SettingsWindow,
     pub(crate) form_window: TunnelFormWindow,
     pub(crate) wizard: WizardWindow,
@@ -176,6 +180,8 @@ pub(crate) fn install(panel: &Panel, setup: Setup) -> Result<(), slint::Platform
         form: RefCell::new(None),
         session: RefCell::new(None),
         check_run: Cell::new(0),
+        session_id: Cell::new(0),
+        trust_run: Cell::new(0),
         settings,
         form_window,
         wizard,
@@ -204,6 +210,11 @@ fn wire_wizard(wizard: &WizardWindow) {
     wizard.on_back(|| with_manage(Manage::wizard_back));
     wizard.on_cancel(|| with_manage(Manage::cancel_wizard));
     wizard.on_retest(|| with_manage(Manage::wizard_retest));
+    wizard.on_create_key(|which| with_manage(|m| m.create_key(which)));
+    wizard.on_refresh_help(|| with_manage(Manage::refresh_help));
+    wizard.on_trust_host(|index| with_manage(|m| m.trust_host(index)));
+    wizard.on_trust_confirm(|| with_manage(Manage::trust_confirm));
+    wizard.on_trust_cancel(|| with_manage(Manage::trust_cancel));
 }
 
 /// Esc closes the window (or, in the settings, cancels a waiting delete first). The action runs
@@ -304,6 +315,12 @@ fn fill_words(w: &Words, tr: &Translator) {
     w.set_rdp_note(t("wizard.rdp.note"));
     w.set_test_again(t("wizard.test.again"));
     w.set_test_note(t("wizard.test.note"));
+    w.set_create_key(t("wizard.ssh.create_key"));
+    w.set_copy(t("wizard.ssh.copy"));
+    w.set_public_key_label(t("wizard.ssh.public_key"));
+    w.set_trust_host(t("wizard.ssh.trust_host"));
+    w.set_trust(t("wizard.ssh.trust"));
+    w.set_openssh_missing(t("wizard.ssh.openssh_missing"));
 }
 
 /// A model of `items`.
