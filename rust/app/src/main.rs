@@ -11,8 +11,10 @@
 //! See `docs/rust-architecture.md`, sections 2, 7 and 9.
 #![windows_subsystem = "windows"]
 
+mod appearance;
 #[cfg(feature = "demo")]
 mod demo;
+mod icon;
 mod instance;
 mod logging;
 mod platform;
@@ -26,11 +28,14 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use homelink_core::adapters::command::StdCommandRunner;
 use homelink_core::config::Config;
 use homelink_core::domain::PcId;
-use homelink_core::engine::{Deps, Engine};
+use homelink_core::engine::{Deps, Engine, Handle};
 use homelink_core::i18n::{LanguageSetting, Translator};
 use homelink_core::ports::Sink;
+
+use crate::appearance::ThemeSetting;
 
 /// Command-line options.
 struct Options {
@@ -40,6 +45,8 @@ struct Options {
     language: Option<LanguageSetting>,
     /// `--config`: the settings file, instead of `config.toml` next to the program.
     config: Option<PathBuf>,
+    /// `--theme`: the colours of the panel (provisional, until the settings window has it).
+    theme: ThemeSetting,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
@@ -47,6 +54,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
         demo: false,
         language: None,
         config: None,
+        theme: ThemeSetting::Auto,
     };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -62,6 +70,13 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
             "--config" => {
                 let value = args.next().ok_or("--config needs the path of the file")?;
                 options.config = Some(PathBuf::from(value));
+            }
+            "--theme" => {
+                let value = args
+                    .next()
+                    .ok_or("--theme needs a value: auto, light or dark")?;
+                options.theme = ThemeSetting::parse(&value)
+                    .ok_or_else(|| format!("unknown theme '{value}': use auto, light or dark"))?;
             }
             other => return Err(format!("unknown argument '{other}'")),
         }
@@ -79,7 +94,7 @@ fn main() -> ExitCode {
         }
     };
     if options.demo {
-        return run_demo(options.language);
+        return run_demo(options.language, options.theme);
     }
     match real::prepare(options.config.as_deref(), options.language, &args) {
         Ok(real) => {
@@ -88,8 +103,10 @@ fn main() -> ExitCode {
             let result = run_ui(
                 real.config.clone(),
                 translator.clone(),
+                options.theme,
                 |sink| real.deps(sink),
                 Box::new(move |pc: &PcId| rdp.open(pc)),
+                |_| {},
             );
             finish(result, &translator)
         }
@@ -117,49 +134,74 @@ fn finish(result: Result<(), Box<dyn Error>>, translator: &Translator) -> ExitCo
     }
 }
 
-/// `--demo`: the panel on simulated PCs and tunnels.
+/// `--demo`: the panel on simulated PCs and tunnels, cycling through every display state.
 #[cfg(feature = "demo")]
-fn run_demo(language: Option<LanguageSetting>) -> ExitCode {
-    let config = homelink_core::testing::multi_config();
+fn run_demo(language: Option<LanguageSetting>, theme: ThemeSetting) -> ExitCode {
+    let config = homelink_core::testing::demo_config();
     let translator = Translator::new(language.unwrap_or(config.language).resolve(None));
     let for_deps = config.clone();
+    let fakes = demo::Fakes::default();
+    let for_cycle = fakes.clone();
     let result = run_ui(
         config,
         translator.clone(),
-        move |sink| demo::deps(&for_deps, sink),
+        theme,
+        move |sink| demo::deps(&for_deps, sink, &fakes),
         Box::new(|pc: &PcId| {
             log::info!("demo: Remote Desktop for {pc} would open here");
             Ok(())
         }),
+        move |handle| demo::cycle(handle, for_cycle),
     );
     finish(result, &translator)
 }
 
 /// `--demo` in a build without the `demo` feature.
 #[cfg(not(feature = "demo"))]
-fn run_demo(language: Option<LanguageSetting>) -> ExitCode {
+fn run_demo(language: Option<LanguageSetting>, _theme: ThemeSetting) -> ExitCode {
     let translator = Translator::new(language.unwrap_or(LanguageSetting::Auto).resolve(None));
     platform::message(&translator.t("error.demo_unavailable", &[]));
     ExitCode::FAILURE
 }
 
 /// Starts the panel and the tray icon on an engine built from `config` and the dependencies
-/// that `deps` makes, and runs the Slint event loop until the user quits.
+/// that `deps` makes, and runs the Slint event loop until the user quits. `start` runs once the
+/// engine has started, with a handle to it (the demo drives the engine through it).
 fn run_ui(
     config: Config,
     translator: Translator,
+    theme: ThemeSetting,
     deps: impl FnOnce(Arc<dyn Sink>) -> Deps,
     rdp: ui::RdpAction,
+    start: impl FnOnce(Handle),
 ) -> Result<(), Box<dyn Error>> {
     platform::select_backend()?;
     let panel = view::Panel::new()?;
+    let details = view::DetailsWindow::new()?;
     let tray = view::Tray::new()?;
     let sink = Arc::new(ui::UiSink::new(translator.clone()));
-    let (engine, handle) = Engine::new(config, deps(sink));
-    ui::install(&panel, &tray, translator, handle.clone(), rdp);
+    let deps = deps(sink);
+    let clock = Arc::clone(&deps.clock);
+    let (engine, handle) = Engine::new(config, deps);
+    let appearance = appearance::detect(theme, &StdCommandRunner::new());
+    ui::install(
+        &ui::Windows {
+            panel: &panel,
+            details: &details,
+            tray: &tray,
+        },
+        ui::Setup {
+            translator,
+            handle: handle.clone(),
+            rdp,
+            clock,
+            appearance,
+        },
+    );
     tray.show()?;
     // The engine thread is left to end with the process: `Handle::stop` was sent on quit.
     let _engine_thread = engine.spawn()?;
+    start(handle.clone());
     slint::run_event_loop_until_quit()?;
     handle.stop();
     Ok(())
@@ -185,6 +227,11 @@ mod tests {
         assert!(!o.demo);
         assert_eq!(o.language, None);
         assert_eq!(o.config, None);
+        assert_eq!(o.theme, ThemeSetting::Auto);
+        let o = parse_args(args(&["--theme", "dark"])).unwrap();
+        assert_eq!(o.theme, ThemeSetting::Dark);
+        assert!(parse_args(args(&["--theme"])).is_err());
+        assert!(parse_args(args(&["--theme", "blue"])).is_err());
         assert!(parse_args(args(&["--lang"])).is_err());
         assert!(parse_args(args(&["--lang", "de"])).is_err());
         assert!(parse_args(args(&["--nope"])).is_err());

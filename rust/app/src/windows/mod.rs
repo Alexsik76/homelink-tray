@@ -11,6 +11,7 @@
 //! - [`ping`]: the probe host check ([`Pinger`]).
 //! - [`oem`]: decoding of console output in the OEM code page.
 //! - [`reg`], [`language`]: registry values through `reg query`, and the display language.
+//! - [`theme`]: the application and taskbar themes and the display scale, from the registry.
 //! - [`rdp`]: the `.rdp` file and launching `mstsc`.
 //! - [`elevation`]: administrator check and restart.
 //!
@@ -23,6 +24,7 @@ pub(crate) mod oem;
 pub(crate) mod ping;
 pub(crate) mod rdp;
 pub(crate) mod reg;
+pub(crate) mod theme;
 pub(crate) mod wireguard;
 
 #[cfg(test)]

@@ -1,205 +1,479 @@
-// HomeLink panel and tray icon: layout and colours only. Every user-visible text comes from
-// the `Strings` global, which the app fills from the core catalog (en, uk).
+// HomeLink panel, details window and tray icon: layout and colours only. Every colour comes
+// from `Theme` (docs/design/ui-handoff.md, ui-handoff-dark.md); every user-visible text comes
+// from `Strings` or from the rows the app builds from the locale catalog.
 
 import "./fonts/Inter-Regular.ttf";
 import "./fonts/Inter-SemiBold.ttf";
 
-export enum ViewState { online, waking, off, unknown }
-export enum LinkState { down, starting, up }
+export enum Mark { ok, busy, off, unknown, fail }
 export enum PowerKind { sleep, shutdown }
+
+// One set of colours; `dark` picks the theme. Every window instance has its own copy.
+export global Theme {
+    in-out property <bool> dark: false;
+    out property <color> bg: dark ? #17181A : #FAFAF8;
+    out property <color> bg-side: dark ? #1D1E21 : #F3F3EF;
+    out property <color> surface: dark ? #202124 : #FFFFFF;
+    out property <color> line: dark ? #34363B : #DCDCD6;
+    out property <color> line-strong: dark ? #4A4D52 : #C9C9C3;
+    out property <color> frame: dark ? #5A5D63 : #2A2B2E;
+    out property <color> ink: dark ? #ECECE8 : #17181A;
+    out property <color> ink-2: dark ? #B4B7BC : #4A4D52;
+    out property <color> muted: dark ? #9A9DA2 : #6B6E73;
+    out property <color> disabled: dark ? #5C5F64 : #ADB0B4;
+    out property <color> hover: dark ? #24262A : #EFEFEA;
+    out property <color> pressed: dark ? #303238 : #E2E2DC;
+    out property <color> expanded: dark ? #2A2C30 : #E9E9E4;
+    // The outline of an inactive marker (the light value is the one in the handoff).
+    out property <color> marker-inactive: dark ? #4A4D52 : #C4C6C9;
+    out property <color> on-ink: dark ? #17181A : #FFFFFF;
+    out property <color> link: dark ? #8FB0FF : #1F4FD8;
+    out property <color> link-hover: dark ? #B7CCFF : #143BAA;
+    out property <color> placeholder: dark ? #8A8D91 : #8A8D91;
+    out property <color> state-ok: dark ? #22C55E : #15803D;
+    out property <color> state-busy: dark ? #FACC15 : #E8A317;
+    out property <color> state-off: dark ? #4A78FF : #1F4FD8;
+    out property <color> state-unknown: dark ? #9A9DA2 : #8A8D91;
+    out property <color> state-fail: dark ? #F0554A : #C4281C;
+}
 
 export global Strings {
     in-out property <string> no-tunnel;
     in-out property <string> empty;
+    in-out property <string> settings;
     in-out property <string> wake;
     in-out property <string> sleep;
+    in-out property <string> sleep-confirm;
     in-out property <string> shutdown;
+    in-out property <string> shutdown-confirm;
     in-out property <string> rdp;
-    in-out property <string> yes;
-    in-out property <string> no;
     in-out property <string> show-panel;
     in-out property <string> quit;
+}
+
+// Half of the busy period (1 s) of the state markers; the app toggles it on a timer.
+export global Motion {
+    in-out property <bool> blink-on: true;
+}
+
+export struct DetailRow {
+    label: string,
+    value: string,
+    strong: bool,
+    fail: bool,
+}
+
+export struct TunnelRow {
+    // Identifier, used to send the commands.
+    id: string,
+    name: string,
+    mark: Mark,
+    inactive: bool,
+    toggle-on: bool,
+    toggle-label: string,
 }
 
 export struct PcRow {
     id: string,
     name: string,
-    state: ViewState,
-    state-text: string,
-    can-wake: bool,
-    can-sleep: bool,
-    can-shutdown: bool,
-    can-rdp: bool,
-    // The inline confirmation of a sleep or shutdown request replaces the action buttons.
-    asking: bool,
-    asking-kind: PowerKind,
-    question: string,
+    mark: Mark,
+    // Nothing is configured for this PC: its name is shown as inactive.
+    inactive: bool,
+    wake-on: bool,
+    sleep-on: bool,
+    shutdown-on: bool,
+    rdp-on: bool,
 }
 
 export struct GroupRow {
-    // Empty for the group of PCs without a tunnel.
-    tunnel-id: string,
     has-tunnel: bool,
-    tunnel-name: string,
-    tunnel-state: LinkState,
-    tunnel-state-text: string,
-    can-toggle: bool,
+    tunnel: TunnelRow,
     pcs: [PcRow],
 }
 
-component TunnelButton inherits Rectangle {
-    in property <string> label;
-    in property <string> detail;
-    in property <LinkState> link;
-    in property <bool> active: true;
-    callback clicked();
-    height: 44px;
-    background: root.link == LinkState.up
-        ? (ta.has-hover ? #1d4ed8 : #2563eb)
-        : root.link == LinkState.starting
-            ? (ta.has-hover ? #eab308 : #facc15)
-            : (ta.has-hover ? #d1d5db : #e5e7eb);
-    VerticalLayout {
-        alignment: center;
-        Text {
-            text: root.label;
-            color: root.link == LinkState.up ? #ffffff : (root.active ? #1a1a1a : #9a9a9a);
-            font-weight: 600;
-            horizontal-alignment: center;
-            overflow: elide;
-        }
-        Text {
-            text: root.detail;
-            color: root.link == LinkState.up ? #ffffff : (root.active ? #1a1a1a : #9a9a9a);
-            font-size: 11px;
-            horizontal-alignment: center;
-        }
+// The state of the panel: which element has its submenu open, and which power button waits for
+// its confirmation. Lives in the UI only; the engine never sees it.
+export global Nav {
+    // "t:<id>" for a tunnel, "p:<id>" for a PC, or "" when no submenu is open.
+    in-out property <string> expanded;
+    // "sleep" or "shutdown" while that button awaits its confirmation, else "".
+    in-out property <string> armed;
+
+    callback tunnel-toggle(string);
+    callback wake(string);
+    callback power(string, PowerKind);
+    callback rdp(string);
+    callback details(string);
+    callback settings-clicked();
+    callback hide-requested();
+    callback layout-changed();
+
+    public function toggle(key: string) {
+        armed = "";
+        expanded = expanded == key ? "" : key;
     }
-    ta := TouchArea {
-        enabled: root.active;
-        clicked => { root.clicked(); }
+
+    public function disarm() {
+        armed = "";
+    }
+
+    public function close-submenu() {
+        expanded = "";
+        armed = "";
+    }
+
+    public function reset() {
+        expanded = "";
+        armed = "";
+    }
+
+    public function escape() {
+        if (expanded != "") {
+            close-submenu();
+        } else {
+            hide-requested();
+        }
     }
 }
 
-component ActionButton inherits Rectangle {
-    in property <string> label;
-    in property <bool> active: true;
-    in property <length> text-padding: 6px;
-    callback clicked();
-    height: 26px;
-    background: (root.active && ta.has-hover) ? #e6e6e6 : transparent;
-    HorizontalLayout {
-        padding-left: root.text-padding;
-        padding-right: root.text-padding;
-        Text {
-            text: root.label;
-            color: root.active ? #1a1a1a : #9a9a9a;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-    }
-    ta := TouchArea {
-        enabled: root.active;
-        clicked => { root.clicked(); }
-    }
+// The marker of a tunnel or a PC: 8 x 8, square, no rounding.
+component StateMark inherits Rectangle {
+    in property <Mark> mark;
+    in property <bool> inactive: false;
+    property <bool> outline: root.inactive || root.mark == Mark.unknown || (root.mark == Mark.busy && !Motion.blink-on);
+    property <color> tone: root.mark == Mark.ok ? Theme.state-ok
+        : root.mark == Mark.busy ? Theme.state-busy
+        : root.mark == Mark.off ? Theme.state-off
+        : root.mark == Mark.fail ? Theme.state-fail
+        : Theme.state-unknown;
+    width: 8px;
+    height: 8px;
+    background: root.outline ? transparent : root.tone;
+    border-width: root.outline ? 1px : 0px;
+    border-color: root.inactive ? Theme.marker-inactive : root.tone;
 }
 
-component PcRowView inherits VerticalLayout {
-    in property <PcRow> pc;
-    callback wake-clicked();
-    callback ask-power(PowerKind);
-    callback confirm-power();
-    callback cancel-power();
-    callback rdp-clicked();
-    spacing: 2px;
+// A tunnel or PC element: 36 high, the marker and the name.
+component Element inherits Rectangle {
+    in property <string> key;
+    in property <string> name;
+    in property <Mark> mark;
+    in property <bool> inactive: false;
+    property <bool> open: Nav.expanded == root.key;
 
-    pure function dot-color(s: ViewState) -> color {
-        s == ViewState.online ? #22c55e
-            : s == ViewState.waking ? #f59e0b
-            : s == ViewState.off ? #a3a3a3
-            : #52525b
+    // Used when the submenu closes while its button had the focus.
+    public function grab-focus() {
+        fs.focus();
+    }
+
+    height: 36px;
+    background: ta.pressed ? Theme.pressed
+        : root.open ? Theme.expanded
+        : ta.has-hover ? Theme.hover
+        : transparent;
+    border-width: fs.has-focus ? 2px : 1px;
+    border-color: fs.has-focus ? Theme.state-off : (root.open ? Theme.ink : transparent);
+
+    fs := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                Nav.toggle(root.key);
+                return accept;
+            }
+            if (event.text == Key.Escape) {
+                Nav.escape();
+                return accept;
+            }
+            return reject;
+        }
     }
 
     HorizontalLayout {
-        padding-left: 6px;
-        padding-right: 6px;
-        spacing: 8px;
-        Text {
-            text: root.pc.name;
-            color: #1a1a1a;
-            vertical-alignment: center;
-            horizontal-stretch: 1;
-            overflow: elide;
-        }
+        width: parent.width;
+        height: parent.height;
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
         Rectangle {
-            width: 10px;
-            Rectangle {
-                width: 10px;
-                height: 10px;
+            width: 8px;
+            height: parent.height;
+            StateMark {
                 y: (parent.height - self.height) / 2;
-                background: root.dot-color(root.pc.state);
+                mark: root.mark;
+                inactive: root.inactive;
             }
         }
         Text {
-            text: root.pc.state-text;
-            color: #1a1a1a;
+            text: root.name;
+            color: root.inactive ? Theme.disabled : Theme.ink;
+            font-size: 13px;
+            font-weight: 600;
+            overflow: elide;
             vertical-alignment: center;
-            horizontal-alignment: right;
-            min-width: 80px;
+            horizontal-stretch: 1;
         }
     }
-    if !root.pc.asking : HorizontalLayout {
-        spacing: 2px;
-        // Four equal cells across the row, so the short labels fit without elision.
-        ActionButton {
+
+    ta := TouchArea {
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                Nav.toggle(root.key);
+            }
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.down) {
+                Nav.disarm();
+                Nav.details(root.key);
+            }
+        }
+    }
+}
+
+// A button of a submenu: 28 high, centred label, the confirmation colours when armed.
+component SubButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> available: true;
+    in property <bool> armed: false;
+    callback activated();
+    callback escaped();
+
+    height: 28px;
+    horizontal-stretch: 1;
+    background: root.armed ? Theme.ink
+        : !root.available ? Theme.surface
+        : ta.pressed ? Theme.pressed
+        : ta.has-hover ? Theme.hover
+        : Theme.surface;
+    border-width: fs.has-focus ? 2px : 1px;
+    border-color: fs.has-focus ? Theme.state-off : (root.armed ? Theme.ink : Theme.line);
+
+    fs := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                if (root.available) {
+                    root.activated();
+                }
+                return accept;
+            }
+            if (event.text == Key.Escape) {
+                root.escaped();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    Text {
+        text: root.label;
+        color: root.armed ? Theme.on-ink : (root.available ? Theme.ink : Theme.disabled);
+        font-size: 12px;
+        font-weight: root.available ? 600 : 400;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    // The click is taken even when the button is unavailable, so that it does not reach the
+    // panel behind it; the action itself only runs when the button is available. Either way the
+    // click cancels a confirmation that is waiting, as any other click does.
+    ta := TouchArea {
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                if (root.available) {
+                    root.activated();
+                } else {
+                    Nav.disarm();
+                }
+            }
+        }
+    }
+}
+
+// The PC submenu: 2 x 2 under the PC element, gap 4, top padding 4, bottom padding 6.
+component PcSubmenu inherits VerticalLayout {
+    in property <PcRow> item;
+    callback escaped();
+    padding-top: 4px;
+    padding-bottom: 6px;
+    spacing: 4px;
+
+    HorizontalLayout {
+        spacing: 4px;
+        SubButton {
             label: Strings.wake;
-            active: root.pc.can-wake;
-            text-padding: 2px;
-            horizontal-stretch: 1;
-            clicked => { root.wake-clicked(); }
+            available: root.item.wake-on;
+            escaped => { root.escaped(); }
+            activated => {
+                Nav.disarm();
+                Nav.wake(root.item.id);
+            }
         }
-        ActionButton {
-            label: Strings.sleep;
-            active: root.pc.can-sleep;
-            text-padding: 2px;
-            horizontal-stretch: 1;
-            clicked => { root.ask-power(PowerKind.sleep); }
-        }
-        ActionButton {
-            label: Strings.shutdown;
-            active: root.pc.can-shutdown;
-            text-padding: 2px;
-            horizontal-stretch: 1;
-            clicked => { root.ask-power(PowerKind.shutdown); }
-        }
-        ActionButton {
-            label: Strings.rdp;
-            active: root.pc.can-rdp;
-            text-padding: 2px;
-            horizontal-stretch: 1;
-            clicked => { root.rdp-clicked(); }
+        SubButton {
+            label: Nav.armed == "sleep" ? Strings.sleep-confirm : Strings.sleep;
+            available: root.item.sleep-on;
+            escaped => { root.escaped(); }
+            armed: Nav.armed == "sleep";
+            activated => {
+                if (Nav.armed == "sleep") {
+                    Nav.disarm();
+                    Nav.power(root.item.id, PowerKind.sleep);
+                } else {
+                    Nav.armed = "sleep";
+                }
+            }
         }
     }
-    if root.pc.asking : HorizontalLayout {
-        padding-left: 6px;
-        padding-right: 6px;
+    HorizontalLayout {
+        spacing: 4px;
+        SubButton {
+            label: Nav.armed == "shutdown" ? Strings.shutdown-confirm : Strings.shutdown;
+            available: root.item.shutdown-on;
+            escaped => { root.escaped(); }
+            armed: Nav.armed == "shutdown";
+            activated => {
+                if (Nav.armed == "shutdown") {
+                    Nav.disarm();
+                    Nav.power(root.item.id, PowerKind.shutdown);
+                } else {
+                    Nav.armed = "shutdown";
+                }
+            }
+        }
+        SubButton {
+            label: Strings.rdp;
+            available: root.item.rdp-on;
+            escaped => { root.escaped(); }
+            activated => {
+                Nav.disarm();
+                Nav.rdp(root.item.id);
+            }
+        }
+    }
+}
+
+// The tunnel submenu: one full-width button, top padding 4.
+component TunnelSubmenu inherits VerticalLayout {
+    in property <TunnelRow> item;
+    callback escaped();
+    padding-top: 4px;
+
+    SubButton {
+        label: root.item.toggle-label;
+        available: root.item.toggle-on;
+        escaped => { root.escaped(); }
+        activated => {
+            Nav.disarm();
+            Nav.tunnel-toggle(root.item.id);
+        }
+    }
+}
+
+// A tunnel and its submenu. When the submenu closes after Esc, the focus returns to the tunnel.
+component TunnelBlock inherits VerticalLayout {
+    in property <TunnelRow> item;
+    el := Element {
+        key: "t:" + root.item.id;
+        name: root.item.name;
+        mark: root.item.mark;
+        inactive: root.item.inactive;
+    }
+    if Nav.expanded == "t:" + root.item.id : TunnelSubmenu {
+        item: root.item;
+        escaped => {
+            Nav.close-submenu();
+            el.grab-focus();
+        }
+    }
+}
+
+// A PC and its submenu, with the same focus return as the tunnel.
+component PcBlock inherits VerticalLayout {
+    in property <PcRow> item;
+    el := Element {
+        key: "p:" + root.item.id;
+        name: root.item.name;
+        mark: root.item.mark;
+        inactive: root.item.inactive;
+    }
+    if Nav.expanded == "p:" + root.item.id : PcSubmenu {
+        item: root.item;
+        escaped => {
+            Nav.close-submenu();
+            el.grab-focus();
+        }
+    }
+}
+
+// The close button of the details window: a 10 px cross drawn from 1 px squares.
+component CloseButton inherits Rectangle {
+    callback clicked();
+    width: 32px;
+    height: 32px;
+    background: ta.pressed ? Theme.pressed : ta.has-hover ? Theme.hover : transparent;
+
+    for i in 10 : Rectangle {
+        x: 11px + i * 1px;
+        y: 11px + i * 1px;
+        width: 1px;
+        height: 1px;
+        background: Theme.ink;
+    }
+    for i in 10 : Rectangle {
+        x: 20px - i * 1px;
+        y: 11px + i * 1px;
+        width: 1px;
+        height: 1px;
+        background: Theme.ink;
+    }
+
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The "Налаштування" footer button with a 12 px placeholder icon (the handoff has no icon).
+component FooterButton inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    height: 28px;
+    background: ta.pressed ? Theme.pressed : ta.has-hover ? Theme.hover : transparent;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 10px;
         spacing: 6px;
+        alignment: center;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 12px;
+                height: 12px;
+                border-width: 1px;
+                border-color: Theme.ink-2;
+                Rectangle {
+                    x: 4px;
+                    y: 4px;
+                    width: 2px;
+                    height: 2px;
+                    background: Theme.ink-2;
+                }
+            }
+        }
         Text {
-            text: root.pc.question;
-            color: #1a1a1a;
+            text: Strings.settings;
+            color: Theme.ink-2;
+            font-size: 12px;
             vertical-alignment: center;
-            wrap: word-wrap;
-            horizontal-stretch: 1;
         }
-        // "No" is the first button and the one that cancels: the default answer.
-        ActionButton {
-            label: Strings.no;
-            clicked => { root.cancel-power(); }
-        }
-        ActionButton {
-            label: Strings.yes;
-            clicked => { root.confirm-power(); }
+    }
+
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
         }
     }
 }
@@ -207,76 +481,238 @@ component PcRowView inherits VerticalLayout {
 export component Panel inherits Window {
     in property <[GroupRow]> groups;
     out property <length> content-height: inner.preferred-height;
-    callback tunnel-clicked(string);
-    callback wake-clicked(string);
-    callback ask-power(string, PowerKind);
-    callback confirm-power(string);
-    callback cancel-power();
-    callback rdp-clicked(string);
-    callback hide-requested();
-    public function focus-panel() { fs.focus(); }
+
+    public function focus-panel() {
+        fs.focus();
+    }
 
     no-frame: true;
     always-on-top: true;
-    background: #f9f9f9;
+    background: Theme.bg;
     default-font-family: "Inter";
     default-font-size: 13px;
     width: 420px;
     height: root.content-height;
 
+    changed content-height => {
+        Nav.layout-changed();
+    }
+
     fs := FocusScope {
         key-pressed(event) => {
             if (event.text == Key.Escape) {
-                root.hide-requested();
+                Nav.escape();
                 return accept;
             }
             return reject;
         }
 
         Rectangle {
-            background: #f9f9f9;
+            background: Theme.bg;
             border-width: 1px;
-            border-color: #d4d4d4;
+            border-color: Theme.frame;
+
+            // Behind everything: a click on the panel itself closes an armed confirmation.
+            TouchArea {
+                width: parent.width;
+                height: parent.height;
+                pointer-event(event) => {
+                    if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                        Nav.disarm();
+                    }
+                }
+            }
 
             inner := VerticalLayout {
-                padding: 12px;
-                spacing: 10px;
-                alignment: start;
-                if root.groups.length == 0 : Text {
-                    text: Strings.empty;
-                    color: #1a1a1a;
+                padding: 1px;
+
+                if root.groups.length == 0 : Rectangle {
+                    height: 36px;
+                    Text {
+                        x: 16px;
+                        width: parent.width - 32px;
+                        height: parent.height;
+                        text: Strings.empty;
+                        color: Theme.ink;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                    }
                 }
-                for g in root.groups : HorizontalLayout {
-                    spacing: 8px;
-                    VerticalLayout {
-                        width: 96px;
-                        alignment: start;
-                        if g.has-tunnel : TunnelButton {
-                            label: g.tunnel-name;
-                            detail: g.tunnel-state-text;
-                            link: g.tunnel-state;
-                            active: g.can-toggle;
-                            clicked => { root.tunnel-clicked(g.tunnel-id); }
+
+                for g[i] in root.groups : VerticalLayout {
+                    if i > 0 : Rectangle {
+                        height: 1px;
+                        background: Theme.line;
+                    }
+                    HorizontalLayout {
+                        Rectangle {
+                            width: 140px;
+                            background: Theme.bg-side;
+                            VerticalLayout {
+                                padding: 6px;
+                                alignment: start;
+                                if g.has-tunnel : TunnelBlock {
+                                    item: g.tunnel;
+                                }
+                                if !g.has-tunnel : HorizontalLayout {
+                                    padding-left: 10px;
+                                    height: 36px;
+                                    Text {
+                                        text: Strings.no-tunnel;
+                                        color: Theme.muted;
+                                        font-size: 11px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                x: parent.width - 1px;
+                                y: 0px;
+                                width: 1px;
+                                height: parent.height;
+                                background: Theme.line;
+                            }
                         }
-                        if !g.has-tunnel : Text {
-                            height: 44px;
-                            text: Strings.no-tunnel;
-                            color: #1a1a1a;
-                            wrap: word-wrap;
-                            vertical-alignment: center;
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            VerticalLayout {
+                                padding: 6px;
+                                alignment: start;
+                                for pc in g.pcs : PcBlock {
+                                    item: pc;
+                                }
+                            }
                         }
                     }
-                    VerticalLayout {
-                        spacing: 6px;
-                        alignment: start;
-                        horizontal-stretch: 1;
-                        for pc in g.pcs : PcRowView {
-                            pc: pc;
-                            wake-clicked => { root.wake-clicked(pc.id); }
-                            ask-power(kind) => { root.ask-power(pc.id, kind); }
-                            confirm-power => { root.confirm-power(pc.id); }
-                            cancel-power => { root.cancel-power(); }
-                            rdp-clicked => { root.rdp-clicked(pc.id); }
+                }
+
+                Rectangle {
+                    height: 40px;
+                    Rectangle {
+                        y: 0px;
+                        width: parent.width;
+                        height: 1px;
+                        background: Theme.line;
+                    }
+                    FooterButton {
+                        x: 6px;
+                        y: 6px;
+                        width: 160px;
+                        label: Strings.settings;
+                        clicked => {
+                            Nav.disarm();
+                            Nav.settings-clicked();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The details window of one tunnel or PC (section 6): one at a time, frameless, 320 wide.
+export component DetailsWindow inherits Window {
+    in property <string> name;
+    in property <Mark> mark;
+    in property <[DetailRow]> rows;
+    out property <length> content-height: inner.preferred-height;
+    callback close-requested();
+    callback layout-changed();
+
+    changed content-height => {
+        root.layout-changed();
+    }
+
+    public function focus-window() {
+        fs.focus();
+    }
+
+    no-frame: true;
+    always-on-top: true;
+    background: Theme.bg;
+    default-font-family: "Inter";
+    default-font-size: 13px;
+    width: 320px;
+    height: root.content-height;
+
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.close-requested();
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            background: Theme.bg;
+            border-width: 1px;
+            border-color: Theme.frame;
+
+            inner := VerticalLayout {
+                padding: 1px;
+
+                Rectangle {
+                    height: 40px;
+                    HorizontalLayout {
+                        width: parent.width;
+                        height: parent.height;
+                        padding-left: 16px;
+                        padding-right: 4px;
+                        spacing: 10px;
+                        VerticalLayout {
+                            alignment: center;
+                            StateMark {
+                                mark: root.mark;
+                            }
+                        }
+                        Text {
+                            text: root.name;
+                            color: Theme.ink;
+                            font-size: 13px;
+                            font-weight: 600;
+                            overflow: elide;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            CloseButton {
+                                clicked => {
+                                    root.close-requested();
+                                }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 1px;
+                    background: Theme.line;
+                }
+                VerticalLayout {
+                    padding-top: 10px;
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    padding-bottom: 14px;
+                    spacing: 8px;
+                    for row in root.rows : HorizontalLayout {
+                        // 18 px rows: Slint's Text has no line height, so the row sets the minimum.
+                        min-height: 18px;
+                        Text {
+                            width: 128px;
+                            text: row.label;
+                            color: Theme.muted;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: row.value;
+                            color: row.fail ? Theme.state-fail : Theme.ink;
+                            font-size: 12px;
+                            font-weight: row.strong ? 600 : 400;
+                            wrap: word-wrap;
                         }
                     }
                 }
@@ -286,29 +722,13 @@ export component Panel inherits Window {
 }
 
 export component Tray inherits SystemTrayIcon {
-    // The PC screen and the tunnel badge of the tray icon (section 7 of the architecture).
-    in property <ViewState> pc-screen: ViewState.unknown;
-    in property <LinkState> badge: LinkState.down;
+    in property <image> glyph;
     in property <string> tip;
     tooltip: root.tip;
+    icon: root.glyph;
     callback quit-requested();
     callback toggle-panel();
     clicked => { root.toggle-panel(); }
-    icon: root.pc-screen == ViewState.online
-            ? (root.badge == LinkState.up ? @image-url("../../../src/homelink/assets/icons/dark/online_up.png")
-                : root.badge == LinkState.starting ? @image-url("../../../src/homelink/assets/icons/dark/online_starting.png")
-                : @image-url("../../../src/homelink/assets/icons/dark/online_down.png"))
-        : root.pc-screen == ViewState.waking
-            ? (root.badge == LinkState.up ? @image-url("../../../src/homelink/assets/icons/dark/waking_up.png")
-                : root.badge == LinkState.starting ? @image-url("../../../src/homelink/assets/icons/dark/waking_starting.png")
-                : @image-url("../../../src/homelink/assets/icons/dark/waking_down.png"))
-        : root.pc-screen == ViewState.off
-            ? (root.badge == LinkState.up ? @image-url("../../../src/homelink/assets/icons/dark/offline_up.png")
-                : root.badge == LinkState.starting ? @image-url("../../../src/homelink/assets/icons/dark/offline_starting.png")
-                : @image-url("../../../src/homelink/assets/icons/dark/offline_down.png"))
-            : (root.badge == LinkState.up ? @image-url("../../../src/homelink/assets/icons/dark/unknown_up.png")
-                : root.badge == LinkState.starting ? @image-url("../../../src/homelink/assets/icons/dark/unknown_starting.png")
-                : @image-url("../../../src/homelink/assets/icons/dark/unknown_down.png"));
     Menu {
         // The same action as a click on the icon, for desktops that do not deliver that click.
         MenuItem {

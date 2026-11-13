@@ -1,6 +1,10 @@
 //! Demo wiring: the engine on the core test fakes, with delays and a PC that goes offline on
 //! its own, so the states visibly change. It is what `--demo` runs until the Windows
 //! adapters exist; the same [`Deps`] bundle is where they will plug in.
+//!
+//! [`cycle`] also sends commands on a timer, with the failure switches of the fakes set for
+//! some of them, so that every display state appears: working, in progress, off, unknown
+//! (before the first check) and failed.
 
 use std::sync::Arc;
 use std::thread;
@@ -8,12 +12,13 @@ use std::time::Duration;
 
 use homelink_core::config::Config;
 use homelink_core::domain::{Pc, PowerAction, Tunnel, WakeKind};
-use homelink_core::engine::{Deps, ThreadPool};
+use homelink_core::engine::{Deps, Handle, ThreadPool};
+use homelink_core::machine::Command;
 use homelink_core::ports::{
     Pinger, PortProbe, PowerError, PowerRunner, Sink, SystemClock, TunnelDriver, TunnelError,
     WakeError, WakeRegistry, WakeRequest, WakeSender,
 };
-use homelink_core::testing::{FakeNetwork, FakePower, FakeTunnel, FakeWake};
+use homelink_core::testing::{FakeNetwork, FakePower, FakeTunnel, FakeWake, pc_id, tunnel_id};
 
 /// How long a tunnel takes to come up.
 const TUNNEL_UP_DELAY: Duration = Duration::from_secs(3);
@@ -24,13 +29,26 @@ const POWER_DELAY: Duration = Duration::from_secs(3);
 /// The PC without a tunnel goes away for a while, on its own, every cycle.
 const FLAP_ONLINE: Duration = Duration::from_secs(40);
 const FLAP_OFFLINE: Duration = Duration::from_secs(20);
+/// Time between two steps of the cycle: longer than a wake-up and a poll.
+const STEP: Duration = Duration::from_secs(15);
+/// The reason the failure switches report.
+const FAILURE: &str = "demo: the failure switch is on";
 
 /// PCs that are on when the demo starts (the others start off).
 const STARTS_ON: [&str; 2] = ["desktop", "nas"];
 
+/// The fakes behind the demo, shared with the cycle that drives them.
+#[derive(Clone, Default)]
+pub(crate) struct Fakes {
+    net: Arc<FakeNetwork>,
+    tunnel: Arc<FakeTunnel>,
+    wake: Arc<FakeWake>,
+    power: Arc<FakePower>,
+}
+
 /// A tunnel that takes time to start; its probe host answers while it runs.
 struct DemoTunnel {
-    inner: FakeTunnel,
+    inner: Arc<FakeTunnel>,
     net: Arc<FakeNetwork>,
 }
 
@@ -55,7 +73,7 @@ impl TunnelDriver for DemoTunnel {
 
 /// Wake requests that take effect a little later, as a real PC does.
 struct DemoWake {
-    inner: FakeWake,
+    inner: Arc<FakeWake>,
     net: Arc<FakeNetwork>,
 }
 
@@ -74,7 +92,7 @@ impl WakeSender for DemoWake {
 
 /// Power commands that take effect a little later.
 struct DemoPower {
-    inner: FakePower,
+    inner: Arc<FakePower>,
     net: Arc<FakeNetwork>,
 }
 
@@ -105,8 +123,8 @@ fn flap(net: Arc<FakeNetwork>, host: String) {
 
 /// The dependencies of the engine for `config` in demo mode. Fake ports, real clock and a
 /// real worker pool, so that a slow job never blocks the UI.
-pub(crate) fn deps(config: &Config, sink: Arc<dyn Sink>) -> Deps {
-    let net = Arc::new(FakeNetwork::default());
+pub(crate) fn deps(config: &Config, sink: Arc<dyn Sink>, fakes: &Fakes) -> Deps {
+    let net = Arc::clone(&fakes.net);
     for pc in &config.pcs {
         if STARTS_ON.contains(&pc.id.as_str()) {
             net.set(pc.host.as_str(), true);
@@ -116,7 +134,7 @@ pub(crate) fn deps(config: &Config, sink: Arc<dyn Sink>) -> Deps {
         flap(Arc::clone(&net), pc.host.to_string());
     }
     let wake = Arc::new(DemoWake {
-        inner: FakeWake::default(),
+        inner: Arc::clone(&fakes.wake),
         net: Arc::clone(&net),
     });
     let mut registry = WakeRegistry::new();
@@ -125,18 +143,89 @@ pub(crate) fn deps(config: &Config, sink: Arc<dyn Sink>) -> Deps {
     }
     Deps {
         tunnel: Arc::new(DemoTunnel {
-            inner: FakeTunnel::default(),
+            inner: Arc::clone(&fakes.tunnel),
             net: Arc::clone(&net),
         }),
         pinger: Arc::clone(&net) as Arc<dyn Pinger>,
         ports: Arc::clone(&net) as Arc<dyn PortProbe>,
         wake: Arc::new(registry),
         power: Arc::new(DemoPower {
-            inner: FakePower::default(),
-            net: Arc::clone(&net),
+            inner: Arc::clone(&fakes.power),
+            net,
         }),
         clock: Arc::new(SystemClock::new()),
         executor: Arc::new(ThreadPool::new(ThreadPool::DEFAULT_WORKERS)),
         sink,
     }
+}
+
+/// One step of the cycle: a failure switch, or a command to the engine.
+#[derive(Debug, Clone, Copy)]
+enum Step {
+    /// Raising the tunnel `lab` fails while on.
+    TunnelFail(bool),
+    /// Waking `build` fails while on.
+    WakeFail(bool),
+    /// Sleeping `build` fails while on.
+    PowerFail(bool),
+    /// Toggle the tunnel `lab`.
+    ToggleTunnel,
+    /// Wake `build`.
+    Wake,
+    /// Put `build` to sleep.
+    Sleep,
+}
+
+/// One round of the cycle, in the order that makes each state show. The tunnel `lab` starts
+/// down and ends down; `build` is woken by the wake steps and asleep at the end.
+const CYCLE: [Step; 14] = [
+    Step::TunnelFail(true),
+    Step::ToggleTunnel, // raising fails: failed
+    Step::TunnelFail(false),
+    Step::ToggleTunnel, // raised: in progress, then working
+    Step::ToggleTunnel, // lowered: off
+    Step::WakeFail(true),
+    Step::Wake, // raises the tunnel, the wake fails: failed
+    Step::WakeFail(false),
+    Step::Wake, // woken: in progress, then working
+    Step::PowerFail(true),
+    Step::Sleep, // fails
+    Step::PowerFail(false),
+    Step::Sleep,        // in progress, then off
+    Step::ToggleTunnel, // lowers the tunnel that the wake raised
+];
+
+/// Runs [`CYCLE`] over and over on a thread, until the engine stops.
+pub(crate) fn cycle(handle: Handle, fakes: Fakes) {
+    thread::spawn(move || {
+        let lab = tunnel_id("lab");
+        let build = pc_id("build");
+        loop {
+            for step in CYCLE {
+                // A switch changes at once; a command is followed by a pause.
+                let sent = match step {
+                    Step::TunnelFail(on) => {
+                        fakes.tunnel.fail_up_for(&lab, on.then_some(FAILURE));
+                        continue;
+                    }
+                    Step::WakeFail(on) => {
+                        fakes.wake.fail_for(&build, on.then_some(FAILURE));
+                        continue;
+                    }
+                    Step::PowerFail(on) => {
+                        fakes.power.fail_for(&build, on.then_some(FAILURE));
+                        continue;
+                    }
+                    Step::ToggleTunnel => handle.send(Command::ToggleTunnel(lab.clone())),
+                    Step::Wake => handle.send(Command::Wake(build.clone())),
+                    Step::Sleep => handle.send(Command::Power(build.clone(), PowerAction::Sleep)),
+                };
+                if !sent {
+                    // The engine has stopped: the demo is over.
+                    return;
+                }
+                thread::sleep(STEP);
+            }
+        }
+    });
 }
