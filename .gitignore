@@ -10,3 +10,4 @@ config.json
 *.rdp
 *.cer
 *.log
+rust/target/

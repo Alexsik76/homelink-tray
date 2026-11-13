@@ -1,0 +1,6 @@
+version = 1
+language = "en"
+
+[log]
+file = "homelink.log"
+level = "info"

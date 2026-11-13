@@ -1,0 +1,112 @@
+# ============================================================
+# HomeLink configuration -- written by hand, keep my comments!
+# ============================================================
+
+version = 1            # schema version, do not touch
+language = "uk"        # auto | en | uk
+
+[log]
+file  = "homelink.log"   # next to this file
+level = "info"           # error | warn | info | debug
+
+# ---- tunnels -----------------------------------------------
+
+# The tunnel to the house.
+[[tunnels]]
+id   = "home"
+name = "Home"            # shown in the panel
+kind = "wireguard"
+conf = 'C:\Program Files\WireGuard\Data\Configurations\home.conf.dpapi'
+wireguard_exe = 'C:\Program Files\WireGuard\wireguard.exe'
+probe_host = "192.168.88.1"   # answers ping only through the tunnel
+timeout = 20                  # seconds
+ping_timeout_ms = 1000
+
+# The office tunnel (no PC uses it yet).
+[[tunnels]]
+id = "office"
+name = "Office"
+kind = "wireguard"
+conf = 'C:\Program Files\WireGuard\Data\Configurations\office.conf.dpapi'
+wireguard_exe = 'C:\Program Files\WireGuard\wireguard.exe'
+probe_host = "10.8.0.1"
+timeout = 20
+ping_timeout_ms = 1000
+
+# ---- shared timing (defined after the tunnels on purpose) ---
+[defaults]
+poll_seconds = 5          # normal polling
+wake_poll_seconds = 2     # while a PC is waking
+port_timeout_ms = 1000
+offline_after_failures = 3
+wake_timeout = 180
+power_timeout = 15
+
+# ---- relay: the router, which sends the magic packet ---
+[[relays]]
+id = "gateway"
+kind = "routeros"
+host = "192.168.88.1"
+port = 22
+user = "homelink"
+identity_file = 'C:\ProgramData\HomeLink\relay_ed25519'
+timeout = 8
+
+# ============ PCs ============
+
+# --- The big desktop. ---
+[[pcs]]
+id = "desktop"
+name = "Desktop"          # the one in the study
+os = "linux"
+host = "192.168.88.10"
+tunnel = "home"
+ports = [3389]            # RDP
+
+  # How to wake it.
+  [pcs.wake]
+  method = "relay"
+  relay = "gateway"
+  mac = "AA:BB:CC:DD:EE:FF"   # eth0
+  interface = "bridge"
+
+  [pcs.power]
+  method = "ssh"
+  user = "alex"
+  port = 22
+  identity_file = 'C:\ProgramData\HomeLink\desktop_ed25519'
+
+  [pcs.rdp]
+  user = "alex"
+  options = [
+    "use redirection server name:i:1",   # keep this one
+    "screen mode id:i:2",
+  ]
+
+# --- Laptop: only reachable through home ---
+[[pcs]]
+id = "laptop"
+name = "Laptop"
+os = "windows"
+host = "192.168.88.11"
+tunnel = "home"
+ports = [3389, 445]
+
+  [pcs.wake]
+  method = "magic_packet"
+  mac = "11-22-33-44-55-66"
+  address = "192.168.88.255"      # a subnet broadcast
+  port = 9
+
+  [pcs.timing]              # slow machine
+  wake_timeout = 300        # five minutes
+
+# --- NAS: always on the local network ---
+[[pcs]]
+id = "nas"
+name = "NAS"
+os = "linux"
+host = "10.0.0.7"
+ports = [22]
+
+# That is all.

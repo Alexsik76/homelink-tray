@@ -1,0 +1,485 @@
+// Controls shared by the settings, wizard and tunnel form windows (docs/design/ui-handoff.md,
+// sections 2, 7 and 8, and the dark addendum). Built from Rectangle, Text, TextInput, Path and
+// TouchArea only; every colour comes from `Theme`, every text from `Words`, which the app fills
+// for each window from the catalog.
+
+import { Theme, Mark, StateMark } from "main.slint";
+
+// The texts of the new windows. Each window has its own copy, filled by the app.
+export global Words {
+    in-out property <string> settings-title;
+    in-out property <string> nav-tunnels;
+    in-out property <string> nav-help;
+    in-out property <string> nav-about;
+    in-out property <string> section-tunnels;
+    in-out property <string> section-pcs;
+    in-out property <string> add-tunnel;
+    in-out property <string> add-pc;
+    in-out property <string> edit;
+    in-out property <string> delete;
+    in-out property <string> delete-confirm;
+    in-out property <string> help-empty;
+    in-out property <string> about-name;
+    in-out property <string> about-description;
+    in-out property <string> about-slint;
+    in-out property <string> about-font;
+    in-out property <string> about-license;
+    in-out property <string> about-third-party;
+    in-out property <string> notices-title;
+    in-out property <string> field-name;
+    in-out property <string> tunnel-field-conf;
+    in-out property <string> tunnel-hint-conf;
+    in-out property <string> tunnel-field-probe;
+    in-out property <string> tunnel-hint-probe;
+    in-out property <string> save;
+    in-out property <string> cancel;
+    in-out property <string> back;
+    in-out property <string> next;
+    in-out property <string> finish;
+    in-out property <string> field-host;
+    in-out property <string> field-ports;
+    in-out property <string> hint-ports;
+    in-out property <string> tunnel-none;
+    in-out property <string> wake-none;
+    in-out property <string> wake-relay;
+    in-out property <string> wake-magic;
+    in-out property <string> wake-command;
+    in-out property <string> relay-label;
+    in-out property <string> relay-new;
+    in-out property <string> relay-routeros;
+    in-out property <string> relay-etherwake;
+    in-out property <string> relay-wakeonlan;
+    in-out property <string> field-mac;
+    in-out property <string> field-interface;
+    in-out property <string> field-address;
+    in-out property <string> hint-address;
+    in-out property <string> magic-routed-help;
+    in-out property <string> field-port;
+    in-out property <string> field-user;
+    in-out property <string> field-identity;
+    in-out property <string> field-timeout;
+    in-out property <string> field-command;
+    in-out property <string> hint-command;
+    in-out property <string> field-sudo;
+    in-out property <string> hint-sudo;
+    in-out property <string> yes;
+    in-out property <string> no;
+    in-out property <string> power-sleep;
+    in-out property <string> power-shutdown;
+    in-out property <string> power-rdp;
+    in-out property <string> power-ssh;
+    in-out property <string> power-command;
+    in-out property <string> field-os;
+    in-out property <string> os-windows;
+    in-out property <string> os-linux;
+    in-out property <string> field-sleep-command;
+    in-out property <string> field-shutdown-command;
+    in-out property <string> field-rdp-user;
+    in-out property <string> rdp-note;
+    in-out property <string> test-again;
+    in-out property <string> test-note;
+    in-out property <string> create-key;
+    in-out property <string> copy;
+    in-out property <string> public-key-label;
+    in-out property <string> trust-host;
+    in-out property <string> trust;
+    in-out property <string> openssh-missing;
+}
+
+// The primary action of the window: Enter in a field, a radio row or a check row, and the primary
+// button, all call it. The app wires it for each window.
+export global Flow {
+    callback advance();
+}
+
+export enum BtnKind { primary, secondary, text }
+
+// A button: primary (ink fill, on-ink label), secondary (surface with a line-strong border) or a
+// text button. Enter and Space press it while it has the keyboard focus.
+export component Btn inherits Rectangle {
+    in property <string> label;
+    in property <BtnKind> kind: BtnKind.secondary;
+    in property <bool> available: true;
+    in property <color> tone: Theme.ink;
+    callback clicked();
+
+    height: root.kind == BtnKind.text ? 28px : 32px;
+    min-width: root.kind == BtnKind.text ? 0px : 96px;
+    background: root.kind == BtnKind.primary ? (root.available ? Theme.ink : Theme.line)
+        : root.kind == BtnKind.secondary ? (ta.pressed ? Theme.pressed : ta.has-hover ? Theme.hover : Theme.surface)
+        : transparent;
+    border-width: fs.has-focus ? 2px : (root.kind == BtnKind.text ? 0px : 1px);
+    border-color: fs.has-focus ? Theme.state-off
+        : root.kind == BtnKind.primary ? Theme.ink
+        : Theme.line-strong;
+
+    fs := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                if (root.available) {
+                    root.clicked();
+                }
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    // The label sits in a layout, so that the button's preferred width is the width of its text
+    // plus padding. Without it a button outside a fixed-width slot has no width at all (its
+    // children were sized from the parent), which made the text buttons of the list rows
+    // zero wide: packed at the left, and with no area to click.
+    HorizontalLayout {
+        padding-left: root.kind == BtnKind.text ? 6px : 16px;
+        padding-right: root.kind == BtnKind.text ? 6px : 16px;
+        Text {
+            text: root.label;
+            color: !root.available ? Theme.disabled
+                : root.kind == BtnKind.primary ? Theme.on-ink
+                : root.kind == BtnKind.text ? root.tone
+                : Theme.ink;
+            font-size: 12px;
+            font-weight: root.kind == BtnKind.text ? 400 : 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    ta := TouchArea {
+        clicked => {
+            if (root.available) {
+                root.clicked();
+            }
+        }
+    }
+}
+
+// A labelled text input: 32 high, surface fill, 1 px line-strong border (2 px state-off when
+// focused, 1 px state-fail when `error` is set). The hint is replaced by the error when there is one.
+export component Field inherits VerticalLayout {
+    in property <string> label;
+    in-out property <string> value;
+    in property <string> hint;
+    in property <string> error;
+
+    spacing: 6px;
+
+    Text {
+        text: root.label;
+        color: Theme.ink;
+        font-size: 12px;
+        font-weight: 600;
+        overflow: elide;
+    }
+
+    Rectangle {
+        height: 32px;
+        background: Theme.surface;
+        border-width: ti.has-focus ? 2px : 1px;
+        border-color: root.error != "" ? Theme.state-fail
+            : ti.has-focus ? Theme.state-off
+            : Theme.line-strong;
+
+        ti := TextInput {
+            x: 10px;
+            y: 0px;
+            width: parent.width - 20px;
+            height: parent.height;
+            vertical-alignment: center;
+            font-size: 13px;
+            color: Theme.ink;
+            text <=> root.value;
+            accepted => {
+                Flow.advance();
+            }
+        }
+    }
+
+    if root.error != "" || root.hint != "" : Text {
+        text: root.error != "" ? root.error : root.hint;
+        color: root.error != "" ? Theme.state-fail : Theme.muted;
+        font-size: 11px;
+        wrap: word-wrap;
+    }
+}
+
+// A radio row: 32 high, surface fill, 1 px line border (the border is state-off when selected or
+// focused). Space selects it.
+export component RadioRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked();
+
+    height: 32px;
+    background: ta.pressed ? Theme.pressed : Theme.surface;
+    border-width: fs.has-focus ? 2px : 1px;
+    border-color: (root.selected || fs.has-focus) ? Theme.state-off : Theme.line;
+
+    fs := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        key-pressed(event) => {
+            if (event.text == " ") {
+                root.clicked();
+                return accept;
+            }
+            if (event.text == Key.Return) {
+                Flow.advance();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 14px;
+                height: 14px;
+                background: Theme.surface;
+                border-width: 1px;
+                border-color: root.selected ? Theme.ink : Theme.state-unknown;
+                if root.selected : Rectangle {
+                    x: 3px;
+                    y: 3px;
+                    width: 8px;
+                    height: 8px;
+                    background: Theme.state-off;
+                }
+            }
+        }
+        Text {
+            text: root.label;
+            color: Theme.ink;
+            font-size: 13px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A checkbox: 14 square, checked is an ink fill with an on-ink tick. Space toggles it.
+export component CheckRow inherits Rectangle {
+    in property <string> label;
+    in-out property <bool> checked;
+    callback clicked();
+
+    height: 24px;
+
+    fs := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        key-pressed(event) => {
+            if (event.text == " ") {
+                root.checked = !root.checked;
+                root.clicked();
+                return accept;
+            }
+            if (event.text == Key.Return) {
+                Flow.advance();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 14px;
+                height: 14px;
+                background: root.checked ? Theme.ink : Theme.surface;
+                border-width: root.checked ? 0px : 1px;
+                border-color: Theme.state-unknown;
+                Path {
+                    x: 0px;
+                    y: 0px;
+                    width: 14px;
+                    height: 14px;
+                    visible: root.checked;
+                    commands: "M 3 7.5 L 6 10.5 L 11 4";
+                    stroke: Theme.on-ink;
+                    stroke-width: 2px;
+                    fill: transparent;
+                }
+            }
+        }
+        Text {
+            text: root.label;
+            color: Theme.ink;
+            font-size: 13px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+
+    ta := TouchArea {
+        clicked => {
+            root.checked = !root.checked;
+            root.clicked();
+        }
+    }
+}
+
+// A row of a checklist or a list: the marker, a name, a result on the right. Used by the check
+// list of the wizard (40 high).
+export struct CheckLine {
+    name: string,
+    result: string,
+    mark: Mark,
+    // The host key of this line is not known yet: the line offers "Довірити вузлу".
+    trust: bool,
+}
+
+// A small heading above a group of controls (12/600, like a field label).
+export component GroupLabel inherits Text {
+    color: Theme.ink;
+    font-size: 12px;
+    font-weight: 600;
+    overflow: elide;
+}
+
+// A read-only block of text the user copies (a public key, the commands for a relay) with a
+// "Копіювати" button. There is no design for it: it is a Field-like box (surface, 1 px line-strong
+// border) with a text button below. The text can also be selected by hand.
+export component CopyBlock inherits VerticalLayout {
+    in property <string> label;
+    in property <string> text;
+    spacing: 6px;
+
+    if root.label != "" : GroupLabel {
+        text: root.label;
+    }
+
+    Rectangle {
+        height: shown.preferred-height + 16px;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.line-strong;
+
+        shown := TextInput {
+            x: 10px;
+            y: 8px;
+            width: parent.width - 20px;
+            read-only: true;
+            single-line: false;
+            wrap: word-wrap;
+            font-size: 11px;
+            color: Theme.ink;
+            text: root.text;
+        }
+    }
+
+    HorizontalLayout {
+        alignment: start;
+        Btn {
+            label: Words.copy;
+            clicked => {
+                shown.select-all();
+                shown.copy();
+            }
+        }
+    }
+}
+
+// What goes under a key-file field: "Створити ключ", the reason when it failed, and the public key
+// of the key file with a copy button once there is one.
+export component KeyTools inherits VerticalLayout {
+    // False while there is no OpenSSH client or a key is being made.
+    in property <bool> available: true;
+    in property <string> error;
+    in property <string> public-key;
+    callback create();
+    spacing: 8px;
+
+    HorizontalLayout {
+        alignment: start;
+        Btn {
+            label: Words.create-key;
+            available: root.available;
+            clicked => { root.create(); }
+        }
+    }
+    if root.error != "" : Text {
+        text: root.error;
+        color: Theme.state-fail;
+        font-size: 11px;
+        wrap: word-wrap;
+    }
+    if root.public-key != "" : CopyBlock {
+        label: Words.public-key-label;
+        text: root.public-key;
+    }
+}
+
+// A thin vertical scrollbar, placed beside a Flickable (not inside it). It shows only when the
+// content is taller than the view, and its thumb is proportional to the view. A press on the thumb
+// grabs it; a press elsewhere on the track centres the thumb there. The Flickable's scroll position
+// is given as `offset` (its `-content-y`); the bar asks for a new one with `scroll-to`.
+export component VScroll inherits Rectangle {
+    in property <length> view-height;
+    in property <length> content-height;
+    in property <length> offset;
+    callback scroll-to(length);
+
+    property <length> range: max(0px, root.content-height - root.view-height);
+    property <length> thumb-height: max(24px, root.height * (root.view-height / max(root.content-height, 1px)));
+    property <length> travel: max(0px, root.height - root.thumb-height);
+    property <length> grab-y;
+
+    width: 6px;
+    background: Theme.line;
+    visible: root.content-height > root.view-height;
+
+    thumb := Rectangle {
+        width: parent.width;
+        height: root.thumb-height;
+        y: root.travel * (root.offset / max(root.range, 1px));
+        background: Theme.muted;
+    }
+
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                root.grab-y = (ta.mouse-y >= thumb.y && ta.mouse-y <= thumb.y + thumb.height)
+                    ? ta.mouse-y - thumb.y : root.thumb-height / 2;
+                root.drag-to(ta.mouse-y - root.grab-y);
+            }
+        }
+        moved => {
+            root.drag-to(ta.mouse-y - root.grab-y);
+        }
+    }
+
+    function drag-to(top: length) {
+        root.scroll-to(max(0px, min(root.travel, top)) / max(root.travel, 1px) * root.range);
+    }
+}
+
+// The 1 px divider used between list rows and in the headers.
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.line;
+}
+
+export { StateMark }

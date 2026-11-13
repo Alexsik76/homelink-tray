@@ -1,0 +1,66 @@
+# HomeLink settings. HomeLink created this file on its first start from a template: edit it
+# for your network and start HomeLink again. Lines starting with # are comments.
+#
+# HomeLink keeps no passwords. Relays and PCs are reached over SSH with a key file (give its
+# full path below); the Remote Desktop password is typed in the Remote Desktop window.
+
+version  = 1
+language = "auto"            # auto | en | uk; auto follows the Windows display language
+
+[log]
+file  = "homelink.log"       # next to this file; rotated at 1 MB, two older copies are kept
+level = "info"               # error | warn | info | debug
+
+[defaults]                   # shared timing; a PC may override single keys in [pcs.timing]
+poll_seconds = 5             # how often a PC or tunnel is checked
+wake_poll_seconds = 2        # the same while a PC is waking up
+port_timeout_ms = 1000       # one TCP connection attempt
+offline_after_failures = 3   # failed checks in a row before an online PC counts as off
+wake_timeout = 180           # seconds to wait for a PC after the wake request
+power_timeout = 15           # seconds for a sleep or shutdown command
+
+# A WireGuard tunnel run as a service of the official WireGuard client.
+[[tunnels]]
+id = "home"
+name = "Home"
+kind = "wireguard"
+conf = 'C:\Program Files\WireGuard\Data\Configurations\home.conf.dpapi'
+wireguard_exe = 'C:\Program Files\WireGuard\wireguard.exe'
+probe_host = "192.168.88.1"  # answers ping only while the tunnel works
+timeout = 20                 # seconds to wait for probe_host after the start
+ping_timeout_ms = 1000
+
+# A device in the PC's network that sends the wake-up packet when told to over SSH:
+# routeros | etherwake | wakeonlan
+[[relays]]
+id = "gateway"
+kind = "routeros"
+host = "192.168.88.1"
+port = 22
+user = "homelink"
+identity_file = 'C:\ProgramData\HomeLink\relay_ed25519'   # full path of the private key
+timeout = 8
+
+[[pcs]]
+id = "desktop"
+name = "Desktop"
+os = "linux"                 # windows | linux
+host = "192.168.88.10"
+tunnel = "home"              # leave this line out for a PC without a tunnel
+ports = [3389]               # the PC counts as online when all of these ports answer
+
+  [pcs.wake]
+  method = "relay"           # relay | magic_packet | command
+  relay = "gateway"
+  mac = "AA:BB:CC:DD:EE:FF"
+  interface = "bridge"       # the relay's interface that faces the PC
+
+  [pcs.power]                # sleep and shutdown over SSH; leave out if not wanted
+  method = "ssh"
+  user = "user"
+  port = 22
+  identity_file = 'C:\ProgramData\HomeLink\desktop_ed25519'
+
+  [pcs.rdp]                  # leave out to hide the Remote Desktop button
+  user = "user"
+  options = ["use redirection server name:i:1", "authentication level:i:2", "screen mode id:i:2"]

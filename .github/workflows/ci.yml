@@ -53,3 +53,73 @@ jobs:
           path: dist/HomeLink.exe
           retention-days: 14
           if-no-files-found: error
+
+  rust-core:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-core-${{ hashFiles('rust/Cargo.lock') }}
+
+      - name: Format check
+        run: cargo fmt -p homelink-core --check
+
+      - name: Licence policy and third-party notices
+        working-directory: ${{ github.workspace }}
+        run: python3 tools/third_party_notices.py --check
+
+      - name: Lint
+        run: cargo clippy -p homelink-core --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test -p homelink-core --all-features
+
+  rust-app:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-app-${{ hashFiles('rust/Cargo.lock') }}
+
+      - name: Format check
+        run: cargo fmt -p homelink --check
+
+      - name: Lint
+        run: cargo clippy -p homelink --all-targets --all-features --locked -- -D warnings
+
+      - name: Test
+        run: cargo test -p homelink --all-features --locked
+
+      - name: Build
+        run: cargo build -p homelink --release --locked --features demo
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: HomeLink-rust-demo
+          path: rust/target/release/HomeLink.exe
+          retention-days: 14
+          if-no-files-found: error

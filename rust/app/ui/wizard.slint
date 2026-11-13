@@ -1,0 +1,762 @@
+// The add/edit PC wizard (docs/design/ui-handoff.md, section 8; dark addendum section 3).
+//
+// The values are properties of this window, not of the step that shows them, so that what was
+// typed survives a step change; the app reads them on "Далі" and "Готово" and writes them on
+// open. The app also decides which fields a relay preset shows: `kind-now` is the preset of the
+// relay the step would use. Errors are indexed (see `wizard_ui.rs`, `slot`): 0 name, 1 host,
+// 2 ports, 3 tunnel, 4 mac, 5 magic address, 6 magic port, 7 relay, 8 relay host, 9 relay port,
+// 10 relay user, 11 relay key, 12 relay sudo, 13 relay timeout, 14 interface, 15 relay address,
+// 16 wake command, 17 wake timeout, 18 allow sleep, 19 allow shutdown, 20 ssh user, 21 ssh port,
+// 22 ssh key, 23 sleep command, 24 shutdown command, 25 rdp user.
+
+import { Theme, StateMark, Mark } from "main.slint";
+import { Words, Flow, Btn, BtnKind, Field, RadioRow, CheckRow, CheckLine, GroupLabel, Divider, CopyBlock, KeyTools, VScroll } from "controls.slint";
+
+// One line of the check list: 40 high, the marker, the name, the result on the right. A line
+// whose host key is not known yet has "Довірити вузлу" under it (undesigned: a text button).
+component CheckItem inherits VerticalLayout {
+    in property <CheckLine> line;
+    in property <bool> trust-available: true;
+    callback trust();
+    Rectangle {
+        height: 40px;
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                StateMark {
+                    mark: root.line.mark;
+                }
+            }
+            Text {
+                text: root.line.name;
+                color: Theme.ink;
+                font-size: 13px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: root.line.result;
+                color: Theme.ink-2;
+                font-size: 12px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+        }
+    }
+    if root.line.trust : HorizontalLayout {
+        padding-left: 12px;
+        padding-bottom: 8px;
+        alignment: start;
+        Btn {
+            label: Words.trust-host;
+            kind: BtnKind.text;
+            tone: Theme.link;
+            available: root.trust-available;
+            clicked => { root.trust(); }
+        }
+    }
+}
+
+export component WizardWindow inherits Window {
+    // The header and the step.
+    in property <string> heading;
+    in property <string> step-text;
+    in property <int> step: 1;
+
+    // Step 1.
+    in-out property <string> name;
+    in-out property <string> host;
+    in-out property <string> ports;
+
+    // Step 2: index into `tunnel-labels`; the last label is "Без тунелю".
+    in-out property <int> tunnel-index;
+    in property <[string]> tunnel-labels;
+
+    // Step 3: 0 no wake, 1 relay, 2 magic packet, 3 command.
+    in-out property <int> wake-index;
+    in-out property <string> mac;
+    in-out property <string> magic-address;
+    in-out property <string> magic-port;
+    // Index into `relay-labels`: the existing relays, then "A new relay host" last.
+    in-out property <int> relay-index;
+    in property <[string]> relay-labels;
+    // The preset of each existing relay, in the order of `relay-labels`.
+    in property <[int]> relay-kinds;
+    // The preset of a new relay: 0 RouterOS, 1 etherwake, 2 wakeonlan.
+    in-out property <int> relay-kind;
+    in-out property <string> new-host;
+    in-out property <string> new-port;
+    in-out property <string> new-user;
+    in-out property <string> new-identity;
+    // 0 not answered, 1 yes, 2 no.
+    in-out property <int> relay-sudo;
+    in-out property <string> new-timeout;
+    in-out property <string> interface;
+    in-out property <string> relay-address;
+    in-out property <string> wake-command;
+    in-out property <string> wake-timeout;
+    // The preset the relay of step 3 uses (for the fields it shows).
+    property <int> kind-now: root.relay-index < root.relay-kinds.length
+        ? root.relay-kinds[root.relay-index]
+        : root.relay-kind;
+    property <bool> is-new-relay: root.relay-index >= root.relay-kinds.length;
+
+    // Step 4.
+    in-out property <bool> allow-sleep;
+    in-out property <bool> allow-shutdown;
+    in-out property <bool> allow-rdp;
+    // 0 over SSH, 1 commands.
+    in-out property <int> power-index;
+    // 0 Windows, 1 Linux.
+    in-out property <int> os-index;
+    in-out property <string> ssh-user;
+    in-out property <string> ssh-port;
+    in-out property <string> ssh-identity;
+    in-out property <string> sleep-command;
+    in-out property <string> shutdown-command;
+    in-out property <string> rdp-user;
+
+    // Problems, by field index (see above), and the problems with no field on this step.
+    in property <[string]> errors;
+    in property <string> general-error;
+
+    // Step 5.
+    in property <[CheckLine]> checks;
+    in property <bool> checks-running;
+    // The host key a check found unknown, offered to the user: the prompt, the fingerprints to
+    // compare with the device, and whether the scan or the saving is going on.
+    in property <string> trust-prompt;
+    in property <[string]> trust-fingerprints;
+    in property <bool> trust-busy;
+    // What went wrong with a host key (it changed, the scan failed, the entry exists), or the
+    // confirmation that it was saved.
+    in property <string> ssh-note;
+
+    // SSH setup. `openssh-missing`: the client is not installed. The public keys are those of the
+    // key files in the fields (read from the `.pub` file beside them); `key-busy` while one is
+    // being made; the errors of making a key; the commands for the relay of step 3.
+    in property <bool> openssh-missing;
+    in property <bool> key-busy;
+    in property <string> relay-key-error;
+    in property <string> relay-public-key;
+    in property <string> power-key-error;
+    in property <string> power-public-key;
+    in property <string> relay-setup-intro;
+    in property <string> relay-setup;
+
+    callback back();
+    callback cancel();
+    callback retest();
+    // 0: the key of the new relay, 1: the key of the PC.
+    callback create-key(int);
+    // The values the commands and the public keys come from changed.
+    callback refresh-help();
+    callback trust-host(int);
+    callback trust-confirm();
+    callback trust-cancel();
+
+    changed step => { root.refresh-help(); }
+    changed wake-index => { root.refresh-help(); }
+    changed relay-index => { root.refresh-help(); }
+    changed relay-kind => { root.refresh-help(); }
+    changed relay-sudo => { root.refresh-help(); }
+    changed new-user => { root.refresh-help(); }
+    changed new-identity => { root.refresh-help(); }
+    changed ssh-identity => { root.refresh-help(); }
+
+    title: Words.about-name + " — " + root.heading;
+    icon: @image-url("icons/app.png");
+    width: 420px;
+    height: 430px;
+    background: Theme.bg;
+    default-font-family: "Inter";
+    default-font-size: 13px;
+
+    VerticalLayout {
+        // Header: the title and "Крок N з 5 · name" (40 high, 1 px line below).
+        Rectangle {
+            height: 40px;
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 8px;
+                Text {
+                    text: root.heading;
+                    color: Theme.ink;
+                    font-size: 13px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: root.step-text;
+                    color: Theme.muted;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            Divider {
+                y: parent.height - 1px;
+                width: parent.width;
+            }
+        }
+
+        // Progress: five 3 px bars; completed ink, current state-off, upcoming line.
+        HorizontalLayout {
+            height: 27px;
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-top: 12px;
+            spacing: 4px;
+            for i in 5 : Rectangle {
+                horizontal-stretch: 1;
+                height: 3px;
+                background: i + 1 < root.step ? Theme.ink
+                    : i + 1 == root.step ? Theme.state-off
+                    : Theme.line;
+            }
+        }
+
+        // Body, scrolled when the step is taller than the window.
+        Rectangle {
+            vertical-stretch: 1;
+            flick := Flickable {
+                width: parent.width;
+                height: parent.height;
+                content-width: parent.width;
+                content-height: body.preferred-height;
+
+                body := VerticalLayout {
+                    width: parent.width;
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    padding-top: 20px;
+                    padding-bottom: 20px;
+                    spacing: 16px;
+                    alignment: start;
+
+                    // Step 1: address and ports.
+                    if root.step == 1 : VerticalLayout {
+                        spacing: 16px;
+                        Field {
+                            label: Words.field-name;
+                            value <=> root.name;
+                            error: root.errors[0];
+                        }
+                        Field {
+                            label: Words.field-host;
+                            value <=> root.host;
+                            error: root.errors[1];                        }
+                        Field {
+                            label: Words.field-ports;
+                            value <=> root.ports;
+                            hint: Words.hint-ports;
+                            error: root.errors[2];                        }
+                    }
+
+                    // Step 2: the tunnel.
+                    if root.step == 2 : VerticalLayout {
+                        spacing: 4px;
+                        for label[i] in root.tunnel-labels : RadioRow {
+                            label: label;
+                            selected: root.tunnel-index == i;
+                            clicked => { root.tunnel-index = i; }
+                        }
+                        if root.errors[3] != "" : Text {
+                            text: root.errors[3];
+                            color: Theme.state-fail;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    // Step 3: how the PC is woken.
+                    if root.step == 3 : VerticalLayout {
+                        spacing: 16px;
+                        VerticalLayout {
+                            spacing: 4px;
+                            RadioRow {
+                                label: Words.wake-none;
+                                selected: root.wake-index == 0;
+                                clicked => { root.wake-index = 0; }
+                            }
+                            RadioRow {
+                                label: Words.wake-relay;
+                                selected: root.wake-index == 1;
+                                clicked => { root.wake-index = 1; }
+                            }
+                            RadioRow {
+                                label: Words.wake-magic;
+                                selected: root.wake-index == 2;
+                                clicked => { root.wake-index = 2; }
+                            }
+                            RadioRow {
+                                label: Words.wake-command;
+                                selected: root.wake-index == 3;
+                                clicked => { root.wake-index = 3; }
+                            }
+                        }
+
+                        if root.wake-index == 1 : VerticalLayout {
+                            spacing: 12px;
+                            GroupLabel {
+                                text: Words.relay-label;
+                            }
+                            VerticalLayout {
+                                spacing: 4px;
+                                for label[i] in root.relay-labels : RadioRow {
+                                    label: label;
+                                    selected: root.relay-index == i;
+                                    clicked => { root.relay-index = i; }
+                                }
+                            }
+                            if root.errors[7] != "" : Text {
+                                text: root.errors[7];
+                                color: Theme.state-fail;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                            }
+
+                            // A new relay: its preset, then its SSH connection.
+                            if root.is-new-relay : VerticalLayout {
+                                spacing: 12px;
+                                VerticalLayout {
+                                    spacing: 4px;
+                                    RadioRow {
+                                        label: Words.relay-routeros;
+                                        selected: root.relay-kind == 0;
+                                        clicked => { root.relay-kind = 0; }
+                                    }
+                                    RadioRow {
+                                        label: Words.relay-etherwake;
+                                        selected: root.relay-kind == 1;
+                                        clicked => { root.relay-kind = 1; }
+                                    }
+                                    RadioRow {
+                                        label: Words.relay-wakeonlan;
+                                        selected: root.relay-kind == 2;
+                                        clicked => { root.relay-kind = 2; }
+                                    }
+                                }
+                                Field {
+                                    label: Words.field-host;
+                                    value <=> root.new-host;
+                                    error: root.errors[8];
+                                }
+                                Field {
+                                    label: Words.field-port;
+                                    value <=> root.new-port;
+                                    error: root.errors[9];
+                                }
+                                Field {
+                                    label: Words.field-user;
+                                    value <=> root.new-user;
+                                    error: root.errors[10];
+                                }
+                                if root.openssh-missing : Text {
+                                    text: Words.openssh-missing;
+                                    color: Theme.state-fail;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                }
+                                Field {
+                                    label: Words.field-identity;
+                                    value <=> root.new-identity;
+                                    error: root.errors[11];
+                                }
+                                KeyTools {
+                                    available: !root.openssh-missing && !root.key-busy;
+                                    error: root.relay-key-error;
+                                    public-key: root.relay-public-key;
+                                    create => { root.create-key(0); }
+                                }
+                                if root.relay-kind != 0 : VerticalLayout {
+                                    spacing: 6px;
+                                    GroupLabel {
+                                        text: Words.field-sudo;
+                                    }
+                                    VerticalLayout {
+                                        spacing: 4px;
+                                        RadioRow {
+                                            label: Words.yes;
+                                            selected: root.relay-sudo == 1;
+                                            clicked => { root.relay-sudo = 1; }
+                                        }
+                                        RadioRow {
+                                            label: Words.no;
+                                            selected: root.relay-sudo == 2;
+                                            clicked => { root.relay-sudo = 2; }
+                                        }
+                                    }
+                                    if root.errors[12] != "" : Text {
+                                        text: root.errors[12];
+                                        color: Theme.state-fail;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
+                                    Text {
+                                        text: Words.hint-sudo;
+                                        color: Theme.muted;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                                Field {
+                                    label: Words.field-timeout;
+                                    value <=> root.new-timeout;
+                                    error: root.errors[13];
+                                }
+                                // What to run on the relay host (undesigned: text and a copy button).
+                                if root.relay-setup != "" : VerticalLayout {
+                                    spacing: 8px;
+                                    Text {
+                                        text: root.relay-setup-intro;
+                                        color: Theme.muted;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
+                                    CopyBlock {
+                                        text: root.relay-setup;
+                                    }
+                                }
+                            }
+
+                            Field {
+                                label: Words.field-mac;
+                                value <=> root.mac;
+                                error: root.errors[4];
+                            }
+                            if root.kind-now == 0 || root.kind-now == 1 : Field {
+                                label: Words.field-interface;
+                                value <=> root.interface;
+                                error: root.errors[14];
+                            }
+                            if root.kind-now == 2 : Field {
+                                label: Words.field-address;
+                                value <=> root.relay-address;
+                                hint: Words.hint-address;
+                                error: root.errors[15];
+                            }
+                        }
+
+                        if root.wake-index == 2 : VerticalLayout {
+                            spacing: 16px;
+                            Field {
+                                label: Words.field-mac;
+                                value <=> root.mac;
+                                error: root.errors[4];
+                            }
+                            Field {
+                                label: Words.field-address;
+                                value <=> root.magic-address;
+                                hint: Words.hint-address;
+                                error: root.errors[5];
+                            }
+                            Text {
+                                text: Words.magic-routed-help;
+                                color: Theme.muted;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                            }
+                            Field {
+                                label: Words.field-port;
+                                value <=> root.magic-port;
+                                error: root.errors[6];
+                            }
+                        }
+
+                        if root.wake-index == 3 : VerticalLayout {
+                            spacing: 16px;
+                            Field {
+                                label: Words.field-command;
+                                value <=> root.wake-command;
+                                hint: Words.hint-command;
+                                error: root.errors[16];
+                            }
+                            Field {
+                                label: Words.field-timeout;
+                                value <=> root.wake-timeout;
+                                error: root.errors[17];
+                            }
+                            Field {
+                                label: Words.field-mac;
+                                value <=> root.mac;
+                                error: root.errors[4];
+                            }
+                        }
+                    }
+
+                    // Step 4: sleep, shutdown and RDP.
+                    if root.step == 4 : VerticalLayout {
+                        spacing: 16px;
+                        VerticalLayout {
+                            spacing: 4px;
+                            CheckRow {
+                                label: Words.power-sleep;
+                                checked <=> root.allow-sleep;
+                            }
+                            CheckRow {
+                                label: Words.power-shutdown;
+                                checked <=> root.allow-shutdown;
+                            }
+                            CheckRow {
+                                label: Words.power-rdp;
+                                checked <=> root.allow-rdp;
+                            }
+                        }
+                        // Over SSH sleep and shutdown come together: the problem is shown here.
+                        if root.errors[18] != "" || root.errors[19] != "" : Text {
+                            text: root.errors[18] != "" ? root.errors[18] : root.errors[19];
+                            color: Theme.state-fail;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+
+                        if root.allow-sleep || root.allow-shutdown : VerticalLayout {
+                            spacing: 12px;
+                            VerticalLayout {
+                                spacing: 4px;
+                                RadioRow {
+                                    label: Words.power-ssh;
+                                    selected: root.power-index == 0;
+                                    clicked => { root.power-index = 0; }
+                                }
+                                RadioRow {
+                                    label: Words.power-command;
+                                    selected: root.power-index == 1;
+                                    clicked => { root.power-index = 1; }
+                                }
+                            }
+
+                            if root.power-index == 0 : VerticalLayout {
+                                spacing: 12px;
+                                GroupLabel {
+                                    text: Words.field-os;
+                                }
+                                VerticalLayout {
+                                    spacing: 4px;
+                                    RadioRow {
+                                        label: Words.os-windows;
+                                        selected: root.os-index == 0;
+                                        clicked => { root.os-index = 0; }
+                                    }
+                                    RadioRow {
+                                        label: Words.os-linux;
+                                        selected: root.os-index == 1;
+                                        clicked => { root.os-index = 1; }
+                                    }
+                                }
+                                Field {
+                                    label: Words.field-user;
+                                    value <=> root.ssh-user;
+                                    error: root.errors[20];
+                                }
+                                Field {
+                                    label: Words.field-port;
+                                    value <=> root.ssh-port;
+                                    error: root.errors[21];
+                                }
+                                if root.openssh-missing : Text {
+                                    text: Words.openssh-missing;
+                                    color: Theme.state-fail;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                }
+                                Field {
+                                    label: Words.field-identity;
+                                    value <=> root.ssh-identity;
+                                    error: root.errors[22];
+                                }
+                                KeyTools {
+                                    available: !root.openssh-missing && !root.key-busy;
+                                    error: root.power-key-error;
+                                    public-key: root.power-public-key;
+                                    create => { root.create-key(1); }
+                                }
+                            }
+
+                            if root.power-index == 1 : VerticalLayout {
+                                spacing: 16px;
+                                if root.allow-sleep : Field {
+                                    label: Words.field-sleep-command;
+                                    value <=> root.sleep-command;
+                                    hint: Words.hint-command;
+                                    error: root.errors[23];
+                                }
+                                if root.allow-shutdown : Field {
+                                    label: Words.field-shutdown-command;
+                                    value <=> root.shutdown-command;
+                                    hint: Words.hint-command;
+                                    error: root.errors[24];
+                                }
+                            }
+                        }
+
+                        if root.allow-rdp : VerticalLayout {
+                            spacing: 8px;
+                            Field {
+                                label: Words.field-rdp-user;
+                                value <=> root.rdp-user;
+                                error: root.errors[25];
+                            }
+                            Text {
+                                text: Words.rdp-note;
+                                color: Theme.muted;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    // Step 5: the checks.
+                    if root.step == 5 : VerticalLayout {
+                        spacing: 12px;
+                        Rectangle {
+                            height: checks-list.preferred-height;
+                            background: Theme.surface;
+                            border-width: 1px;
+                            border-color: Theme.line;
+                            checks-list := VerticalLayout {
+                                for item[i] in root.checks : VerticalLayout {
+                                    if i > 0 : Divider {}
+                                    CheckItem {
+                                        line: item;
+                                        trust-available: !root.trust-busy && !root.checks-running;
+                                        trust => { root.trust-host(i); }
+                                    }
+                                }
+                            }
+                        }
+                        if root.openssh-missing : Text {
+                            text: Words.openssh-missing;
+                            color: Theme.state-fail;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                        // A host key that is not known yet: nothing is trusted until the user
+                        // has compared the fingerprints and pressed "Довіряти".
+                        if root.trust-prompt != "" : Rectangle {
+                            height: trust-box.preferred-height + 24px;
+                            background: Theme.surface;
+                            border-width: 1px;
+                            border-color: Theme.line-strong;
+                            trust-box := VerticalLayout {
+                                x: 12px;
+                                y: 12px;
+                                width: parent.width - 24px;
+                                height: parent.height - 24px;
+                                spacing: 8px;
+                                Text {
+                                    text: root.trust-prompt;
+                                    color: Theme.ink;
+                                    font-size: 12px;
+                                    wrap: word-wrap;
+                                }
+                                for fingerprint in root.trust-fingerprints : Text {
+                                    text: fingerprint;
+                                    color: Theme.ink;
+                                    font-size: 12px;
+                                    font-weight: 600;
+                                    wrap: word-wrap;
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    Btn {
+                                        label: Words.trust;
+                                        kind: BtnKind.primary;
+                                        available: !root.trust-busy;
+                                        clicked => { root.trust-confirm(); }
+                                    }
+                                    Btn {
+                                        label: Words.cancel;
+                                        clicked => { root.trust-cancel(); }
+                                    }
+                                }
+                            }
+                        }
+                        if root.ssh-note != "" : Text {
+                            text: root.ssh-note;
+                            color: Theme.ink-2;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            alignment: start;
+                            Btn {
+                                label: Words.test-again;
+                                available: !root.checks-running;
+                                clicked => { root.retest(); }
+                            }
+                        }
+                        Text {
+                            text: Words.test-note;
+                            color: Theme.muted;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    // Problems that no field of this step shows (the tunnel or the relay that
+                    // was removed meanwhile, for example).
+                    if root.general-error != "" : Text {
+                        text: root.general-error;
+                        color: Theme.state-fail;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            VScroll {
+                x: parent.width - 8px;
+                y: 0px;
+                height: parent.height;
+                view-height: flick.height;
+                content-height: flick.content-height;
+                offset: -flick.content-y;
+                scroll-to(amount) => { flick.content-y = -amount; }
+            }
+        }
+
+        // Footer: 56 high, 1 px line above; the buttons right-aligned, gap 8.
+        Rectangle {
+            height: 56px;
+            Divider {
+                width: parent.width;
+            }
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding: 12px;
+                spacing: 8px;
+                alignment: end;
+                Btn {
+                    label: root.step == 1 ? Words.cancel : Words.back;
+                    kind: BtnKind.secondary;
+                    clicked => {
+                        if (root.step == 1) {
+                            root.cancel();
+                        } else {
+                            root.back();
+                        }
+                    }
+                }
+                Btn {
+                    label: root.step == 5 ? Words.finish : Words.next;
+                    kind: BtnKind.primary;
+                    clicked => { Flow.advance(); }
+                }
+            }
+        }
+    }
+}
