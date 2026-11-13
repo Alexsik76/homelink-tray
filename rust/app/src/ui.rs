@@ -21,7 +21,7 @@ use homelink_core::machine::Command;
 use homelink_core::notice::Notice;
 use homelink_core::ports::{Clock, Sink, Time};
 use homelink_core::snapshot::{
-    Attention, DisplayState, GroupView, PcView, Snapshot, TrayState, TunnelToggle, TunnelView,
+    DisplayState, GroupView, PcView, Snapshot, TrayState, TunnelCorner, TunnelToggle, TunnelView,
     WakeSummary,
 };
 use slint::winit_030::winit::event::WindowEvent;
@@ -231,12 +231,13 @@ pub(crate) fn install(windows: &Windows<'_>, setup: Setup) {
     let none = Snapshot {
         groups: Vec::new(),
         tray: TrayState {
-            screen: DisplayState::Unknown,
-            corner: Attention::None,
+            pcs: DisplayState::Unknown,
+            tunnels: TunnelCorner::None,
             tunnels_up: 0,
             tunnels_total: 0,
             pcs_online: 0,
             pcs_total: 0,
+            pcs_unknown: 0,
         },
     };
     windows.tray.set_glyph(ui.glyph(&none));
@@ -357,8 +358,8 @@ impl Ui {
     /// The tray icon of a snapshot, drawn for the taskbar theme.
     fn glyph(&self, snapshot: &Snapshot) -> slint::Image {
         let bitmap = icon::render(
-            snapshot.tray.screen,
-            snapshot.tray.corner,
+            snapshot.tray.pcs,
+            snapshot.tray.tunnels,
             self.appearance.taskbar_dark,
             self.appearance.icon_px,
         );
@@ -471,15 +472,28 @@ impl Ui {
         let tray = &snapshot.tray;
         let (up, tunnels) = (tray.tunnels_up.to_string(), tray.tunnels_total.to_string());
         let (online, pcs) = (tray.pcs_online.to_string(), tray.pcs_total.to_string());
+        let unknown = tray.pcs_unknown.to_string();
+        let line2 = if tray.pcs_unknown == 0 {
+            self.tr.t(
+                "tooltip.pcs_online",
+                &[("online", online.as_str()), ("total", pcs.as_str())],
+            )
+        } else {
+            self.tr.t(
+                "tooltip.pcs_online_unknown",
+                &[
+                    ("online", online.as_str()),
+                    ("total", pcs.as_str()),
+                    ("unknown", unknown.as_str()),
+                ],
+            )
+        };
         let lines = [
             self.tr.t(
                 "tooltip.tunnels_up",
                 &[("up", up.as_str()), ("total", tunnels.as_str())],
             ),
-            self.tr.t(
-                "tooltip.pcs_online",
-                &[("online", online.as_str()), ("total", pcs.as_str())],
-            ),
+            line2,
         ];
         truncate_utf16(&lines.join("\n"), TOOLTIP_MAX_UNITS)
     }

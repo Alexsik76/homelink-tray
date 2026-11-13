@@ -182,28 +182,32 @@ pub struct Actions {
     pub rdp: bool,
 }
 
-/// The corner square of the tray icon.
+/// The corner square of the tray icon: the aggregate state of the tunnels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Attention {
-    /// Nothing to show.
+pub enum TunnelCorner {
+    /// No square: every tunnel is stopped or not known, or there are none.
     None,
-    /// A PC is in progress.
+    /// A tunnel is up.
+    Ok,
+    /// A tunnel is connecting.
     Busy,
-    /// A PC failed.
+    /// A tunnel failed.
     Fail,
 }
 
-/// The summary shown by the tray icon (section 9 of `docs/design/ui-handoff.md`).
+/// The summary shown by the tray icon. The monitor glyph reads as "the PC", so the screen
+/// shows the PCs and the corner square the tunnels. This deliberately differs from section 9
+/// of `docs/design/ui-handoff.md` (owner's decision of 13.11.2026).
 ///
-/// `screen` is the first that applies of: any tunnel failed, any connecting, any up, all
-/// stopped, else unknown (also with no tunnels). `corner` is `Fail` if any PC failed, else
-/// `Busy` if any is in progress, else `None`.
+/// `pcs` is the first that applies of: any PC failed, any busy, any online, all off, else
+/// unknown (also with no PCs). `tunnels` is `Fail` if any tunnel failed, else `Busy` if any is
+/// connecting, else `Ok` if any is up, else `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrayState {
-    /// Fill of the screen: the aggregate of the tunnels.
-    pub screen: DisplayState,
-    /// The corner square: PC attention.
-    pub corner: Attention,
+    /// Fill of the screen: the aggregate of the PCs.
+    pub pcs: DisplayState,
+    /// The corner square: the aggregate of the tunnels.
+    pub tunnels: TunnelCorner,
     /// Tunnels that are up.
     pub tunnels_up: usize,
     /// All tunnels.
@@ -212,6 +216,8 @@ pub struct TrayState {
     pub pcs_online: usize,
     /// All PCs.
     pub pcs_total: usize,
+    /// PCs whose state is not known.
+    pub pcs_unknown: usize,
 }
 
 impl TrayState {
@@ -221,29 +227,31 @@ impl TrayState {
     ) -> Self {
         let tunnels: Vec<(DisplayState, TunnelState)> = tunnels.collect();
         let pcs: Vec<(DisplayState, PcState)> = pcs.collect();
-        let any = |d: DisplayState| tunnels.iter().any(|(x, _)| *x == d);
+        let tunnel_any = |d: DisplayState| tunnels.iter().any(|(x, _)| *x == d);
+        let corner = if tunnel_any(DisplayState::Fail) {
+            TunnelCorner::Fail
+        } else if tunnel_any(DisplayState::Busy) {
+            TunnelCorner::Busy
+        } else if tunnel_any(DisplayState::Ok) {
+            TunnelCorner::Ok
+        } else {
+            TunnelCorner::None
+        };
+        let any = |d: DisplayState| pcs.iter().any(|(x, _)| *x == d);
         let screen = if any(DisplayState::Fail) {
             DisplayState::Fail
         } else if any(DisplayState::Busy) {
             DisplayState::Busy
         } else if any(DisplayState::Ok) {
             DisplayState::Ok
-        } else if !tunnels.is_empty() && tunnels.iter().all(|(x, _)| *x == DisplayState::Off) {
+        } else if !pcs.is_empty() && pcs.iter().all(|(x, _)| *x == DisplayState::Off) {
             DisplayState::Off
         } else {
             DisplayState::Unknown
         };
-        let pc_any = |d: DisplayState| pcs.iter().any(|(x, _)| *x == d);
-        let corner = if pc_any(DisplayState::Fail) {
-            Attention::Fail
-        } else if pc_any(DisplayState::Busy) {
-            Attention::Busy
-        } else {
-            Attention::None
-        };
         Self {
-            screen,
-            corner,
+            pcs: screen,
+            tunnels: corner,
             tunnels_up: tunnels
                 .iter()
                 .filter(|(_, s)| *s == TunnelState::Up)
@@ -251,6 +259,7 @@ impl TrayState {
             tunnels_total: tunnels.len(),
             pcs_online: pcs.iter().filter(|(_, s)| *s == PcState::Online).count(),
             pcs_total: pcs.len(),
+            pcs_unknown: pcs.iter().filter(|(_, s)| *s == PcState::Unknown).count(),
         }
     }
 }
@@ -265,47 +274,66 @@ mod tests {
     }
 
     #[test]
-    fn tray_screen_first_match_wins() {
-        use TunnelState as T;
-        let screen = |t: &[(D, T)]| tray(t, &[]).screen;
-        assert_eq!(screen(&[]), D::Unknown, "no tunnels: nothing to fill");
-        assert_eq!(screen(&[(D::Unknown, T::Down)]), D::Unknown);
+    fn tray_screen_is_the_pc_aggregate_first_match_wins() {
+        use PcState as P;
+        let screen = |p: &[(D, P)]| tray(&[], p).pcs;
+        assert_eq!(screen(&[]), D::Unknown, "no PCs: nothing to fill");
+        assert_eq!(screen(&[(D::Unknown, P::Unknown)]), D::Unknown);
         assert_eq!(
-            screen(&[(D::Off, T::Down), (D::Unknown, T::Down)]),
+            screen(&[(D::Off, P::Offline), (D::Unknown, P::Unknown)]),
             D::Unknown
         );
-        assert_eq!(screen(&[(D::Off, T::Down), (D::Off, T::Down)]), D::Off);
-        assert_eq!(screen(&[(D::Off, T::Down), (D::Ok, T::Up)]), D::Ok);
         assert_eq!(
-            screen(&[(D::Ok, T::Up), (D::Busy, T::Starting), (D::Off, T::Down)]),
+            screen(&[(D::Off, P::Offline), (D::Off, P::Offline)]),
+            D::Off
+        );
+        assert_eq!(
+            screen(&[
+                (D::Off, P::Offline),
+                (D::Unknown, P::Unknown),
+                (D::Ok, P::Online)
+            ]),
+            D::Ok
+        );
+        assert_eq!(
+            screen(&[
+                (D::Ok, P::Online),
+                (D::Busy, P::Waking),
+                (D::Off, P::Offline)
+            ]),
             D::Busy
         );
         assert_eq!(
-            screen(&[(D::Busy, T::Starting), (D::Fail, T::Down), (D::Ok, T::Up)]),
+            screen(&[
+                (D::Busy, P::Waking),
+                (D::Fail, P::Offline),
+                (D::Ok, P::Online)
+            ]),
             D::Fail
         );
     }
 
     #[test]
-    fn tray_corner_is_pc_attention() {
-        use PcState as P;
-        let corner = |p: &[(D, P)]| tray(&[], p).corner;
-        assert_eq!(corner(&[]), Attention::None);
+    fn tray_corner_is_the_tunnel_aggregate() {
+        use TunnelState as T;
+        let corner = |t: &[(D, T)]| tray(t, &[]).tunnels;
+        assert_eq!(corner(&[]), TunnelCorner::None);
+        assert_eq!(corner(&[(D::Unknown, T::Down)]), TunnelCorner::None);
         assert_eq!(
-            corner(&[(D::Ok, P::Online), (D::Off, P::Offline)]),
-            Attention::None
+            corner(&[(D::Off, T::Down), (D::Unknown, T::Down)]),
+            TunnelCorner::None
         );
         assert_eq!(
-            corner(&[(D::Ok, P::Online), (D::Busy, P::Waking)]),
-            Attention::Busy
+            corner(&[(D::Off, T::Down), (D::Ok, T::Up)]),
+            TunnelCorner::Ok
         );
         assert_eq!(
-            corner(&[
-                (D::Busy, P::Waking),
-                (D::Fail, P::Offline),
-                (D::Ok, P::Online)
-            ]),
-            Attention::Fail
+            corner(&[(D::Ok, T::Up), (D::Busy, T::Starting), (D::Off, T::Down)]),
+            TunnelCorner::Busy
+        );
+        assert_eq!(
+            corner(&[(D::Busy, T::Starting), (D::Fail, T::Down), (D::Ok, T::Up)]),
+            TunnelCorner::Fail
         );
     }
 
@@ -322,11 +350,18 @@ mod tests {
                 (D::Busy, PcState::Online),
                 (D::Off, PcState::Offline),
                 (D::Busy, PcState::Waking),
+                (D::Unknown, PcState::Unknown),
             ],
         );
         assert_eq!(
-            (t.tunnels_up, t.tunnels_total, t.pcs_online, t.pcs_total),
-            (2, 3, 2, 4)
+            (
+                t.tunnels_up,
+                t.tunnels_total,
+                t.pcs_online,
+                t.pcs_total,
+                t.pcs_unknown
+            ),
+            (2, 3, 2, 5, 1)
         );
     }
 

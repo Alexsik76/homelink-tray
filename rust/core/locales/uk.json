@@ -10,6 +10,7 @@
   "tooltip.pc": "{name}: {state}",
   "tooltip.tunnels_up": "Тунелі: {up} з {total} піднято",
   "tooltip.pcs_online": "ПК у мережі: {online} з {total}",
+  "tooltip.pcs_online_unknown": "ПК у мережі: {online} з {total}, невідомо: {unknown}",
   "state.ok": "працює",
   "state.busy": "виконується",
   "state.off": "вимкнено",

@@ -1,6 +1,6 @@
 //! The tray icon (section 9 of `docs/design/ui-handoff.md`): a monitor glyph drawn on a 16 x 16
-//! grid, with the aggregate tunnel state as the screen fill and the PC attention as the corner
-//! square. [`render`] is pure: it returns the pixels, [`to_image`] turns them into a Slint image.
+//! grid, with the aggregate PC state as the screen fill and the aggregate tunnel state as the
+//! corner square (the owner's decision of 13.11.2026, which swaps section 9 of the handoff). [`render`] is pure: it returns the pixels, [`to_image`] turns them into a Slint image.
 //!
 //! Coordinates follow the handoff. A rectangle edge at `N.5` is a 1 px stroke on pixel `N`, and
 //! a fill starts at its integer coordinate. The stand is drawn in column 7 (the handoff gives
@@ -8,7 +8,7 @@
 //! is a 4 x 4 fill inside a 1 px ring of the taskbar background, on columns 10 to 15 and rows 9
 //! to 14. Scaling to 24 and 32 px is nearest-neighbour, so every stroke stays hard-edged.
 
-use homelink_core::snapshot::{Attention, DisplayState};
+use homelink_core::snapshot::{DisplayState, TunnelCorner};
 
 /// The side of the grid the glyph is drawn on.
 const GRID: usize = 16;
@@ -80,7 +80,7 @@ fn screen_colour(state: DisplayState, palette: &Palette) -> Option<[u8; 3]> {
 }
 
 /// Draws the glyph on the 16 x 16 grid.
-fn draw_grid(screen: DisplayState, corner: Attention, palette: &Palette) -> Grid {
+fn draw_grid(screen: DisplayState, corner: TunnelCorner, palette: &Palette) -> Grid {
     let mut grid: Grid = vec![None; GRID * GRID];
     let outline = opaque(palette.outline);
 
@@ -112,9 +112,10 @@ fn draw_grid(screen: DisplayState, corner: Attention, palette: &Palette) -> Grid
 
     // Corner square: a 1 px ring of the taskbar background around a 4 x 4 fill.
     let fill = match corner {
-        Attention::None => None,
-        Attention::Busy => Some(palette.busy),
-        Attention::Fail => Some(palette.fail),
+        TunnelCorner::None => None,
+        TunnelCorner::Ok => Some(palette.ok),
+        TunnelCorner::Busy => Some(palette.busy),
+        TunnelCorner::Fail => Some(palette.fail),
     };
     if let Some(fill) = fill {
         let ring = opaque(palette.ring);
@@ -138,7 +139,7 @@ fn draw_grid(screen: DisplayState, corner: Attention, palette: &Palette) -> Grid
 /// The icon of a tray state, `size` pixels square, for a light or a dark taskbar.
 pub(crate) fn render(
     screen: DisplayState,
-    corner: Attention,
+    corner: TunnelCorner,
     taskbar_dark: bool,
     size: u32,
 ) -> Bitmap {
@@ -193,7 +194,7 @@ mod tests {
 
     #[test]
     fn the_outline_and_the_screen_fill_are_where_the_handoff_puts_them() {
-        let b = render(DisplayState::Ok, Attention::None, false, 16);
+        let b = render(DisplayState::Ok, TunnelCorner::None, false, 16);
         assert_eq!(at(&b, 1, 2), INK_LIGHT, "outline corner");
         assert_eq!(at(&b, 14, 11), INK_LIGHT, "outline corner");
         assert_eq!(at(&b, 2, 4), CLEAR, "gap inside the outline");
@@ -207,14 +208,31 @@ mod tests {
 
     #[test]
     fn unknown_has_an_outline_and_no_fill() {
-        let b = render(DisplayState::Unknown, Attention::None, false, 16);
+        let b = render(DisplayState::Unknown, TunnelCorner::None, false, 16);
         assert_eq!(at(&b, 3, 4), CLEAR);
         assert_eq!(at(&b, 1, 2), INK_LIGHT);
     }
 
     #[test]
+    fn a_stopped_tunnel_and_an_unknown_pc_leave_only_the_outline() {
+        let b = render(DisplayState::Unknown, TunnelCorner::None, false, 16);
+        assert_eq!(at(&b, 3, 4), CLEAR, "no screen fill");
+        assert_eq!(at(&b, 12, 12), CLEAR, "no corner square");
+        assert_eq!(at(&b, 10, 9), CLEAR, "no ring");
+        assert_eq!(at(&b, 1, 2), INK_LIGHT);
+    }
+
+    #[test]
+    fn an_up_tunnel_and_an_online_pc_make_a_green_screen_with_a_green_square() {
+        let b = render(DisplayState::Ok, TunnelCorner::Ok, false, 16);
+        assert_eq!(at(&b, 5, 6), OK, "screen");
+        assert_eq!(at(&b, 12, 12), OK, "corner square");
+        assert_eq!(at(&b, 10, 9), RING_LIGHT, "ring");
+    }
+
+    #[test]
     fn the_corner_ring_and_fill_overlap_the_glyph_in_order() {
-        let b = render(DisplayState::Ok, Attention::Fail, false, 16);
+        let b = render(DisplayState::Ok, TunnelCorner::Fail, false, 16);
         // Ring over the screen fill (row 9, columns 10 to 12).
         assert_eq!(at(&b, 10, 9), RING_LIGHT);
         assert_eq!(at(&b, 12, 9), RING_LIGHT);
@@ -239,22 +257,23 @@ mod tests {
             (DisplayState::Fail, [0xC4, 0x28, 0x1C], [0xF0, 0x55, 0x4A]),
         ];
         for (state, light, dark) in screens {
-            let l = render(state, Attention::None, false, 16);
+            let l = render(state, TunnelCorner::None, false, 16);
             assert_eq!(at(&l, 5, 6), with_alpha(light), "{state:?} on light");
-            let d = render(state, Attention::None, true, 16);
+            let d = render(state, TunnelCorner::None, true, 16);
             assert_eq!(at(&d, 5, 6), with_alpha(dark), "{state:?} on dark");
         }
-        let unknown = render(DisplayState::Unknown, Attention::None, true, 16);
+        let unknown = render(DisplayState::Unknown, TunnelCorner::None, true, 16);
         assert_eq!(at(&unknown, 5, 6), CLEAR, "unknown has no fill");
         let corners = [
-            (Attention::Busy, [0xE8, 0xA3, 0x17], [0xFA, 0xCC, 0x15]),
-            (Attention::Fail, [0xC4, 0x28, 0x1C], [0xF0, 0x55, 0x4A]),
+            (TunnelCorner::Ok, [0x15, 0x80, 0x3D], [0x22, 0xC5, 0x5E]),
+            (TunnelCorner::Busy, [0xE8, 0xA3, 0x17], [0xFA, 0xCC, 0x15]),
+            (TunnelCorner::Fail, [0xC4, 0x28, 0x1C], [0xF0, 0x55, 0x4A]),
         ];
-        for (attention, light, dark) in corners {
-            let l = render(DisplayState::Off, attention, false, 16);
-            assert_eq!(at(&l, 12, 12), with_alpha(light), "{attention:?} on light");
-            let d = render(DisplayState::Off, attention, true, 16);
-            assert_eq!(at(&d, 12, 12), with_alpha(dark), "{attention:?} on dark");
+        for (corner, light, dark) in corners {
+            let l = render(DisplayState::Off, corner, false, 16);
+            assert_eq!(at(&l, 12, 12), with_alpha(light), "{corner:?} on light");
+            let d = render(DisplayState::Off, corner, true, 16);
+            assert_eq!(at(&d, 12, 12), with_alpha(dark), "{corner:?} on dark");
         }
     }
 
@@ -263,26 +282,26 @@ mod tests {
     }
 
     #[test]
-    fn busy_attention_uses_the_busy_colour() {
-        let b = render(DisplayState::Off, Attention::Busy, false, 16);
+    fn a_busy_tunnel_uses_the_busy_colour() {
+        let b = render(DisplayState::Off, TunnelCorner::Busy, false, 16);
         assert_eq!(at(&b, 12, 13), [0xE8, 0xA3, 0x17, 0xFF]);
     }
 
     #[test]
     fn a_dark_taskbar_has_light_outline_and_dark_state_colours() {
-        let b = render(DisplayState::Fail, Attention::None, true, 16);
+        let b = render(DisplayState::Fail, TunnelCorner::None, true, 16);
         assert_eq!(at(&b, 1, 2), [0xF2, 0xF2, 0xF2, 0xFF]);
         assert_eq!(at(&b, 3, 4), [0xF0, 0x55, 0x4A, 0xFF]);
     }
 
     #[test]
     fn scaling_keeps_each_grid_cell_whole() {
-        let b32 = render(DisplayState::Ok, Attention::None, false, 32);
+        let b32 = render(DisplayState::Ok, TunnelCorner::None, false, 32);
         // Grid cell (3, 4) is pixels 6..8 by 8..10 at 32 px.
         assert_eq!(at(&b32, 6, 8), OK);
         assert_eq!(at(&b32, 7, 9), OK);
         assert_eq!(at(&b32, 5, 8), CLEAR);
-        let b24 = render(DisplayState::Ok, Attention::None, false, 24);
+        let b24 = render(DisplayState::Ok, TunnelCorner::None, false, 24);
         // At 24 px, pixel 5 maps to grid column 3 and pixel 6 to grid row 4.
         assert_eq!(at(&b24, 5, 6), OK);
         assert_eq!(at(&b24, 4, 6), CLEAR);
@@ -294,7 +313,7 @@ mod tests {
     #[test]
     fn the_sizes_are_the_three_renditions() {
         for size in [16, 24, 32] {
-            let b = render(DisplayState::Busy, Attention::Busy, true, size);
+            let b = render(DisplayState::Busy, TunnelCorner::Busy, true, size);
             assert_eq!(b.size, size);
             assert_eq!(b.pixels.len(), usize::try_from(size * size).unwrap_or(0));
         }

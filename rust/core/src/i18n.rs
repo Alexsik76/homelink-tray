@@ -433,6 +433,7 @@ mod tests {
         let keys = [
             "tooltip.tunnels_up",
             "tooltip.pcs_online",
+            "tooltip.pcs_online_unknown",
             "details.state",
             "details.address",
             "details.tunnel",
@@ -468,6 +469,20 @@ mod tests {
         assert_eq!(
             uk.t("tooltip.pcs_online", &[("online", "1"), ("total", "4")]),
             "ПК у мережі: 1 з 4"
+        );
+        assert_eq!(
+            uk.t(
+                "tooltip.pcs_online_unknown",
+                &[("online", "1"), ("total", "4"), ("unknown", "2")]
+            ),
+            "ПК у мережі: 1 з 4, невідомо: 2"
+        );
+        assert_eq!(
+            Translator::new(Lang::En).t(
+                "tooltip.pcs_online_unknown",
+                &[("online", "1"), ("total", "4"), ("unknown", "2")]
+            ),
+            "PCs online: 1 of 4, unknown: 2"
         );
     }
 

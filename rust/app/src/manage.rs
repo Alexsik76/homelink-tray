@@ -20,7 +20,7 @@ use homelink_core::i18n::Translator;
 use homelink_core::ports::{CommandRunner, PortProbe};
 use homelink_core::problem::Problem;
 use homelink_core::settings::{self, Change};
-use homelink_core::snapshot::{Attention, DisplayState};
+use homelink_core::snapshot::{DisplayState, TunnelCorner};
 use homelink_core::tunnel_form::{self, TunnelForm};
 use slint::winit_030::winit::event::{ElementState, WindowEvent};
 use slint::winit_030::winit::keyboard::{Key, NamedKey};
@@ -169,7 +169,7 @@ pub(crate) fn install(panel: &Panel, setup: Setup) -> Result<(), slint::Platform
     settings.set_notices(THIRD_PARTY_NOTICES.into());
     settings.set_glyph(icon::to_image(&icon::render(
         DisplayState::Unknown,
-        Attention::None,
+        TunnelCorner::None,
         setup.dark,
         48,
     )));

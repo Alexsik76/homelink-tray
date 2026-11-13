@@ -455,13 +455,17 @@ processes; `app` contains everything that needs the `windows` crate.
   changed (check times are rounded to 30 s for this reason, section 5.6). The `Sink` adapter
   calls `Weak::upgrade_in_event_loop` and rebuilds the Slint models there (Slint models are not
   `Send`).
-- Tray aggregate (`TrayState`, handoff section 9). Screen fill = the aggregate of the tunnels'
-  display states, the first that applies: any failed (`fail`), any connecting (`busy`), any up
-  (`ok`), all stopped (`off`), otherwise `unknown` (including no tunnels at all, so no fill).
-  Corner square = PC attention: `fail` if any PC failed, else `busy` if any PC is in progress
-  (waking, waiting for its tunnel, or running an action), else none. Tooltip counts: tunnels up
-  of all tunnels, PCs online of all PCs; the lines are `tooltip.tunnels_up` and
-  `tooltip.pcs_online`. The tooltip is truncated to the 127 characters Windows allows.
+- Tray aggregate (`TrayState`). The monitor glyph reads as "the PC", so the screen fill is the
+  aggregate of the PCs' display states, the first that applies: any failed (`fail`), any busy
+  (waking or running an action, `busy`), any online (`ok`), all known and off (`off`),
+  otherwise `unknown` (including no PCs at all, so no fill). The corner square is the aggregate
+  of the tunnels (`TunnelCorner`): `Fail` if any tunnel failed, else `Busy` if any is
+  connecting, else `Ok` if any is up, else none (all stopped or unknown, or no tunnels). This
+  deliberately deviates from section 9 of the handoff (screen = tunnels, corner = PC attention)
+  by the owner's decision of 13.11.2026. Tooltip: `tooltip.tunnels_up` (tunnels up of all
+  tunnels) and `tooltip.pcs_online` (PCs online of all PCs); when some PC's state is unknown the
+  second line is `tooltip.pcs_online_unknown`, which adds the count of unknown PCs. The tooltip
+  is truncated to the 127 characters Windows allows.
 - Job panics are caught (`catch_unwind`) and delivered as a failed `JobDone`; the engine thread
   never runs user-supplied code. A panic hook writes to the log.
 - Shutdown: `Command::Shutdown` stops the timer, drops the queue and joins workers with a

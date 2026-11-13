@@ -10,6 +10,7 @@
   "tooltip.pc": "{name}: {state}",
   "tooltip.tunnels_up": "Tunnels: {up} of {total} up",
   "tooltip.pcs_online": "PCs online: {online} of {total}",
+  "tooltip.pcs_online_unknown": "PCs online: {online} of {total}, unknown: {unknown}",
   "state.ok": "working",
   "state.busy": "in progress",
   "state.off": "off",

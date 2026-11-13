@@ -1471,20 +1471,25 @@ fn the_toggle_names_what_it_would_do() {
 
 #[test]
 fn the_tray_follows_the_displayed_states() {
-    use crate::snapshot::Attention;
+    use crate::snapshot::TunnelCorner;
     let mut m = single();
-    assert_eq!(m.snapshot().tray.screen, D::Unknown);
+    let tray = m.snapshot().tray;
+    assert_eq!(
+        (tray.pcs, tray.tunnels, tray.pcs_unknown),
+        (D::Unknown, TunnelCorner::None, 1),
+        "tunnel stopped, PC unknown: outline only"
+    );
     let now = online(&mut m);
     let tray = m.snapshot().tray;
     assert_eq!(
-        (tray.screen, tray.corner, tray.tunnels_up, tray.pcs_online),
-        (D::Ok, Attention::None, 1, 1)
+        (tray.pcs, tray.tunnels, tray.tunnels_up, tray.pcs_online),
+        (D::Ok, TunnelCorner::Ok, 1, 1)
     );
     m.step(
         Input::Command(Command::Power(desktop(), PowerAction::Sleep)),
         now,
     );
-    assert_eq!(m.snapshot().tray.corner, Attention::Busy);
+    assert_eq!(m.snapshot().tray.pcs, D::Busy);
     m.step(
         Input::PowerDone {
             pc: desktop(),
@@ -1493,6 +1498,10 @@ fn the_tray_follows_the_displayed_states() {
         },
         now,
     );
-    assert_eq!(m.snapshot().tray.corner, Attention::Fail);
-    assert_eq!(m.snapshot().tray.screen, D::Ok, "the tunnel is fine");
+    assert_eq!(m.snapshot().tray.pcs, D::Fail);
+    assert_eq!(
+        m.snapshot().tray.tunnels,
+        TunnelCorner::Ok,
+        "the tunnel is fine"
+    );
 }
