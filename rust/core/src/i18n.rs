@@ -634,6 +634,7 @@ mod tests {
             "about.font",
             "about.license",
             "about.third_party",
+            "notices.title",
             "wizard.title_add",
             "wizard.back",
             "wizard.next",

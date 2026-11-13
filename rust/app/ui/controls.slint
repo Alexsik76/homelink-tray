@@ -24,6 +24,8 @@ export global Words {
     in-out property <string> about-slint;
     in-out property <string> about-font;
     in-out property <string> about-license;
+    in-out property <string> about-third-party;
+    in-out property <string> notices-title;
     in-out property <string> field-name;
     in-out property <string> tunnel-field-conf;
     in-out property <string> tunnel-hint-conf;
@@ -425,6 +427,52 @@ export component KeyTools inherits VerticalLayout {
     if root.public-key != "" : CopyBlock {
         label: Words.public-key-label;
         text: root.public-key;
+    }
+}
+
+// A thin vertical scrollbar, placed beside a Flickable (not inside it). It shows only when the
+// content is taller than the view, and its thumb is proportional to the view. A press on the thumb
+// grabs it; a press elsewhere on the track centres the thumb there. The Flickable's scroll position
+// is given as `offset` (its `-content-y`); the bar asks for a new one with `scroll-to`.
+export component VScroll inherits Rectangle {
+    in property <length> view-height;
+    in property <length> content-height;
+    in property <length> offset;
+    callback scroll-to(length);
+
+    property <length> range: max(0px, root.content-height - root.view-height);
+    property <length> thumb-height: max(24px, root.height * (root.view-height / max(root.content-height, 1px)));
+    property <length> travel: max(0px, root.height - root.thumb-height);
+    property <length> grab-y;
+
+    width: 6px;
+    background: Theme.line;
+    visible: root.content-height > root.view-height;
+
+    thumb := Rectangle {
+        width: parent.width;
+        height: root.thumb-height;
+        y: root.travel * (root.offset / max(root.range, 1px));
+        background: Theme.muted;
+    }
+
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                root.grab-y = (ta.mouse-y >= thumb.y && ta.mouse-y <= thumb.y + thumb.height)
+                    ? ta.mouse-y - thumb.y : root.thumb-height / 2;
+                root.drag-to(ta.mouse-y - root.grab-y);
+            }
+        }
+        moved => {
+            root.drag-to(ta.mouse-y - root.grab-y);
+        }
+    }
+
+    function drag-to(top: length) {
+        root.scroll-to(max(0px, min(root.travel, top)) / max(root.travel, 1px) * root.range);
     }
 }
 

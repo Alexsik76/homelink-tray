@@ -10,7 +10,7 @@
 // 22 ssh key, 23 sleep command, 24 shutdown command, 25 rdp user.
 
 import { Theme, StateMark, Mark } from "main.slint";
-import { Words, Flow, Btn, BtnKind, Field, RadioRow, CheckRow, CheckLine, GroupLabel, Divider, CopyBlock, KeyTools } from "controls.slint";
+import { Words, Flow, Btn, BtnKind, Field, RadioRow, CheckRow, CheckLine, GroupLabel, Divider, CopyBlock, KeyTools, VScroll } from "controls.slint";
 
 // One line of the check list: 40 high, the marker, the name, the result on the right. A line
 // whose host key is not known yet has "Довірити вузлу" under it (undesigned: a text button).
@@ -228,7 +228,7 @@ export component WizardWindow inherits Window {
         // Body, scrolled when the step is taller than the window.
         Rectangle {
             vertical-stretch: 1;
-            Flickable {
+            flick := Flickable {
                 width: parent.width;
                 height: parent.height;
                 content-width: parent.width;
@@ -714,6 +714,16 @@ export component WizardWindow inherits Window {
                         wrap: word-wrap;
                     }
                 }
+            }
+
+            VScroll {
+                x: parent.width - 8px;
+                y: 0px;
+                height: parent.height;
+                view-height: flick.height;
+                content-height: flick.content-height;
+                offset: -flick.content-y;
+                scroll-to(amount) => { flick.content-y = -amount; }
             }
         }
 

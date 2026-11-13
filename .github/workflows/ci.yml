@@ -76,6 +76,10 @@ jobs:
       - name: Format check
         run: cargo fmt -p homelink-core --check
 
+      - name: Licence policy and third-party notices
+        working-directory: ${{ github.workspace }}
+        run: python3 tools/third_party_notices.py --check
+
       - name: Lint
         run: cargo clippy -p homelink-core --all-targets --all-features -- -D warnings
 
