@@ -35,17 +35,32 @@ thread_local! {
     static UI: RefCell<Option<Rc<Ui>>> = const { RefCell::new(None) };
 }
 
-/// Hands engine snapshots to the Slint event loop.
-pub(crate) struct UiSink;
+/// What opens Remote Desktop for a PC. The error is a text ready to show.
+pub(crate) type RdpAction = Box<dyn Fn(&PcId) -> Result<(), String>>;
+
+/// Hands engine snapshots to the Slint event loop and writes the notices to the log.
+pub(crate) struct UiSink {
+    translator: Translator,
+}
+
+impl UiSink {
+    /// A sink that words the notices with `translator`.
+    pub(crate) fn new(translator: Translator) -> Self {
+        Self { translator }
+    }
+}
 
 impl Sink for UiSink {
     fn publish(&self, snapshot: Snapshot) {
         let _ = slint::invoke_from_event_loop(move || with_ui(|ui| ui.show(&snapshot)));
     }
 
-    fn notify(&self, _notice: Notice) {
-        // Notices (tray balloons, the log file) come with the notice step; the engine already
-        // writes each one to the log.
+    /// No tray balloon or toast API was found for Slint 1.18 (the Slint sources could not be
+    /// read to be sure), so a notice goes to the log file only, worded as the user would read
+    /// it. Showing notices on screen is still to do.
+    fn notify(&self, notice: Notice) {
+        let (title, body) = self.translator.notice(&notice);
+        log::info!(target: "notice", "{title}: {body}");
     }
 }
 
@@ -62,6 +77,7 @@ pub(crate) struct Ui {
     tray: Weak<Tray>,
     tr: Translator,
     handle: Handle,
+    rdp: RdpAction,
     state: RefCell<State>,
     /// When the panel last lost focus (see [`REOPEN_GUARD`]).
     blurred_at: Cell<Option<Instant>>,
@@ -79,13 +95,14 @@ struct State {
 
 /// Connects the views to the engine: fills the texts, wires the callbacks and makes the
 /// UI state reachable from [`UiSink`]. Call on the event loop thread, before the engine starts.
-pub(crate) fn install(panel: &Panel, tray: &Tray, tr: Translator, handle: Handle) {
+pub(crate) fn install(panel: &Panel, tray: &Tray, tr: Translator, handle: Handle, rdp: RdpAction) {
     fill_strings(panel, tray, &tr);
     let ui = Rc::new(Ui {
         panel: panel.as_weak(),
         tray: tray.as_weak(),
         tr,
         handle,
+        rdp,
         state: RefCell::default(),
         blurred_at: Cell::new(None),
         shown_at: Cell::new(None),
@@ -130,9 +147,10 @@ fn wire(panel: &Panel, tray: &Tray, ui: &Rc<Ui>) {
         let u = Rc::clone(ui);
         panel.on_cancel_power(move || u.cancel_power());
     }
-    // Opening Remote Desktop needs `mstsc`, which the Windows adapters bring. Until then the
-    // button is enabled exactly when the engine says so, and does nothing.
-    panel.on_rdp_clicked(|_id| {});
+    {
+        let u = Rc::clone(ui);
+        panel.on_rdp_clicked(move |id| u.open_rdp(&id));
+    }
     {
         let u = Rc::clone(ui);
         panel.on_hide_requested(move || u.hide());
@@ -289,6 +307,28 @@ impl Ui {
     fn send_pc(&self, id: &str, command: impl FnOnce(PcId) -> Command) {
         if let Ok(pc) = PcId::parse(id) {
             self.handle.send(command(pc));
+        }
+    }
+
+    /// Opens Remote Desktop for a PC. The button is enabled by the engine's snapshot; a failure
+    /// is logged and shown in a message box, since there is no balloon to show it in.
+    fn open_rdp(&self, id: &str) {
+        let Ok(pc) = PcId::parse(id) else { return };
+        if let Err(detail) = (self.rdp)(&pc) {
+            log::error!("Remote Desktop for {pc}: {detail}");
+            let name = self
+                .state
+                .borrow()
+                .last
+                .iter()
+                .flat_map(|snapshot| snapshot.groups.iter())
+                .flat_map(|group| group.pcs.iter())
+                .find(|view| view.id == pc)
+                .map_or_else(|| id.to_owned(), |view| view.name.clone());
+            platform::message(&self.tr.t(
+                "error.rdp",
+                &[("pc", name.as_str()), ("detail", detail.as_str())],
+            ));
         }
     }
 

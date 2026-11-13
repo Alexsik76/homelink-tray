@@ -123,5 +123,10 @@
   "error.title": "HomeLink",
   "error.config": "Помилка у файлі налаштувань:\n{detail}",
   "error.config_created": "Створено файл налаштувань:\n{path}\n\nЗаповніть його й запустіть програму ще раз.",
-  "error.already_running": "HomeLink уже запущено."
+  "error.config_create": "Не вдалося створити файл налаштувань:\n{path}\n\n{detail}",
+  "error.already_running": "HomeLink уже запущено.",
+  "error.startup": "HomeLink не вдалося запустити:\n{detail}",
+  "error.elevation": "Для керування тунелями HomeLink потрібні права адміністратора, але перезапуститися з ними не вдалося:\n{detail}",
+  "error.rdp": "Не вдалося відкрити віддалений робочий стіл для {pc}:\n{detail}",
+  "error.demo_unavailable": "У цій збірці HomeLink немає демонстраційного режиму."
 }

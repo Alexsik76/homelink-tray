@@ -123,5 +123,10 @@
   "error.title": "HomeLink",
   "error.config": "Error in the settings file:\n{detail}",
   "error.config_created": "A settings file has been created:\n{path}\n\nFill it in and start the program again.",
-  "error.already_running": "HomeLink is already running."
+  "error.config_create": "Could not create the settings file:\n{path}\n\n{detail}",
+  "error.already_running": "HomeLink is already running.",
+  "error.startup": "HomeLink could not start:\n{detail}",
+  "error.elevation": "HomeLink needs administrator rights to manage tunnels, but could not restart with them:\n{detail}",
+  "error.rdp": "Could not open Remote Desktop for {pc}:\n{detail}",
+  "error.demo_unavailable": "This build of HomeLink has no demo mode."
 }

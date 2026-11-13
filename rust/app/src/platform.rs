@@ -80,13 +80,25 @@ pub(crate) fn place_panel(panel: &Panel) {
     }
 }
 
-/// Shows an error the user must see before the program exits. The Windows build has no
-/// console, so this is a message box there and standard error elsewhere.
+/// Shows an error the user must see. The Windows build has no console, so this is a message
+/// box there and standard error elsewhere.
 pub(crate) fn message(text: &str) {
+    show(text, false);
+}
+
+/// Shows information the user must see (a message box with the information icon).
+pub(crate) fn info(text: &str) {
+    show(text, true);
+}
+
+fn show(text: &str, information: bool) {
     #[cfg(windows)]
-    win32::message_box(text);
+    win32::message_box(text, information);
     #[cfg(not(windows))]
-    eprintln!("HomeLink: {text}");
+    {
+        let _ = information;
+        eprintln!("HomeLink: {text}");
+    }
 }
 
 #[cfg(windows)]
@@ -96,8 +108,8 @@ mod win32 {
 
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        MB_ICONERROR, MB_OK, MessageBoxW, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-        SystemParametersInfoW,
+        MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MessageBoxW, SPI_GETWORKAREA,
+        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
     };
     use windows::core::{HSTRING, w};
 
@@ -117,12 +129,17 @@ mod win32 {
         rect
     }
 
-    /// Shows an error box with no owner window.
-    pub(super) fn message_box(text: &str) {
+    /// Shows a message box with no owner window.
+    pub(super) fn message_box(text: &str, information: bool) {
         let text = HSTRING::from(text);
+        let icon = if information {
+            MB_ICONINFORMATION
+        } else {
+            MB_ICONERROR
+        };
         // SAFETY: both strings live until the call returns; a null owner window is allowed.
         unsafe {
-            let _ = MessageBoxW(None, &text, w!("HomeLink"), MB_OK | MB_ICONERROR);
+            let _ = MessageBoxW(None, &text, w!("HomeLink"), MB_OK | icon);
         }
     }
 }

@@ -105,10 +105,13 @@ jobs:
         run: cargo fmt -p homelink --check
 
       - name: Lint
-        run: cargo clippy -p homelink --all-targets --locked -- -D warnings
+        run: cargo clippy -p homelink --all-targets --all-features --locked -- -D warnings
+
+      - name: Test
+        run: cargo test -p homelink --all-features --locked
 
       - name: Build
-        run: cargo build -p homelink --release --locked
+        run: cargo build -p homelink --release --locked --features demo
 
       - uses: actions/upload-artifact@v7
         with:

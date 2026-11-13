@@ -68,10 +68,17 @@ rust/
     tests/              integration tests with local servers and fixtures
   app/                  crate `homelink` (bin, produces HomeLink.exe): Windows + Slint
     src/
-      main.rs           startup, single instance, elevation check, wiring
-      windows/          adapters: WireGuard service, ICMP, taskbar theme,
-                        OEM output decoding, mstsc launch, OpenSSH client detection
-      ui/               Slint glue: snapshot -> models, callbacks -> commands, tray, notices
+      main.rs           arguments (--demo, --lang, --config), mode choice, the panel run
+      real.rs           real mode: elevation, config.toml (template on the first start),
+                        single instance, log, `Deps` from the real adapters
+      windows/          adapters built from pure, unit-tested functions and a thin layer that
+                        runs programs through `CommandRunner`: WireGuard service (`sc`,
+                        `wireguard.exe`), ping, OEM output decoding, `reg query` (code page,
+                        display language), `.rdp` file and `mstsc`, elevation check/restart
+      logging.rs        rotating log file, instance.rs   file lock held by the running copy
+      demo.rs           (feature `demo`) the engine on the core fakes with simulated delays
+      ui.rs             Slint glue: snapshot -> models, callbacks -> commands, tray, notices
+      platform.rs       the only unsafe code: work area, message box (cfg(windows))
     ui/                 *.slint (panel, wizard, about), fonts/, icons/
     build.rs
 ```
@@ -562,11 +569,22 @@ entities with unchanged ids keep their state, removed ones are dropped.
   accepted power command (`power_sent`); none for a PC that becomes `Unknown` because its tunnel
   dropped (that is `TunnelLost`).
 - Notice delivery in `app`: tray balloon/toast. Startup errors (invalid config, second
-  instance, not elevated) use `MessageBoxW`, since Slint is not up yet.
-- Elevation: v0.3 relaunches itself elevated because the WireGuard service needs admin. v1.0
-  keeps `requireAdministrator` in the manifest for parity (autostart via a scheduled task stays
-  as in the README); revisit later so PCs without a tunnel work unelevated.
-- Single instance via a named mutex.
+  instance, not elevated) use `MessageBoxW`, since Slint is not up yet. Status: no
+  notification API was found in Slint 1.18's tray (not verified against the Slint sources), so
+  notices are only written to the log (`target: notice`, worded in the user's language) until
+  a balloon mechanism is chosen; an RDP failure is shown in a message box.
+- Elevation: v0.3 relaunches itself elevated because the WireGuard service needs admin. The
+  app does the same at the start of the real mode: `whoami /groups` shows the integrity level
+  (`S-1-16-12288` or higher is elevated; the SID is the same in every language) and, if the
+  process is not elevated, `powershell Start-Process -Verb RunAs` starts an elevated copy and
+  this one exits. If the level cannot be read the program goes on, so a broken check cannot
+  restart it forever. v1.0 should also keep `requireAdministrator` in the manifest for parity
+  (autostart via a scheduled task stays as in the README); not done yet. Revisit later so PCs
+  without a tunnel work unelevated.
+- Single instance: a lock on `homelink.lock` in the configuration folder (`File::try_lock`),
+  held for the life of the process and released by the system when it ends; this replaces the
+  named mutex and needs no Win32 binding. Two copies with different configuration folders can
+  run side by side.
 
 ## 10. Internationalisation
 
@@ -744,8 +762,8 @@ must equal `homelink.__version__`. Changes (the Python jobs stay until phase 7):
 | 2b SSH-only access (done, owner decision) | REST and every secret removed; relay hosts over SSH with a key; `core::wake` builds the `ssh` argv (pure, tested); locale keys updated | no password, URL or secret type left in core; tests green |
 | 2c Relay presets and routed wake (done, owner decision) | `[[relays]]` with a preset (`routeros`, `etherwake`, `wakeonlan`); `method = "relay"`; magic packet `address` (unicast or broadcast); per-preset validation and exact-argument tests | tests green; section 3 documents the unicast + static ARP setup |
 | 3a Portable adapters (done) | `core::adapters`: TCP probe, magic packet, `StdCommandRunner`, command wake, SSH and command power runner, relay `sudo`; Linux integration tests against local stand-ins and a fake `ssh`; the real engine over them | tests green on Linux; the real-engine test passes |
-| 3b Windows adapters | WireGuard service, ICMP, OEM output decoder (plugs into `StdCommandRunner`), `mstsc` launch, OpenSSH detection (in the app crate); verify the RouterOS commands on RouterOS 7 | adapter tests green in the Windows CI job; a real `/tool wol` over SSH works |
-| 4 App shell | Panel on the real engine, tray with aggregate icon, notices, logging, single instance, elevation manifest, icons moved from `src/homelink/assets` | a single PC with a tunnel works end to end on Windows |
+| 3b Windows adapters (code written, unit-tested on Linux; not yet run on Windows) | In `app/src/windows/`, as pure functions plus a thin layer over `CommandRunner`, no new Win32 binding: WireGuard service (`wireguard.exe` install/uninstall, state from `sc query`, parsed independently of the display language), ping (`TTL=`), OEM output decoder (code pages 437, 850, 866 from the registry value `OEMCP`; other pages decode ASCII only) plugged into `StdCommandRunner`, `.rdp` file and `mstsc`, elevation check and restart, display language from `reg query`. **Still open:** OpenSSH client detection (wizard); verify the RouterOS commands on RouterOS 7; real `sc query` output in a non-English OEM code page (the test samples follow the documented format and were not captured on Windows); decoders for other code pages if needed | adapter tests green in the Windows CI job (the CI `rust-app` job does not run the app's tests yet); a real `/tool wol` over SSH works |
+| 4 App shell (real mode works in code, not yet proven on Windows) | Done: panel on the real engine, tray with aggregate icon, `config.toml` with a template on the first start and every validation problem shown in the catalog language, rotating log file, single instance (file lock), elevation restart, RDP button, `--config`, cargo feature `demo` for the fake-driven mode. **Remaining:** tray balloons for notices (no Slint API found; notices go to the log), `requireAdministrator` manifest, taskbar theme (light/dark icon set), icons moved from `src/homelink/assets`, joining the engine thread on quit, local time in the log, app tests in CI | a single PC with a tunnel works end to end on Windows |
 | 5 Multi-PC and wizard | Groups, shared tunnel, PC without a tunnel, wizard (add/edit/delete), About with the Slint credit, config reload | tunnel groups, a shared tunnel and a PC without a tunnel work by hand |
 | 6 Hardening | Manual checklist on Windows 10 LTSC and 11 (Linux and Windows remote PCs), docs rewrite (`README*.md`, `design.md`, relay and router setup, SSH for Windows), size and licence check, `v1.0.0-rc.1` | no open defects; parity checklist complete |
 | 7 Release | Remove `src/homelink/`, `tests/`, `pyproject.toml`, `build.bat`, `run_homelink.pyw`, Python CI jobs; decide the future of `tools/generate_icons.py` (keep as a dev tool or port); tag `v1.0.0` | release published, README links verified |

@@ -1490,6 +1490,7 @@ name = "homelink"
 version = "0.1.0"
 dependencies = [
  "homelink-core",
+ "log",
  "slint",
  "slint-build",
  "windows",

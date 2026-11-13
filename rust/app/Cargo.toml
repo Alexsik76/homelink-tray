@@ -9,9 +9,19 @@ publish = false
 name = "HomeLink"
 path = "src/main.rs"
 
+[features]
+# `--demo`: the engine on the core test fakes with simulated delays. Off in a normal build,
+# so the fakes are not part of the release executable; the CI demo artifact turns it on.
+demo = ["homelink-core/testing"]
+
 [dependencies]
-homelink-core = { path = "../core", features = ["testing"] }
+homelink-core = { path = "../core" }
+log = "0.4"
 slint = { version = "1.18", default-features = false, features = ["std", "backend-winit", "renderer-software", "system-tray", "compat-1-2", "unstable-winit-030"] }
+
+[dev-dependencies]
+# The fakes of the core serve the unit tests of the adapters.
+homelink-core = { path = "../core", features = ["testing"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
