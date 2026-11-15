@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use homelink_core::checks::{self, CheckDeps, CheckPlan, CheckResult, CheckRow};
 use homelink_core::domain::{Os, PcId, RelayKind};
+use homelink_core::pc_setup::{self, PcSetup};
 use homelink_core::problem::Problem;
 use homelink_core::relay_setup::{self, RelaySetup};
 use homelink_core::settings;
@@ -424,7 +425,7 @@ impl Manage {
         let relay_key = ssh_ops::read_public_key(&draft.new_relay.identity_file);
         let power_key = ssh_ops::read_public_key(&draft.ssh_identity_file);
         w.set_relay_public_key(relay_key.clone().unwrap_or_default().into());
-        w.set_power_public_key(power_key.unwrap_or_default().into());
+        w.set_power_public_key(power_key.clone().unwrap_or_default().into());
         let (intro, commands) = match (&draft.wake, &draft.relay) {
             (WakeChoice::Relay, RelayChoice::New) => {
                 let kind = draft.new_relay.kind;
@@ -445,6 +446,26 @@ impl Manage {
         };
         w.set_relay_setup_intro(intro.into());
         w.set_relay_setup(commands.into());
+        let (intro, commands) = if draft.power == wizard::PowerChoice::Ssh
+            && (draft.allow_sleep || draft.allow_shutdown)
+        {
+            let os = match draft.os {
+                Os::Linux => "linux",
+                Os::Windows => "windows",
+            };
+            (
+                self.tr.t(&format!("wizard.pc.setup.{os}"), &[]),
+                pc_setup::text(&PcSetup {
+                    os: draft.os,
+                    user: &draft.ssh_user,
+                    public_key: power_key.as_deref(),
+                }),
+            )
+        } else {
+            (String::new(), String::new())
+        };
+        w.set_pc_setup_intro(intro.into());
+        w.set_pc_setup(commands.into());
     }
 
     /// "Створити ключ" next to the key field `which` (0 the new relay's, 1 the PC's).

@@ -41,7 +41,7 @@ pub struct RelaySetup<'a> {
     pub sudo: Option<bool>,
 }
 
-fn safe_user(user: &str) -> Option<&str> {
+pub(crate) fn safe_user(user: &str) -> Option<&str> {
     let ok = !user.is_empty()
         && !user.starts_with('-')
         && user
@@ -60,7 +60,7 @@ fn safe_address(address: &str) -> Option<&str> {
 
 /// A public key line that is safe inside quotes: one line of printable characters without
 /// quotes, backslashes and `$`. Anything else is not used (the placeholder is shown).
-fn safe_key(key: &str) -> Option<&str> {
+pub(crate) fn safe_key(key: &str) -> Option<&str> {
     let key = key.trim();
     let ok = !key.is_empty()
         && key.chars().all(|c| c.is_ascii_graphic() || c == ' ')

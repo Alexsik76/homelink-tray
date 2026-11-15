@@ -17,6 +17,7 @@ pub mod i18n;
 mod ids;
 pub mod machine;
 pub mod notice;
+pub mod pc_setup;
 pub mod ports;
 pub mod problem;
 pub mod relay_setup;

@@ -615,7 +615,14 @@ mod tests {
                 let expected: BTreeSet<String> = params.iter().map(|p| (*p).to_owned()).collect();
                 assert_eq!(used, expected, "{} {key}", lang.code());
             }
-            // One text of commands per relay preset.
+            // One text of commands per relay preset and per PC operating system.
+            for os in ["linux", "windows"] {
+                assert!(
+                    c.template(&format!("wizard.pc.setup.{os}")).is_some(),
+                    "{} lacks the PC setup text of {os}",
+                    lang.code()
+                );
+            }
             for kind in ["routeros", "etherwake", "wakeonlan"] {
                 assert!(
                     c.template(&format!("wizard.relay.setup.{kind}")).is_some(),
