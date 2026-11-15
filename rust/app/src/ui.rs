@@ -20,6 +20,7 @@ use homelink_core::i18n::Translator;
 use homelink_core::machine::Command;
 use homelink_core::notice::Notice;
 use homelink_core::ports::{Clock, Sink, Time};
+use homelink_core::reasons;
 use homelink_core::snapshot::{
     DisplayState, GroupView, PcView, Snapshot, TrayState, TunnelCorner, TunnelToggle, TunnelView,
     WakeSummary,
@@ -375,7 +376,8 @@ impl Ui {
                 .groups
                 .iter()
                 .map(|group| {
-                    let rows: Vec<PcRow> = group.pcs.iter().map(pc_row).collect();
+                    let rows: Vec<PcRow> =
+                        group.pcs.iter().map(|pc| pc_row(pc, &self.tr)).collect();
                     Rc::new(VecModel::from(rows))
                 })
                 .collect();
@@ -397,7 +399,7 @@ impl Ui {
         };
         for (index, (group, pc_model)) in snapshot.groups.iter().zip(&models.pcs).enumerate() {
             for (pc_index, pc) in group.pcs.iter().enumerate() {
-                pc_model.set_row_data(pc_index, pc_row(pc));
+                pc_model.set_row_data(pc_index, pc_row(pc, &self.tr));
             }
             // Only a change of the group's own fields replaces its row; a publish that changes
             // only PC rows leaves the group row, and so the tunnel element, alone.
@@ -434,8 +436,11 @@ impl Ui {
             mark: mark(tunnel.display),
             // A tunnel always has its toggle; it is never shown as inactive.
             inactive: false,
-            toggle_on: tunnel.can_toggle,
+            toggle_on: tunnel.can_toggle(),
             toggle_label: self.tr.t(key, &[]).into(),
+            reason: reasons::tunnel_reason(&self.tr, tunnel)
+                .unwrap_or_default()
+                .into(),
         }
     }
 
@@ -638,7 +643,7 @@ impl Ui {
                     tunnel.pcs.join(", ")
                 };
                 let (error, fail) = self.error(tunnel.last_error.as_ref());
-                let rows = vec![
+                let mut rows = vec![
                     self.row("details.state", self.tr.state(tunnel.display), true, false),
                     self.row("details.kind", tunnel.kind.to_owned(), false, false),
                     self.row("details.pcs", pcs, false, false),
@@ -650,6 +655,10 @@ impl Ui {
                     ),
                     self.row("details.last_error", error, false, fail),
                 ];
+                // "Недоступно" (artboard `Unavailable`) before the check time.
+                if let Some(reason) = reasons::tunnel_reason(&self.tr, tunnel) {
+                    rows.insert(3, self.row("details.unavailable", reason, false, false));
+                }
                 Some((tunnel.name.clone(), mark(tunnel.display), rows))
             }
             Target::Pc(id) => {
@@ -672,7 +681,7 @@ impl Ui {
                         .join(", ")
                 };
                 let (error, fail) = self.error(pc.last_error.as_ref());
-                let rows = vec![
+                let mut rows = vec![
                     self.row("details.state", self.tr.state(pc.display), true, false),
                     self.row("details.address", pc.address.clone(), false, false),
                     self.row(
@@ -691,6 +700,10 @@ impl Ui {
                     ),
                     self.row("details.last_error", error, false, fail),
                 ];
+                // "Недоступно" (artboard `Unavailable`) after the ports, before the check time.
+                if let Some(detail) = reasons::pc_detail(&self.tr, &pc.availability) {
+                    rows.insert(5, self.row("details.unavailable", detail, false, false));
+                }
                 Some((pc.name.clone(), mark(pc.display), rows))
             }
         }
@@ -847,8 +860,8 @@ fn action_enabled(snapshot: &Snapshot, pc: &PcId, action: PowerAction) -> bool {
         .flat_map(|g| g.pcs.iter())
         .find(|view| view.id == *pc)
         .is_some_and(|view| match action {
-            PowerAction::Sleep => view.actions.sleep,
-            PowerAction::Shutdown => view.actions.shutdown,
+            PowerAction::Sleep => view.actions().sleep,
+            PowerAction::Shutdown => view.actions().shutdown,
         })
 }
 
@@ -863,18 +876,21 @@ pub(crate) fn mark(display: DisplayState) -> Mark {
     }
 }
 
-fn pc_row(pc: &PcView) -> PcRow {
-    let c = pc.configured;
+fn pc_row(pc: &PcView, tr: &Translator) -> PcRow {
+    let c = pc.configured();
     PcRow {
         id: pc.id.to_string().into(),
         name: pc.name.clone().into(),
         mark: mark(pc.display),
         // Nothing is configured for this PC at all: its name is shown as inactive.
         inactive: !(c.wake || c.sleep || c.shutdown || c.rdp),
-        wake_on: pc.actions.wake,
-        sleep_on: pc.actions.sleep,
-        shutdown_on: pc.actions.shutdown,
-        rdp_on: pc.actions.rdp,
+        wake_on: pc.actions().wake,
+        sleep_on: pc.actions().sleep,
+        shutdown_on: pc.actions().shutdown,
+        rdp_on: pc.actions().rdp,
+        reason: reasons::pc_reason(tr, &pc.availability)
+            .unwrap_or_default()
+            .into(),
     }
 }
 

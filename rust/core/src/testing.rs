@@ -869,7 +869,7 @@ mod tests {
             .flat_map(|g| &g.pcs)
             .find(|p| p.id == pc_id("printer"))
             .unwrap();
-        assert_eq!(printer.configured, crate::snapshot::Actions::default());
+        assert_eq!(printer.configured(), crate::snapshot::Actions::default());
         assert_eq!(demo_config().pcs.len(), 6);
     }
 

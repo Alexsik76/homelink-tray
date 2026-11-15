@@ -28,7 +28,9 @@ development (release candidates are published as pre-releases). The released Pyt
 - **Notifications** in the tray: a PC that came up after waking, a tunnel or PC that was lost,
   and every failed action.
 - **Settings** in `config.toml` next to the program, with a settings window, a five-step wizard
-  for adding a PC and a help page. Saving changes only the values that changed, so comments
+  for adding a PC, a help page and a "System capabilities" page that shows which programs
+  HomeLink found (the WireGuard client, OpenSSH, `mstsc`, ...); an action whose program is missing
+  is inactive and says why. Saving changes only the values that changed, so comments
   stay.
 - Light and dark theme, English and Ukrainian.
 
@@ -73,6 +75,7 @@ Command-line options:
 | `--check-config` | Check the settings file, print every problem and exit |
 | `--version` | Print the version and exit |
 | `--demo` | Simulated PCs and tunnels (only in the CI build with the `demo` feature) |
+| `--missing <programs>` | With `--demo`: pretend these programs are not installed, e.g. `wireguard,ssh` |
 
 ### Autostart without the UAC prompt
 

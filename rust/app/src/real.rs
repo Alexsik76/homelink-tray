@@ -55,6 +55,8 @@ pub(crate) struct Real {
     pub(crate) config_path: PathBuf,
     /// Runs the external programs (the checks of the settings, the links).
     pub(crate) runner: Arc<dyn CommandRunner>,
+    /// The same runner, to tell it where the programs were found.
+    pub(crate) std_runner: Arc<StdCommandRunner>,
     _instance: InstanceGuard,
 }
 
@@ -209,13 +211,14 @@ pub(crate) fn prepare(
         }
     }
 
-    let runner: Arc<dyn CommandRunner> = if cfg!(windows) {
+    let std_runner = Arc::new(if cfg!(windows) {
         let code_page = oem::detect(&probe);
         log::info!("OEM code page: {code_page:?}");
-        Arc::new(StdCommandRunner::new().with_decoder(oem::decoder(code_page)))
+        StdCommandRunner::new().with_decoder(oem::decoder(code_page))
     } else {
-        Arc::new(StdCommandRunner::new())
-    };
+        StdCommandRunner::new()
+    });
+    let runner: Arc<dyn CommandRunner> = Arc::clone(&std_runner) as Arc<dyn CommandRunner>;
     let rdp = Arc::new(RdpLauncher::new(&config, &dir));
     Ok(Real {
         config,
@@ -223,6 +226,7 @@ pub(crate) fn prepare(
         rdp,
         config_path: path,
         runner,
+        std_runner,
         _instance: instance,
     })
 }

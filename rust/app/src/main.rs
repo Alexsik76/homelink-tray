@@ -8,6 +8,9 @@
 //! - **`--demo`** (only in a build with the `demo` feature): the engine on the core test
 //!   fakes with simulated delays ([`demo`]).
 //!
+//! In the demo, `--missing wireguard,ssh` (codes of `core::capabilities::Tool`) pretends that
+//! those programs are not installed, to show the unavailable states.
+//!
 //! Two console options do their work and exit without a window and without administrator
 //! rights: `--version` prints the version, `--check-config` validates the settings file (the
 //! one of `--config`, or `config.toml` next to the program) and prints every problem.
@@ -17,6 +20,7 @@
 
 mod appearance;
 mod balloon;
+mod capability;
 #[cfg(feature = "demo")]
 mod demo;
 mod icon;
@@ -39,6 +43,7 @@ use std::sync::Arc;
 
 use homelink_core::adapters::command::StdCommandRunner;
 use homelink_core::adapters::tcp::TcpPortProbe;
+use homelink_core::capabilities::Tool;
 use homelink_core::config::Config;
 use homelink_core::domain::PcId;
 use homelink_core::engine::{Deps, Engine, Handle};
@@ -61,6 +66,8 @@ struct Options {
     version: bool,
     /// `--check-config`: validate the settings file and exit.
     check_config: bool,
+    /// `--missing`: programs the demo pretends are not installed.
+    missing: Vec<Tool>,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
@@ -71,6 +78,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
         theme: ThemeSetting::Auto,
         version: false,
         check_config: false,
+        missing: Vec::new(),
     };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -78,6 +86,18 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
             "--demo" => options.demo = true,
             "--version" => options.version = true,
             "--check-config" => options.check_config = true,
+            "--missing" => {
+                let value = args
+                    .next()
+                    .ok_or("--missing needs a list of programs, such as wireguard,ssh")?;
+                for code in value.split(',').map(str::trim).filter(|c| !c.is_empty()) {
+                    let tool = Tool::ALL
+                        .into_iter()
+                        .find(|t| t.code() == code)
+                        .ok_or_else(|| format!("unknown program '{code}' for --missing"))?;
+                    options.missing.push(tool);
+                }
+            }
             "--lang" => {
                 let value = args.next().ok_or("--lang needs a value: auto, en or uk")?;
                 options.language =
@@ -125,7 +145,7 @@ fn main() -> ExitCode {
         };
     }
     if options.demo {
-        return run_demo(options.language, options.theme);
+        return run_demo(options.language, options.theme, options.missing);
     }
     match real::prepare(options.config.as_deref(), options.language, &args) {
         Ok(real) => {
@@ -138,11 +158,15 @@ fn main() -> ExitCode {
                 runner: Arc::clone(&real.runner),
                 opener: Arc::clone(&real.runner),
             };
+            let std_runner = Arc::clone(&real.std_runner);
             let result = run_ui(
                 real.config.clone(),
                 translator.clone(),
                 options.theme,
-                |sink| real.deps(sink),
+                Adapters {
+                    deps: |sink| real.deps(sink),
+                    checker: move |handle| capability::Checker::real(std_runner, handle),
+                },
                 Box::new(move |pc: &PcId| rdp.open(pc)),
                 persist,
                 |_| {},
@@ -202,7 +226,11 @@ fn finish(result: Result<(), Box<dyn Error>>, translator: &Translator) -> ExitCo
 
 /// `--demo`: the panel on simulated PCs and tunnels, cycling through every display state.
 #[cfg(feature = "demo")]
-fn run_demo(language: Option<LanguageSetting>, theme: ThemeSetting) -> ExitCode {
+fn run_demo(
+    language: Option<LanguageSetting>,
+    theme: ThemeSetting,
+    missing: Vec<Tool>,
+) -> ExitCode {
     let config = homelink_core::testing::demo_config();
     let translator = Translator::new(language.unwrap_or(config.language).resolve(None));
     let for_deps = config.clone();
@@ -221,7 +249,10 @@ fn run_demo(language: Option<LanguageSetting>, theme: ThemeSetting) -> ExitCode 
         config,
         translator.clone(),
         theme,
-        move |sink| demo::deps(&for_deps, sink, &fakes),
+        Adapters {
+            deps: move |sink| demo::deps(&for_deps, sink, &fakes),
+            checker: move |handle| capability::Checker::demo(handle, missing),
+        },
         Box::new(|pc: &PcId| {
             log::info!("demo: Remote Desktop for {pc} would open here");
             Ok(())
@@ -234,10 +265,21 @@ fn run_demo(language: Option<LanguageSetting>, theme: ThemeSetting) -> ExitCode 
 
 /// `--demo` in a build without the `demo` feature.
 #[cfg(not(feature = "demo"))]
-fn run_demo(language: Option<LanguageSetting>, _theme: ThemeSetting) -> ExitCode {
+fn run_demo(
+    language: Option<LanguageSetting>,
+    _theme: ThemeSetting,
+    _missing: Vec<Tool>,
+) -> ExitCode {
     let translator = Translator::new(language.unwrap_or(LanguageSetting::Auto).resolve(None));
     platform::message(&translator.t("error.demo_unavailable", &[]));
     ExitCode::FAILURE
+}
+
+/// What the engine runs on in a mode: its dependencies (made once the UI sink exists) and the
+/// lookup of the programs (made once the engine's handle exists).
+struct Adapters<D, C> {
+    deps: D,
+    checker: C,
 }
 
 /// Starts the panel and the tray icon on an engine built from `config` and the dependencies
@@ -247,7 +289,10 @@ fn run_ui(
     config: Config,
     translator: Translator,
     theme: ThemeSetting,
-    deps: impl FnOnce(Arc<dyn Sink>) -> Deps,
+    adapters: Adapters<
+        impl FnOnce(Arc<dyn Sink>) -> Deps,
+        impl FnOnce(Handle) -> capability::Checker,
+    >,
     rdp: ui::RdpAction,
     persist: manage::Persist,
     start: impl FnOnce(Handle),
@@ -257,10 +302,12 @@ fn run_ui(
     let details = view::DetailsWindow::new()?;
     let tray = view::Tray::new()?;
     let sink = Arc::new(ui::UiSink::new(translator.clone()));
-    let deps = deps(sink);
+    let deps = (adapters.deps)(sink);
     let clock = Arc::clone(&deps.clock);
     let settings_config = config.clone();
     let (engine, handle) = Engine::new(config, deps);
+    let checker = Arc::new((adapters.checker)(handle.clone()));
+    let engine = engine.with_capabilities(checker.check(&settings_config));
     let appearance = appearance::detect(theme, &StdCommandRunner::new());
     ui::install(
         &ui::Windows {
@@ -284,6 +331,7 @@ fn run_ui(
             handle: handle.clone(),
             dark: appearance.dark,
             persist,
+            checker: Arc::clone(&checker),
         },
     )?;
     tray.show()?;
@@ -320,6 +368,14 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn missing_programs_are_parsed_by_code() {
+        let o = parse_args(args(&["--demo", "--missing", "wireguard,ssh"])).unwrap();
+        assert_eq!(o.missing, [Tool::WireGuard, Tool::Ssh]);
+        assert!(parse_args(args(&["--missing", "nope"])).is_err());
+        assert!(parse_args(args(&["--missing"])).is_err());
     }
 
     #[test]

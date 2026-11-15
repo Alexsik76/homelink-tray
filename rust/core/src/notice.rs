@@ -4,6 +4,8 @@
 //! hold `<key>.title` and `<key>.body`; the parameters returned by [`Notice::params`] fill
 //! the `{placeholders}` in them.
 
+use crate::capabilities::Tool;
+
 /// Longest `detail` shown in a notification, in characters. The full text goes to the log.
 pub const DETAIL_LIMIT: usize = 200;
 
@@ -95,11 +97,20 @@ pub enum Notice {
         /// PC name.
         pc: String,
     },
+    /// Tunnels cannot run: these programs were not found (once per start, again only when the
+    /// set changes; the capability spec, section 6).
+    TunnelProgramsMissing {
+        /// The missing programs.
+        tools: Vec<Tool>,
+    },
+    /// Waking through a relay, sleep and shutdown over SSH cannot run: the OpenSSH client was
+    /// not found.
+    SshMissing,
 }
 
 impl Notice {
     /// Every key, one per variant, for tests and tooling.
-    pub const KEYS: [&'static str; 12] = [
+    pub const KEYS: [&'static str; 14] = [
         "notify.tunnel_failed",
         "notify.tunnel_stop_failed",
         "notify.tunnel_lost",
@@ -112,6 +123,8 @@ impl Notice {
         "notify.shutdown_sent",
         "notify.power_failed",
         "notify.power_unavailable",
+        "notify.tunnel_programs_missing",
+        "notify.ssh_missing",
     ];
 
     /// Prefix of the pair of locale keys `<key>.title` and `<key>.body`.
@@ -129,6 +142,8 @@ impl Notice {
             Self::ShutdownSent { .. } => "notify.shutdown_sent",
             Self::PowerFailed { .. } => "notify.power_failed",
             Self::PowerUnavailable { .. } => "notify.power_unavailable",
+            Self::TunnelProgramsMissing { .. } => "notify.tunnel_programs_missing",
+            Self::SshMissing => "notify.ssh_missing",
         }
     }
 
@@ -144,7 +159,9 @@ impl Notice {
             | Self::TunnelTimeout { .. }
             | Self::PcTimeout { .. }
             | Self::PcLost { .. }
-            | Self::PowerUnavailable { .. } => Severity::Warning,
+            | Self::PowerUnavailable { .. }
+            | Self::TunnelProgramsMissing { .. }
+            | Self::SshMissing => Severity::Warning,
             Self::PcOnline { .. } | Self::SleepSent { .. } | Self::ShutdownSent { .. } => {
                 Severity::Info
             }
@@ -171,6 +188,12 @@ impl Notice {
             Self::PcTimeout { pc } | Self::PcLost { pc } | Self::PowerUnavailable { pc } => {
                 vec![("pc", pc.clone())]
             }
+            // The codes; `Translator::notice` turns `tools` into the programs' names.
+            Self::TunnelProgramsMissing { tools } => vec![(
+                "tools",
+                tools.iter().map(|t| t.code()).collect::<Vec<_>>().join(","),
+            )],
+            Self::SshMissing => Vec::new(),
         }
     }
 }
@@ -218,6 +241,10 @@ pub(crate) fn samples() -> Vec<Notice> {
             detail: s("d"),
         },
         Notice::PowerUnavailable { pc: s("p") },
+        Notice::TunnelProgramsMissing {
+            tools: vec![Tool::WireGuard],
+        },
+        Notice::SshMissing,
     ]
 }
 

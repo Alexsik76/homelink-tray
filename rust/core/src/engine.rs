@@ -13,6 +13,8 @@
 //! A panic in a job is caught and reported to the machine as a failed job; the engine
 //! thread itself never runs user-supplied code.
 
+use crate::capabilities::Capabilities;
+use crate::notice::Notice;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -51,6 +53,7 @@ enum Message {
     /// A finished job and the generation (the number of reloads so far) it was started in.
     Done(u64, Input),
     Reload(Box<Config>),
+    Capabilities(Box<Capabilities>),
     Stop,
 }
 
@@ -79,6 +82,13 @@ impl Handle {
         self.tx.send(Message::Reload(Box::new(config))).is_ok()
     }
 
+    /// Gives the engine a new lookup of the programs on this computer (at start, after the
+    /// settings are saved, on "Перевірити знову"). It is kept across [`Handle::reload`].
+    /// Returns false if the engine has stopped.
+    pub fn set_capabilities(&self, caps: Capabilities) -> bool {
+        self.tx.send(Message::Capabilities(Box::new(caps))).is_ok()
+    }
+
     /// Asks the engine to stop; [`Engine::run`] returns after finishing the current step.
     pub fn stop(&self) {
         let _ = self.tx.send(Message::Stop);
@@ -95,6 +105,8 @@ pub struct Engine {
     last: Option<Snapshot>,
     stopped: bool,
     generation: u64,
+    /// Notices of the lookup made before the start, delivered when the engine runs.
+    pending: Vec<Notice>,
 }
 
 impl Engine {
@@ -112,6 +124,7 @@ impl Engine {
             last: None,
             stopped: false,
             generation: 0,
+            pending: Vec::new(),
         };
         (engine, handle)
     }
@@ -149,6 +162,10 @@ impl Engine {
 
     /// Runs until stopped: pump, then sleep until a message arrives or the next wake-up.
     pub fn run(mut self) {
+        for notice in std::mem::take(&mut self.pending) {
+            log::info!("notice: {notice:?}");
+            self.deps.sink.notify(notice);
+        }
         while !self.stopped {
             let next = self.pump();
             if self.stopped {
@@ -174,6 +191,14 @@ impl Engine {
         }
     }
 
+    /// Applies a lookup of the programs before the engine starts, so that its first step
+    /// already knows what is missing (later lookups go through [`Handle::set_capabilities`]).
+    pub fn with_capabilities(mut self, caps: Capabilities) -> Self {
+        self.pending = self.machine.set_capabilities(caps);
+        self.last = None;
+        self
+    }
+
     /// Runs the engine on its own thread.
     pub fn spawn(self) -> std::io::Result<JoinHandle<()>> {
         std::thread::Builder::new()
@@ -196,10 +221,22 @@ impl Engine {
             Message::Reload(config) => {
                 log::info!("applying a new configuration");
                 self.generation += 1;
+                let caps = self.machine.capabilities().clone();
                 self.machine = Machine::new(&config, now);
+                // The same programs as before: nothing to announce again.
+                let _ = self.machine.set_capabilities(caps);
                 self.config = Arc::new(*config);
                 self.last = None;
                 self.publish_if_changed();
+                return true;
+            }
+            Message::Capabilities(caps) => {
+                let notices = self.machine.set_capabilities(*caps);
+                self.publish_if_changed();
+                for notice in notices {
+                    log::info!("notice: {notice:?}");
+                    self.deps.sink.notify(notice);
+                }
                 return true;
             }
             Message::Stop => {

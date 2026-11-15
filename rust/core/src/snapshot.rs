@@ -4,6 +4,7 @@
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
+use crate::capabilities::Need;
 use crate::domain::{PcId, PcState, RelayKind, TunnelId, TunnelState};
 use crate::notice::Notice;
 use crate::ports::Time;
@@ -92,8 +93,9 @@ pub struct TunnelView {
     pub name: String,
     /// State.
     pub state: TunnelState,
-    /// Whether the toggle button is enabled (no start or stop is running).
-    pub can_toggle: bool,
+    /// Whether the toggle button is enabled: no start or stop is running and the programs a
+    /// tunnel needs (the WireGuard client, `sc`, `ping`) were found.
+    pub toggle_availability: Availability,
     /// The state for the marker, with failure and "never checked" taken into account.
     pub display: DisplayState,
     /// When the last check that counted finished (see [`CHECK_STEP`]); `None` before the
@@ -108,6 +110,77 @@ pub struct TunnelView {
     pub pcs: Vec<String>,
     /// What the toggle would do now.
     pub toggle: TunnelToggle,
+}
+
+impl TunnelView {
+    /// Whether the toggle button is enabled now.
+    pub fn can_toggle(&self) -> bool {
+        self.toggle_availability.is_available()
+    }
+}
+
+/// Whether an action can be used now, and if not, why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Availability {
+    /// It can be used now.
+    Available,
+    /// The settings do not configure it.
+    NotConfigured,
+    /// Configured, but not in this state (the PC is off, an action runs, ...).
+    NotNow,
+    /// Configured, but these programs were not found (the capability spec).
+    Missing(Vec<Need>),
+}
+
+impl Availability {
+    /// Whether it can be used now.
+    pub fn is_available(&self) -> bool {
+        matches!(self, Availability::Available)
+    }
+
+    /// Whether the settings configure it, whatever the state.
+    pub fn is_configured(&self) -> bool {
+        !matches!(self, Availability::NotConfigured)
+    }
+
+    /// The programs it lacks; empty unless [`Availability::Missing`].
+    pub fn missing(&self) -> &[Need] {
+        match self {
+            Availability::Missing(needs) => needs,
+            _ => &[],
+        }
+    }
+}
+
+/// The availability of each action of a PC.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PcAvailability {
+    /// Wake (with the tunnel brought up first when needed).
+    pub wake: Availability,
+    /// Sleep.
+    pub sleep: Availability,
+    /// Shut down.
+    pub shutdown: Availability,
+    /// Open Remote Desktop.
+    pub rdp: Availability,
+}
+
+impl PcAvailability {
+    /// Each action in a fixed order: wake, sleep, shutdown, RDP.
+    pub fn all(&self) -> [&Availability; 4] {
+        [&self.wake, &self.sleep, &self.shutdown, &self.rdp]
+    }
+
+    /// The programs missing for any configured action, without repeats, in action order.
+    pub fn missing(&self) -> Vec<Need> {
+        let mut out: Vec<Need> = Vec::new();
+        for need in self.all().into_iter().flat_map(Availability::missing) {
+            if !out.contains(need) {
+                out.push(need.clone());
+            }
+        }
+        out
+    }
 }
 
 /// How a PC is woken, without secrets or paths; render it with `Translator::wake_summary`.
@@ -145,8 +218,8 @@ pub struct PcView {
     pub state: PcState,
     /// An action (connect, wake or power command) is running.
     pub busy: bool,
-    /// Which actions are enabled now.
-    pub actions: Actions,
+    /// Whether each action can be used now, and why not.
+    pub availability: PcAvailability,
     /// The state for the marker, with failure and in-progress actions taken into account.
     pub display: DisplayState,
     /// When the last check that counted finished (see [`CHECK_STEP`]); `None` before the
@@ -163,10 +236,30 @@ pub struct PcView {
     pub wake: Option<WakeSummary>,
     /// TCP ports that must be open for the PC to count as online.
     pub ports: Vec<u16>,
-    /// Which actions exist in the configuration at all, whatever the state: an action that
-    /// is configured but not enabled in `actions` is "not available now"; one that is not
-    /// configured is "not configured".
-    pub configured: Actions,
+}
+
+impl PcView {
+    /// The actions that can be used now.
+    pub fn actions(&self) -> Actions {
+        let a = &self.availability;
+        Actions {
+            wake: a.wake.is_available(),
+            sleep: a.sleep.is_available(),
+            shutdown: a.shutdown.is_available(),
+            rdp: a.rdp.is_available(),
+        }
+    }
+
+    /// The actions the settings configure, whatever the state.
+    pub fn configured(&self) -> Actions {
+        let a = &self.availability;
+        Actions {
+            wake: a.wake.is_configured(),
+            sleep: a.sleep.is_configured(),
+            shutdown: a.shutdown.is_configured(),
+            rdp: a.rdp.is_configured(),
+        }
+    }
 }
 
 /// Actions of a PC: the enabled ones, or the configured ones.

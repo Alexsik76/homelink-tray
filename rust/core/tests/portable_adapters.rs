@@ -378,6 +378,30 @@ mod commands {
     }
 
     #[test]
+    fn a_bare_name_runs_from_the_path_the_capability_lookup_found() {
+        let dir = temp_dir("programs");
+        let script = dir.join("homelink-fake-ssh");
+        std::fs::write(&script, "#!/bin/sh\necho found-by-lookup\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let runner = StdCommandRunner::new();
+        // Not on PATH: the system cannot find it.
+        let out = runner.run(&argv(&["ssh-not-on-path"]), 5 * SECOND);
+        assert_eq!(out.outcome, CommandOutcome::NotStarted);
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("ssh-not-on-path".to_owned(), script.clone());
+        runner.set_programs(map);
+        assert_eq!(
+            runner.run(&argv(&["ssh-not-on-path"]), 5 * SECOND).text,
+            "found-by-lookup"
+        );
+        // Other names keep the system's search.
+        assert_eq!(
+            runner.run(&argv(&["true"]), 5 * SECOND).outcome,
+            CommandOutcome::Exited(0)
+        );
+    }
+
+    #[test]
     fn bare_names_are_looked_up_only_in_the_program_directory_when_one_is_set() {
         let dir = temp_dir("lookup");
         let script = dir.join("tool");

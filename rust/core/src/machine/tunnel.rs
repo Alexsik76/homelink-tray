@@ -39,6 +39,13 @@ impl Machine {
             return;
         };
         log::info!("action: toggle tunnel {} (state {:?})", t.id, t.state);
+        if !self.caps.tunnels_available() {
+            log::info!(
+                "skipped: tunnel programs missing: {:?}",
+                self.caps.missing_for_tunnels()
+            );
+            return;
+        }
         if t.action.is_some() {
             log::info!("skipped: another action is in progress");
             return;

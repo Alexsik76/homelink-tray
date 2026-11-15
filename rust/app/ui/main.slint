@@ -71,6 +71,8 @@ export struct TunnelRow {
     inactive: bool,
     toggle-on: bool,
     toggle-label: string,
+    // Why the toggle is inactive when a program is missing (artboard `Unavailable`), else "".
+    reason: string,
 }
 
 export struct PcRow {
@@ -83,6 +85,8 @@ export struct PcRow {
     sleep-on: bool,
     shutdown-on: bool,
     rdp-on: bool,
+    // Which actions lack a program and which, under the buttons (artboard `Unavailable`), else "".
+    reason: string,
 }
 
 export struct GroupRow {
@@ -351,6 +355,12 @@ component PcSubmenu inherits VerticalLayout {
             }
         }
     }
+    if root.item.reason != "" : Text {
+        text: root.item.reason;
+        color: Theme.ink-2;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
 }
 
 // The tunnel submenu: one full-width button, top padding 4.
@@ -367,6 +377,12 @@ component TunnelSubmenu inherits VerticalLayout {
             Nav.disarm();
             Nav.tunnel-toggle(root.item.id);
         }
+    }
+    if root.item.reason != "" : Text {
+        text: root.item.reason;
+        color: Theme.ink-2;
+        font-size: 12px;
+        wrap: word-wrap;
     }
 }
 

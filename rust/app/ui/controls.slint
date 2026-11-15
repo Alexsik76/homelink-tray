@@ -16,6 +16,8 @@ export global Words {
     in-out property <string> settings-title;
     in-out property <string> nav-tunnels;
     in-out property <string> nav-help;
+    in-out property <string> nav-capabilities;
+    in-out property <string> recheck;
     in-out property <string> nav-about;
     in-out property <string> section-tunnels;
     in-out property <string> section-pcs;
@@ -170,12 +172,14 @@ export component Field inherits VerticalLayout {
     in-out property <string> value;
     in property <string> hint;
     in property <string> error;
+    // false: shown inactive and not editable (artboard `TunnelForm`, the WireGuard client missing).
+    in property <bool> enabled: true;
 
     spacing: 6px;
 
     Text {
         text: root.label;
-        color: Theme.ink;
+        color: root.enabled ? Theme.ink : Theme.disabled;
         font-size: 12px;
         font-weight: 600;
         overflow: elide;
@@ -197,6 +201,7 @@ export component Field inherits VerticalLayout {
             vertical-alignment: center;
             font-size: 13px;
             color: Theme.ink;
+            enabled: root.enabled;
             text <=> root.value;
             accepted => {
                 Flow.advance();

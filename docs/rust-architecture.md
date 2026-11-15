@@ -859,6 +859,44 @@ any password.
   the run-time commands uses the default `known_hosts`; an explicit `UserKnownHostsFile` in the
   config folder would remove the dependence on the profile (see the risks).
 
+## 11a. System capabilities (built 15.11.2026)
+
+Owner's decisions of 15.11.2026 (`VIC/HomeLink/homelink-capabilities-spec.md` in the vault and
+the designer's artboards `Capabilities`, `Unavailable`, `TunnelForm`). No silent failures: every
+external program is looked up before it is needed, and a missing one disables only what depends
+on it.
+
+- **Lookup** (`core::capabilities`, pure, tested on Linux): by file existence only, nothing is
+  started. Windows order: the tunnels' `wireguard_exe`, the known folder (`System32`,
+  `System32\OpenSSH`, `System32\WindowsPowerShell\v1.0`, `Program Files\WireGuard`), then
+  `PATH` with `PATHEXT`; elsewhere `PATH`. User command programs (`argv[0]` of command wakes and
+  power commands) are resolved too. Features and their tools: tunnels (`wireguard`, `sc`), tunnel
+  check (`ping`; **without it tunnels are blocked as a whole**, owner's answer), SSH actions
+  (`ssh`), keys (`ssh-keygen`, `ssh-keyscan`), RDP (`mstsc`), magic packet (none), elevation
+  (`whoami`, `powershell`), links (`cmd`).
+- **When:** at start (before the engine's first step, `Engine::with_capabilities`), when the
+  settings window opens, after a save, and on "Перевірити знову" (capabilities page, tunnel
+  form). No polling. Changes are logged once at `info` (`app::capability`).
+- **Run by the found path:** `StdCommandRunner::set_programs` maps bare names to the found
+  paths, so `ssh` found only in `System32\OpenSSH` runs.
+- **Snapshot:** every PC action and the tunnel toggle carry an `Availability`
+  (`Available | NotConfigured | NotNow | Missing(Vec<Need>)`); the old bools are methods
+  (`actions()`, `configured()`, `can_toggle()`). A PC behind a tunnel needs the tunnel's programs
+  for every action.
+- **Engine:** no tunnel job and no tunnel probe while a tunnel program is missing (tunnels become
+  unknown, PCs behind them too; results of probes started before are dropped); no wake or power
+  job whose program is missing. A lookup is kept across `Handle::reload`.
+- **UI:** the reason line under inactive buttons and the "Недоступно" row of the details window
+  (`core::reasons`); the settings page "Можливості системи" with eight tiles
+  (`core::capability_page`, neutral, links to the WireGuard installer and Microsoft's OpenSSH
+  page); the tunnel form shows a red block, inactive fields and Save without the WireGuard client,
+  and an error when the tunnel file does not exist.
+- **Notices:** `TunnelProgramsMissing` (tunnels configured, a tunnel program missing) and
+  `SshMissing` (an SSH method configured, `ssh` missing), once per start and again only when
+  what is missing changes. No notice for `mstsc` (owner's answer: the inactive RDP button is
+  enough).
+- **Demo:** `--missing wireguard,ssh,...` (tool codes) pretends programs are missing.
+
 ## 12. Open questions (not decided here)
 
 1. **Does the custom panel work well on screen?** Window focus on show and hide, hide-on-blur

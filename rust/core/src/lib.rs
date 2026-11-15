@@ -8,6 +8,8 @@
 
 pub mod about;
 pub mod adapters;
+pub mod capabilities;
+pub mod capability_page;
 pub mod checks;
 pub mod config;
 pub mod domain;
@@ -21,6 +23,7 @@ pub mod notice;
 pub mod pc_setup;
 pub mod ports;
 pub mod problem;
+pub mod reasons;
 pub mod relay_setup;
 mod rules;
 pub mod settings;

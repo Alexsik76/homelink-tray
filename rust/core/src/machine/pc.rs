@@ -41,6 +41,11 @@ impl Machine {
             log::info!("skipped: {} has no wake method", p.id);
             return;
         }
+        let missing = self.pc_missing(p, 0);
+        if !missing.is_empty() {
+            log::info!("skipped: {} wake needs missing programs {missing:?}", p.id);
+            return;
+        }
         if matches!(p.state, PcState::Online | PcState::Waking) {
             log::info!("skipped: {} is {:?}", p.id, p.state);
             return;
@@ -68,8 +73,25 @@ impl Machine {
 
     /// `Power(pc, action)`: P10 or P11.
     pub(super) fn power_pc(&mut self, id: &PcId, action: PowerAction, out: &mut Output) {
-        let Some(p) = self.pc_idx(id).and_then(|i| self.pcs.get_mut(i)) else {
+        let Some(pi) = self.pc_idx(id) else {
             log::warn!("power: unknown PC {id}");
+            return;
+        };
+        let index = match action {
+            PowerAction::Sleep => 1,
+            PowerAction::Shutdown => 2,
+        };
+        if let Some(p) = self.pcs.get(pi) {
+            let missing = self.pc_missing(p, index);
+            if !missing.is_empty() {
+                log::info!(
+                    "skipped: {action:?} {} needs missing programs {missing:?}",
+                    p.id
+                );
+                return;
+            }
+        }
+        let Some(p) = self.pcs.get_mut(pi) else {
             return;
         };
         log::info!("action: {action:?} {}", p.id);

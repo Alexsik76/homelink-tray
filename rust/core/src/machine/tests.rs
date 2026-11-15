@@ -115,7 +115,7 @@ fn t1_toggle_from_down_starts_the_tunnel() {
     assert_eq!(m.tunnel_state(&home()), Some(T::Starting));
     assert!(m.awaiting_tunnel());
     assert!(
-        !m.snapshot().groups[0].tunnel.as_ref().unwrap().can_toggle,
+        !m.snapshot().groups[0].tunnel.as_ref().unwrap().can_toggle(),
         "an action runs"
     );
 }
@@ -1008,7 +1008,9 @@ fn snapshot_decides_the_available_actions() {
     );
     assert!(snap.groups[2].tunnel.is_none());
     let desktop_view = &snap.groups[0].pcs[0];
-    assert!(desktop_view.actions.wake && !desktop_view.actions.sleep && !desktop_view.actions.rdp);
+    assert!(
+        desktop_view.actions().wake && !desktop_view.actions().sleep && !desktop_view.actions().rdp
+    );
 
     m.step(Input::Tick, Time::ZERO);
     tunnel_probed(
@@ -1022,12 +1024,12 @@ fn snapshot_decides_the_available_actions() {
     pc_probed(&mut m, &pc_id("laptop"), PcProbe::Poll, true, Time::ZERO);
     let snap = m.snapshot();
     let home_pcs = &snap.groups[0].pcs;
-    let a = home_pcs[0].actions;
+    let a = home_pcs[0].actions();
     assert!(
         !a.wake && a.sleep && a.shutdown && a.rdp,
         "desktop: ssh, rdp"
     );
-    let b = home_pcs[1].actions;
+    let b = home_pcs[1].actions();
     assert!(
         !b.wake && !b.sleep && b.shutdown && !b.rdp,
         "laptop: only a shutdown command"
@@ -1039,7 +1041,10 @@ fn snapshot_decides_the_available_actions() {
     );
     let snap = m.snapshot();
     assert!(snap.groups[0].pcs[0].busy);
-    assert_eq!(snap.groups[0].pcs[0].actions, Actions::default());
+    assert_eq!(
+        snap.groups[0].pcs[0].actions(),
+        crate::snapshot::Actions::default()
+    );
 }
 
 // ---------- failure state (section 5.6) ----------
@@ -1440,15 +1445,15 @@ fn the_snapshot_describes_each_pc_and_tunnel() {
     );
     // Configured is independent of the state: laptop has a shutdown command only.
     assert_eq!(
-        laptop.configured,
-        Actions {
+        laptop.configured(),
+        crate::snapshot::Actions {
             wake: true,
             sleep: false,
             shutdown: true,
             rdp: false
         }
     );
-    assert!(!laptop.actions.shutdown, "not online: not available now");
+    assert!(!laptop.actions().shutdown, "not online: not available now");
     let office_pc = &snap.groups[1].pcs[0];
     assert_eq!(
         office_pc.wake,
@@ -1503,5 +1508,203 @@ fn the_tray_follows_the_displayed_states() {
         m.snapshot().tray.tunnels,
         TunnelCorner::Ok,
         "the tunnel is fine"
+    );
+}
+
+// ---- programs missing on this computer (the capability spec) ----
+
+use crate::capabilities::{Capabilities, Need, Tool, ToolStatus};
+use crate::snapshot::Availability as A;
+
+/// Every tool found except `missing`.
+fn without(missing: &[Tool]) -> Capabilities {
+    Capabilities::from_statuses(
+        Tool::ALL
+            .into_iter()
+            .filter(|t| !missing.contains(t))
+            .map(|t| (t, ToolStatus::Found(format!("/{}", t.program()).into()))),
+    )
+}
+
+fn pc_view(m: &Machine, id: &str) -> PcView {
+    m.snapshot()
+        .groups
+        .into_iter()
+        .flat_map(|g| g.pcs)
+        .find(|p| p.id == pc_id(id))
+        .unwrap()
+}
+
+fn tunnel_view_of(m: &Machine, id: &str) -> TunnelView {
+    m.snapshot()
+        .groups
+        .into_iter()
+        .filter_map(|g| g.tunnel)
+        .find(|t| t.id == tunnel_id(id))
+        .unwrap()
+}
+
+#[test]
+fn without_wireguard_tunnels_are_not_run_or_checked_and_loose_pcs_still_work() {
+    let mut m = multi();
+    let _ = m.set_capabilities(without(&[Tool::WireGuard]));
+    let out = m.step(Input::Tick, at(0));
+    assert_eq!(
+        out.effects,
+        [poll(&pc_id("nas"))],
+        "only the PC without a tunnel"
+    );
+    let missing = A::Missing(vec![Need::Tool(Tool::WireGuard)]);
+    let home_view = tunnel_view_of(&m, "home");
+    assert_eq!(home_view.toggle_availability, missing);
+    assert_eq!(home_view.display, D::Unknown);
+    assert_eq!(pc_view(&m, "laptop").availability.wake, missing);
+    assert_eq!(pc_view(&m, "nas").availability.wake, A::Available);
+
+    let out = m.step(Input::Command(Command::ToggleTunnel(home())), at(1));
+    assert!(out.effects.is_empty(), "{:?}", out.effects);
+    let out = m.step(Input::Command(Command::Wake(pc_id("laptop"))), at(1));
+    assert!(out.effects.is_empty(), "{:?}", out.effects);
+    let out = m.step(Input::Command(Command::Wake(pc_id("nas"))), at(1));
+    assert_eq!(out.effects, [Effect::Wake(pc_id("nas"))]);
+}
+
+#[test]
+fn without_ping_tunnels_are_blocked_as_a_whole() {
+    let mut m = multi();
+    let _ = m.set_capabilities(without(&[Tool::Ping]));
+    let out = m.step(Input::Tick, at(0));
+    assert!(
+        !out.effects
+            .iter()
+            .any(|e| matches!(e, Effect::ProbeTunnel { .. })),
+        "{:?}",
+        out.effects
+    );
+    assert_eq!(
+        tunnel_view_of(&m, "office").toggle_availability,
+        A::Missing(vec![Need::Tool(Tool::Ping)])
+    );
+    let out = m.step(Input::Command(Command::ToggleTunnel(home())), at(1));
+    assert!(out.effects.is_empty());
+}
+
+#[test]
+fn without_openssh_relay_wake_and_ssh_power_are_unavailable() {
+    let mut m = multi();
+    let _ = m.set_capabilities(without(&[Tool::Ssh]));
+    let ssh = A::Missing(vec![Need::Tool(Tool::Ssh)]);
+    assert_eq!(pc_view(&m, "desktop").availability.wake, ssh, "relay wake");
+    assert_eq!(
+        pc_view(&m, "laptop").availability.wake,
+        A::Available,
+        "magic packet"
+    );
+    let nas = pc_view(&m, "nas");
+    assert_eq!(nas.availability.sleep, ssh);
+    assert_eq!(nas.availability.shutdown, ssh);
+    assert_eq!(nas.availability.missing(), [Need::Tool(Tool::Ssh)]);
+    // nas online: still no power job without ssh.
+    m.step(Input::Tick, at(0));
+    pc_probed(&mut m, &pc_id("nas"), PcProbe::Poll, true, at(0));
+    let out = m.step(
+        Input::Command(Command::Power(pc_id("nas"), PowerAction::Sleep)),
+        at(1),
+    );
+    assert!(out.effects.is_empty() && out.notices.is_empty(), "{out:?}");
+}
+
+#[test]
+fn a_missing_user_program_disables_only_its_action() {
+    let mut m = multi();
+    let _ = m.set_capabilities(
+        Capabilities::all_found().with_missing_programs(["wakeonlan".to_owned()]),
+    );
+    assert_eq!(
+        pc_view(&m, "office-pc").availability.wake,
+        A::Missing(vec![Need::Program("wakeonlan".into())])
+    );
+    assert_ne!(
+        pc_view(&m, "desktop").availability.wake,
+        A::Missing(vec![Need::Program("wakeonlan".into())])
+    );
+}
+
+#[test]
+fn programs_found_again_bring_the_tunnels_back() {
+    let mut m = multi();
+    let _ = m.set_capabilities(without(&[Tool::WireGuard]));
+    m.step(Input::Tick, at(0));
+    let _ = m.set_capabilities(Capabilities::all_found());
+    let out = m.step(Input::Tick, at(1));
+    let probed: Vec<&Effect> = out
+        .effects
+        .iter()
+        .filter(|e| matches!(e, Effect::ProbeTunnel { .. }))
+        .collect();
+    assert_eq!(probed.len(), 2, "{:?}", out.effects);
+    assert_eq!(tunnel_view_of(&m, "home").toggle_availability, A::Available);
+}
+
+#[test]
+fn losing_the_tunnel_programs_makes_an_up_tunnel_and_its_pcs_unknown() {
+    let mut m = single();
+    online(&mut m);
+    let _ = m.set_capabilities(without(&[Tool::ServiceControl]));
+    assert_eq!(m.tunnel_state(&home()), Some(T::Down));
+    assert_eq!(m.pc_state(&desktop()), Some(P::Unknown));
+    let view = m.snapshot();
+    let tunnel = view.groups[0].tunnel.as_ref().unwrap();
+    assert_eq!(tunnel.display, D::Unknown);
+    assert!(!tunnel.can_toggle());
+    let out = m.step(Input::Tick, at(100));
+    assert!(out.effects.is_empty(), "{:?}", out.effects);
+    assert_eq!(out.next_wake, None, "nothing to poll: no busy loop");
+}
+
+#[test]
+fn missing_programs_are_announced_once_and_again_only_when_they_change() {
+    let mut m = multi();
+    let notices = m.set_capabilities(without(&[Tool::WireGuard, Tool::Ssh]));
+    assert_eq!(
+        notices,
+        [
+            Notice::TunnelProgramsMissing {
+                tools: vec![Tool::WireGuard]
+            },
+            Notice::SshMissing
+        ]
+    );
+    // The same lookup again ("Перевірити знову"): silence.
+    assert!(
+        m.set_capabilities(without(&[Tool::WireGuard, Tool::Ssh]))
+            .is_empty()
+    );
+    // Ping goes missing too: the tunnel notice comes again with both; ssh is unchanged.
+    assert_eq!(
+        m.set_capabilities(without(&[Tool::WireGuard, Tool::Ssh, Tool::Ping])),
+        [Notice::TunnelProgramsMissing {
+            tools: vec![Tool::WireGuard, Tool::Ping]
+        }]
+    );
+    // Found again: nothing to announce.
+    assert!(m.set_capabilities(Capabilities::all_found()).is_empty());
+}
+
+#[test]
+fn a_configuration_without_tunnels_or_ssh_announces_nothing() {
+    let mut config = multi_config();
+    config.tunnels.clear();
+    config.pcs.retain(|p| p.tunnel.is_none());
+    for pc in &mut config.pcs {
+        pc.power = None;
+        if matches!(pc.wake, Some(WakeMethod::Relay { .. })) {
+            pc.wake = None;
+        }
+    }
+    let mut m = Machine::new(&config, Time::ZERO);
+    assert!(
+        m.set_capabilities(Capabilities::from_statuses([]))
+            .is_empty()
     );
 }
