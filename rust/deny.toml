@@ -1,0 +1,32 @@
+# cargo-deny (https://embarkstudios.github.io/cargo-deny/): security advisories, banned crates
+# and sources. CI runs `cargo deny check advisories bans sources`. Licences are checked by
+# `tools/third_party_notices.py`, which also writes THIRD-PARTY-NOTICES.txt.
+
+[graph]
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+all-features = true
+
+[advisories]
+# Every RustSec advisory (vulnerability, unmaintained, unsound, yanked) fails the check unless
+# it is listed here with a reason.
+ignore = []
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# No HTTP or TLS client (docs/rust-architecture.md, section 4).
+deny = [
+    { crate = "reqwest" },
+    { crate = "hyper" },
+    { crate = "ureq" },
+    { crate = "isahc" },
+    { crate = "curl" },
+    { crate = "attohttpc" },
+    { crate = "rustls" },
+    { crate = "native-tls" },
+    { crate = "openssl" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

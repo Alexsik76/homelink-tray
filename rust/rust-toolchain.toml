@@ -1,0 +1,6 @@
+# The compiler used for development, CI and releases. Raise it on purpose, in its own commit.
+[toolchain]
+channel = "1.100.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
+targets = ["x86_64-pc-windows-msvc"]
