@@ -309,15 +309,55 @@ export component SettingsWindow inherits Window {
                 }
             }
 
-            // Help: not designed yet, one muted line.
-            if root.page == 1 : Text {
-                x: 16px;
-                y: 16px;
-                width: parent.width - 32px;
-                text: Words.help-empty;
-                color: Theme.muted;
-                font-size: 12px;
-                wrap: word-wrap;
+            // Help (not designed: section titles and texts in the list styles), scrolling like
+            // the lists.
+            if root.page == 1 : Rectangle {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+
+                help-flick := Flickable {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    content-width: parent.width;
+                    content-height: help-page.preferred-height;
+
+                    help-page := VerticalLayout {
+                        padding: 16px;
+                        spacing: 16px;
+                        width: parent.width;
+
+                        for section in Words.help : VerticalLayout {
+                            spacing: 6px;
+                            Text {
+                                text: section.title;
+                                color: Theme.ink;
+                                font-size: 13px;
+                                font-weight: 600;
+                                wrap: word-wrap;
+                            }
+                            Text {
+                                text: section.body;
+                                color: Theme.ink-2;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+
+                VScroll {
+                    x: parent.width - 8px;
+                    y: 0px;
+                    height: parent.height;
+                    view-height: help-flick.height;
+                    content-height: help-flick.content-height;
+                    offset: -help-flick.content-y;
+                    scroll-to(amount) => { help-flick.content-y = -amount; }
+                }
             }
 
             // About (section 7): the glyph, the name, the version, the description and the
