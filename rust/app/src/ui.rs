@@ -434,7 +434,7 @@ impl Ui {
             mark: mark(tunnel.display),
             // A tunnel always has its toggle; it is never shown as inactive.
             inactive: false,
-            toggle_on: tunnel.can_toggle,
+            toggle_on: tunnel.can_toggle(),
             toggle_label: self.tr.t(key, &[]).into(),
         }
     }
@@ -847,8 +847,8 @@ fn action_enabled(snapshot: &Snapshot, pc: &PcId, action: PowerAction) -> bool {
         .flat_map(|g| g.pcs.iter())
         .find(|view| view.id == *pc)
         .is_some_and(|view| match action {
-            PowerAction::Sleep => view.actions.sleep,
-            PowerAction::Shutdown => view.actions.shutdown,
+            PowerAction::Sleep => view.actions().sleep,
+            PowerAction::Shutdown => view.actions().shutdown,
         })
 }
 
@@ -864,17 +864,17 @@ pub(crate) fn mark(display: DisplayState) -> Mark {
 }
 
 fn pc_row(pc: &PcView) -> PcRow {
-    let c = pc.configured;
+    let c = pc.configured();
     PcRow {
         id: pc.id.to_string().into(),
         name: pc.name.clone().into(),
         mark: mark(pc.display),
         // Nothing is configured for this PC at all: its name is shown as inactive.
         inactive: !(c.wake || c.sleep || c.shutdown || c.rdp),
-        wake_on: pc.actions.wake,
-        sleep_on: pc.actions.sleep,
-        shutdown_on: pc.actions.shutdown,
-        rdp_on: pc.actions.rdp,
+        wake_on: pc.actions().wake,
+        sleep_on: pc.actions().sleep,
+        shutdown_on: pc.actions().shutdown,
+        rdp_on: pc.actions().rdp,
     }
 }
 

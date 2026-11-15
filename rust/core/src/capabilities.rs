@@ -14,7 +14,7 @@
 //! - **The found path is the one to run**, so a program found only in a known folder that is not
 //!   on `PATH` still works ([`Capabilities::program`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// An external program HomeLink may run.
@@ -146,6 +146,8 @@ pub struct Env {
     pub program_files: Option<PathBuf>,
     /// The `wireguard_exe` of every tunnel in the settings, in order.
     pub wireguard_exe: Vec<PathBuf>,
+    /// The programs of the user's commands (the first element of each), as written.
+    pub programs: Vec<String>,
 }
 
 /// The extensions tried on Windows when `PATHEXT` is not set.
@@ -154,7 +156,7 @@ const DEFAULT_PATHEXT: [&str; 4] = [".COM", ".EXE", ".BAT", ".CMD"];
 impl Env {
     /// The environment of this process: `PATH`, `PATHEXT`, `SystemRoot`, `ProgramFiles`, with
     /// the settings' `wireguard_exe` paths.
-    pub fn from_process(wireguard_exe: Vec<PathBuf>) -> Self {
+    pub fn from_process(wireguard_exe: Vec<PathBuf>, programs: Vec<String>) -> Self {
         let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
         Self {
             windows: cfg!(windows),
@@ -174,6 +176,7 @@ impl Env {
             system_root: var("SystemRoot").map(PathBuf::from),
             program_files: var("ProgramFiles").map(PathBuf::from),
             wireguard_exe,
+            programs,
         }
     }
 
@@ -322,18 +325,34 @@ impl Feature {
     }
 }
 
-/// The result of a lookup: the status of every tool.
+/// Something an action needs to run.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Need {
+    /// One of HomeLink's tools.
+    Tool(Tool),
+    /// The program of a user command, as written in the settings.
+    Program(String),
+}
+
+/// The result of a lookup: the status of every tool and the user programs that are missing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Capabilities {
     tools: BTreeMap<Tool, ToolStatus>,
+    missing_programs: BTreeSet<String>,
 }
 
-/// Looks every tool up in `env`, testing files with `exists`.
+/// Looks every tool and user program of `env` up, testing files with `exists`.
 pub fn detect(env: &Env, exists: &dyn Fn(&Path) -> bool) -> Capabilities {
     Capabilities {
         tools: Tool::ALL
             .into_iter()
             .map(|tool| (tool, first_existing(env.candidates(tool), exists)))
+            .collect(),
+        missing_programs: env
+            .programs
+            .iter()
+            .filter(|p| env.resolve_program(p, exists) == ToolStatus::Missing)
+            .cloned()
             .collect(),
     }
 }
@@ -346,7 +365,16 @@ impl Capabilities {
             .map(|t| (t, ToolStatus::Missing))
             .collect();
         tools.extend(statuses);
-        Self { tools }
+        Self {
+            tools,
+            missing_programs: BTreeSet::new(),
+        }
+    }
+
+    /// The same, with these user programs missing (for tests).
+    pub fn with_missing_programs(mut self, programs: impl IntoIterator<Item = String>) -> Self {
+        self.missing_programs.extend(programs);
+        self
     }
 
     /// Every tool found, at `/<program>` (for tests and demo mode).
@@ -373,6 +401,21 @@ impl Capabilities {
         )
     }
 
+    /// The bare program names of the found tools and their paths, for the command runner
+    /// (`StdCommandRunner::set_programs`). The WireGuard client is left out: it is run by
+    /// the path in the settings.
+    pub fn program_paths(&self) -> BTreeMap<String, PathBuf> {
+        self.tools
+            .iter()
+            .filter(|(tool, _)| **tool != Tool::WireGuard)
+            .filter_map(|(tool, status)| {
+                status
+                    .path()
+                    .map(|p| (tool.program().to_owned(), p.to_owned()))
+            })
+            .collect()
+    }
+
     /// The tools of `feature` that are missing; empty when it is available.
     pub fn missing_for(&self, feature: Feature) -> Vec<Tool> {
         feature
@@ -394,6 +437,23 @@ impl Capabilities {
         let mut missing = self.missing_for(Feature::TunnelControl);
         missing.extend(self.missing_for(Feature::TunnelProbe));
         missing
+    }
+
+    /// Which of `needs` are missing, in their order.
+    pub fn missing(&self, needs: &[Need]) -> Vec<Need> {
+        needs
+            .iter()
+            .filter(|need| match need {
+                Need::Tool(tool) => self.status(*tool).path().is_none(),
+                Need::Program(program) => self.missing_programs.contains(program),
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The user programs that were looked up and not found.
+    pub fn missing_programs(&self) -> impl Iterator<Item = &str> {
+        self.missing_programs.iter().map(String::as_str)
     }
 
     /// Whether tunnels can be raised, lowered and checked.
@@ -418,6 +478,7 @@ mod tests {
             system_root: Some(PathBuf::from(r"C:\Windows")),
             program_files: Some(PathBuf::from(r"C:\Program Files")),
             wireguard_exe: vec![PathBuf::from(r"D:\WG\wireguard.exe")],
+            programs: Vec::new(),
         }
     }
 
@@ -581,6 +642,45 @@ mod tests {
             linux.resolve_program("/opt/wake", &exists),
             ToolStatus::Found(PathBuf::from("/opt/wake"))
         );
+    }
+
+    #[test]
+    fn needs_cover_tools_and_user_programs() {
+        let env = Env {
+            windows: false,
+            path: vec![PathBuf::from("/usr/bin")],
+            programs: vec!["etherwake".into(), "/opt/missing".into()],
+            ..Env::default()
+        };
+        let caps = detect(&env, &files(&["/usr/bin/etherwake", "/usr/bin/ssh"]));
+        assert_eq!(
+            caps.missing_programs().collect::<Vec<_>>(),
+            ["/opt/missing"]
+        );
+        let needs = [
+            Need::Tool(Tool::Ssh),
+            Need::Tool(Tool::Rdp),
+            Need::Program("etherwake".into()),
+            Need::Program("/opt/missing".into()),
+        ];
+        assert_eq!(
+            caps.missing(&needs),
+            [Need::Tool(Tool::Rdp), Need::Program("/opt/missing".into())]
+        );
+    }
+
+    #[test]
+    fn program_paths_name_the_found_tools_except_wireguard() {
+        let caps = Capabilities::from_statuses([
+            (Tool::Ssh, ToolStatus::Found(PathBuf::from("/x/ssh.exe"))),
+            (
+                Tool::WireGuard,
+                ToolStatus::Found(PathBuf::from("/wg/wireguard.exe")),
+            ),
+        ]);
+        let map = caps.program_paths();
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("ssh"), Some(&PathBuf::from("/x/ssh.exe")));
     }
 
     #[test]

@@ -67,6 +67,8 @@ pub(crate) struct Setup {
     pub(crate) dark: bool,
     /// The file and the adapters of the changes.
     pub(crate) persist: Persist,
+    /// Looks the programs up again after a change.
+    pub(crate) checker: Arc<crate::capability::Checker>,
 }
 
 /// A delete that waits for its second click.
@@ -103,6 +105,8 @@ pub(crate) struct Manage {
     pub(crate) tr: Translator,
     pub(crate) handle: Handle,
     pub(crate) persist: Persist,
+    /// Looks the programs up again after a change.
+    pub(crate) checker: Arc<crate::capability::Checker>,
     /// The configuration on screen: the one the engine runs with.
     pub(crate) config: RefCell<Config>,
     armed: RefCell<Option<Armed>>,
@@ -199,6 +203,7 @@ pub(crate) fn install(panel: &Panel, setup: Setup) -> Result<(), slint::Platform
         tr: setup.translator,
         handle: setup.handle,
         persist: setup.persist,
+        checker: setup.checker,
         config: RefCell::new(setup.config),
         armed: RefCell::new(None),
         form: RefCell::new(None),
@@ -405,6 +410,8 @@ impl Manage {
             })?;
         }
         self.handle.reload(change.config.clone());
+        // Paths in the settings (`wireguard_exe`, command programs) may have changed.
+        self.checker.check(&change.config);
         if let Some(rdp) = &self.persist.rdp {
             rdp.update(&change.config);
         }

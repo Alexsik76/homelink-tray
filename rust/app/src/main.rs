@@ -17,6 +17,7 @@
 
 mod appearance;
 mod balloon;
+mod capability;
 #[cfg(feature = "demo")]
 mod demo;
 mod icon;
@@ -138,11 +139,15 @@ fn main() -> ExitCode {
                 runner: Arc::clone(&real.runner),
                 opener: Arc::clone(&real.runner),
             };
+            let std_runner = Arc::clone(&real.std_runner);
             let result = run_ui(
                 real.config.clone(),
                 translator.clone(),
                 options.theme,
-                |sink| real.deps(sink),
+                Adapters {
+                    deps: |sink| real.deps(sink),
+                    checker: move |handle| capability::Checker::real(std_runner, handle),
+                },
                 Box::new(move |pc: &PcId| rdp.open(pc)),
                 persist,
                 |_| {},
@@ -221,7 +226,10 @@ fn run_demo(language: Option<LanguageSetting>, theme: ThemeSetting) -> ExitCode 
         config,
         translator.clone(),
         theme,
-        move |sink| demo::deps(&for_deps, sink, &fakes),
+        Adapters {
+            deps: move |sink| demo::deps(&for_deps, sink, &fakes),
+            checker: capability::Checker::demo,
+        },
         Box::new(|pc: &PcId| {
             log::info!("demo: Remote Desktop for {pc} would open here");
             Ok(())
@@ -240,6 +248,13 @@ fn run_demo(language: Option<LanguageSetting>, _theme: ThemeSetting) -> ExitCode
     ExitCode::FAILURE
 }
 
+/// What the engine runs on in a mode: its dependencies (made once the UI sink exists) and the
+/// lookup of the programs (made once the engine's handle exists).
+struct Adapters<D, C> {
+    deps: D,
+    checker: C,
+}
+
 /// Starts the panel and the tray icon on an engine built from `config` and the dependencies
 /// that `deps` makes, and runs the Slint event loop until the user quits. `start` runs once the
 /// engine has started, with a handle to it (the demo drives the engine through it).
@@ -247,7 +262,10 @@ fn run_ui(
     config: Config,
     translator: Translator,
     theme: ThemeSetting,
-    deps: impl FnOnce(Arc<dyn Sink>) -> Deps,
+    adapters: Adapters<
+        impl FnOnce(Arc<dyn Sink>) -> Deps,
+        impl FnOnce(Handle) -> capability::Checker,
+    >,
     rdp: ui::RdpAction,
     persist: manage::Persist,
     start: impl FnOnce(Handle),
@@ -257,10 +275,12 @@ fn run_ui(
     let details = view::DetailsWindow::new()?;
     let tray = view::Tray::new()?;
     let sink = Arc::new(ui::UiSink::new(translator.clone()));
-    let deps = deps(sink);
+    let deps = (adapters.deps)(sink);
     let clock = Arc::clone(&deps.clock);
     let settings_config = config.clone();
     let (engine, handle) = Engine::new(config, deps);
+    let checker = Arc::new((adapters.checker)(handle.clone()));
+    let engine = engine.with_capabilities(checker.check(&settings_config));
     let appearance = appearance::detect(theme, &StdCommandRunner::new());
     ui::install(
         &ui::Windows {
@@ -284,6 +304,7 @@ fn run_ui(
             handle: handle.clone(),
             dark: appearance.dark,
             persist,
+            checker: Arc::clone(&checker),
         },
     )?;
     tray.show()?;

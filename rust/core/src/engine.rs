@@ -13,6 +13,7 @@
 //! A panic in a job is caught and reported to the machine as a failed job; the engine
 //! thread itself never runs user-supplied code.
 
+use crate::capabilities::Capabilities;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -51,6 +52,7 @@ enum Message {
     /// A finished job and the generation (the number of reloads so far) it was started in.
     Done(u64, Input),
     Reload(Box<Config>),
+    Capabilities(Box<Capabilities>),
     Stop,
 }
 
@@ -77,6 +79,13 @@ impl Handle {
     /// handle, the thread, the sink and the UI stay as they are.
     pub fn reload(&self, config: Config) -> bool {
         self.tx.send(Message::Reload(Box::new(config))).is_ok()
+    }
+
+    /// Gives the engine a new lookup of the programs on this computer (at start, after the
+    /// settings are saved, on "Перевірити знову"). It is kept across [`Handle::reload`].
+    /// Returns false if the engine has stopped.
+    pub fn set_capabilities(&self, caps: Capabilities) -> bool {
+        self.tx.send(Message::Capabilities(Box::new(caps))).is_ok()
     }
 
     /// Asks the engine to stop; [`Engine::run`] returns after finishing the current step.
@@ -174,6 +183,14 @@ impl Engine {
         }
     }
 
+    /// Applies a lookup of the programs before the engine starts, so that its first step
+    /// already knows what is missing (later lookups go through [`Handle::set_capabilities`]).
+    pub fn with_capabilities(mut self, caps: Capabilities) -> Self {
+        self.machine.set_capabilities(caps);
+        self.last = None;
+        self
+    }
+
     /// Runs the engine on its own thread.
     pub fn spawn(self) -> std::io::Result<JoinHandle<()>> {
         std::thread::Builder::new()
@@ -196,9 +213,16 @@ impl Engine {
             Message::Reload(config) => {
                 log::info!("applying a new configuration");
                 self.generation += 1;
+                let caps = self.machine.capabilities().clone();
                 self.machine = Machine::new(&config, now);
+                self.machine.set_capabilities(caps);
                 self.config = Arc::new(*config);
                 self.last = None;
+                self.publish_if_changed();
+                return true;
+            }
+            Message::Capabilities(caps) => {
+                self.machine.set_capabilities(*caps);
                 self.publish_if_changed();
                 return true;
             }

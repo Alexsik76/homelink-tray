@@ -57,6 +57,9 @@ pub struct StdCommandRunner {
     decode: Decoder,
     max_output: usize,
     program_dir: Option<PathBuf>,
+    /// Bare program names and the paths they were found at ([`StdCommandRunner::set_programs`]).
+    /// Shared by clones.
+    programs: Arc<std::sync::RwLock<std::collections::BTreeMap<String, PathBuf>>>,
 }
 
 impl Default for StdCommandRunner {
@@ -72,6 +75,17 @@ impl StdCommandRunner {
             decode: Arc::new(utf8_lossy),
             max_output: DEFAULT_MAX_OUTPUT,
             program_dir: None,
+            programs: Arc::default(),
+        }
+    }
+
+    /// Runs these bare program names from the paths given (the result of the capability
+    /// lookup, [`crate::capabilities::Capabilities::program_paths`]), so that a program found
+    /// only outside `PATH` (`System32\OpenSSH`) still runs. Names not in the map are left to
+    /// the system's search. Replaces the previous map.
+    pub fn set_programs(&self, programs: std::collections::BTreeMap<String, PathBuf>) {
+        if let Ok(mut map) = self.programs.write() {
+            *map = programs;
         }
     }
 
@@ -100,6 +114,15 @@ impl StdCommandRunner {
 
     fn program(&self, name: &str) -> Result<OsString, CommandOutput> {
         let has_path = name.contains('/') || name.contains('\\');
+        if !has_path
+            && let Some(path) = self
+                .programs
+                .read()
+                .ok()
+                .and_then(|map| map.get(name).cloned())
+        {
+            return Ok(path.into_os_string());
+        }
         match (&self.program_dir, has_path) {
             (Some(dir), false) => {
                 let path = dir.join(name);
