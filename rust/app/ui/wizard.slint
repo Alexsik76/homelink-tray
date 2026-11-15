@@ -422,18 +422,19 @@ export component WizardWindow inherits Window {
                                     value <=> root.new-timeout;
                                     error: root.errors[13];
                                 }
-                                // What to run on the relay host (undesigned: text and a copy button).
-                                if root.relay-setup != "" : VerticalLayout {
-                                    spacing: 8px;
-                                    Text {
-                                        text: root.relay-setup-intro;
-                                        color: Theme.muted;
-                                        font-size: 11px;
-                                        wrap: word-wrap;
-                                    }
-                                    CopyBlock {
-                                        text: root.relay-setup;
-                                    }
+                            }
+                            // What to run on the relay host, for a new relay and for an existing
+                            // one (undesigned: text and a copy button).
+                            if root.relay-setup != "" : VerticalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: root.relay-setup-intro;
+                                    color: Theme.muted;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                }
+                                CopyBlock {
+                                    text: root.relay-setup;
                                 }
                             }
 

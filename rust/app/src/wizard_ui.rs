@@ -442,6 +442,29 @@ impl Manage {
                     commands,
                 )
             }
+            // An existing relay: the commands for its user and key as the settings have them,
+            // so that a relay of the template (or one added by hand) can be prepared too.
+            (WakeChoice::Relay, RelayChoice::Existing(id)) => {
+                let config = self.config.borrow();
+                match config.relay(id) {
+                    Some(relay) => {
+                        let key = ssh_ops::read_public_key(&relay.identity_file);
+                        let commands = relay_setup::text(&RelaySetup {
+                            kind: relay.kind,
+                            user: &relay.user,
+                            public_key: key.as_deref(),
+                            client_address: None,
+                            sudo: Some(relay.sudo),
+                        });
+                        (
+                            self.tr
+                                .t(&format!("wizard.relay.setup.{}", relay.kind.code()), &[]),
+                            commands,
+                        )
+                    }
+                    None => (String::new(), String::new()),
+                }
+            }
             _ => (String::new(), String::new()),
         };
         w.set_relay_setup_intro(intro.into());
