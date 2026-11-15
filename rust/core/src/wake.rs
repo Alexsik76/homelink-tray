@@ -121,11 +121,32 @@ impl WakeSender for RelayWake {
         let argv = relay_ssh_argv(relay, &command);
         log::info!("waking {} through relay {}", request.pc.id, relay.id);
         let output = self.runner.run(&argv, command_timeout(relay.timeout));
-        match explain_ssh(&output) {
-            None => Ok(()),
-            Some(reason) => Err(WakeError::Failed(reason)),
+        if let Some(reason) = explain_ssh(&output) {
+            return Err(WakeError::Failed(reason));
         }
+        if relay.kind == RelayKind::RouterOs
+            && let Some(error) = routeros_error(&output.text)
+        {
+            return Err(WakeError::Failed(format!(
+                "RouterOS reported an error: {error}"
+            )));
+        }
+        Ok(())
     }
+}
+
+/// The error RouterOS printed, if any. RouterOS ends an SSH command with exit code 0 even when
+/// the command fails and prints the error on standard output instead (checked on RouterOS
+/// 7.24.5: `input does not match any value of interface`, `not enough permissions`,
+/// `expected end of command`); a successful `/tool wol` prints nothing. So any output except
+/// the warnings of the `ssh` client itself (lines starting with `**` or `Warning:`) is an error.
+pub(crate) fn routeros_error(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("**") && !line.starts_with("Warning:"))
+        .collect();
+    (!lines.is_empty()).then(|| lines.join(" "))
 }
 
 /// The runner gets a little longer than the connection timeout so `ssh` can report its own
@@ -457,6 +478,50 @@ mod tests {
             let err = RelayWake::new(runner).wake(&request).unwrap_err();
             assert_eq!(err, WakeError::Failed(expected.into()));
         }
+    }
+
+    #[test]
+    fn routeros_errors_with_exit_code_zero_are_failures() {
+        let config = relay_config();
+        let request = request_for(&config, "desktop");
+        let runner = Arc::new(FakeCommandRunner::default());
+        runner.set_result(CommandOutput::exited(
+            0,
+            "input does not match any value of interface (/tool/wol (interface); line 1)\r\n",
+        ));
+        let err = RelayWake::new(runner).wake(&request).unwrap_err();
+        assert_eq!(
+            err,
+            WakeError::Failed(
+                "RouterOS reported an error: input does not match any value of interface \
+                 (/tool/wol (interface); line 1)"
+                    .into()
+            )
+        );
+        // Silence is success; so are the ssh client's own warnings.
+        for text in [
+            "",
+            "\r\n",
+            "** WARNING: connection is not using a post-quantum key exchange algorithm.\n",
+            "Warning: Permanently added '192.168.88.1' (RSA) to the list of known hosts.\n",
+        ] {
+            let runner = Arc::new(FakeCommandRunner::default());
+            runner.set_result(CommandOutput::exited(0, text));
+            assert_eq!(RelayWake::new(runner).wake(&request), Ok(()), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn routeros_error_keeps_only_what_routeros_printed() {
+        assert_eq!(routeros_error(""), None);
+        assert_eq!(
+            routeros_error("not enough permissions (9) (/tool/wol; line 1)"),
+            Some("not enough permissions (9) (/tool/wol; line 1)".into())
+        );
+        assert_eq!(
+            routeros_error("** WARNING: x\nexpected end of command (line 1 column 4)\n"),
+            Some("expected end of command (line 1 column 4)".into())
+        );
     }
 
     #[test]

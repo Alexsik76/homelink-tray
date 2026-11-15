@@ -791,9 +791,9 @@ any password.
   file name and the address of this computer):
   - `routeros`: the RouterOS commands to create a group that can only log in over SSH and run
     `/tool wol` (policies `ssh`, `read`, `test`), create a user in it that is limited to this
-    computer's address, import the public key for that user, and disable password login for
-    SSH (`/ip ssh set always-allow-password-login=no`). **To be verified on RouterOS 7 in
-    phase 3** (not yet verified).
+    computer's address (disabled, with a random password made on the router), add the public
+    key for that user and enable the user. **Verified on RouterOS 7.24.5 (RB5009) on
+    15.11.2026**, see below.
   - `etherwake`: install `etherwake`, create the SSH user and add the public key to its
     `authorized_keys`. The step asks "run the command with sudo" (`wizard.field.sudo`,
     `wizard.hint.sudo`; there is no default, the user must choose). If yes, it also shows
@@ -809,16 +809,23 @@ any password.
   brackets stand for what the program cannot know: a user name that is not safe to put in a
   command, the public key before it exists, and, for RouterOS, the address this computer has in
   the router's network (not detected: it depends on the tunnel). The generated lines are:
-  RouterOS: `/user group add name=homelink policy=ssh,read,test`, `/user add name=<user>
-  group=homelink address=<address>`, `/file add name=homelink.pub contents="<key>"`,
-  `/user ssh-keys import public-key-file=homelink.pub user=<user>`, `/file remove
-  homelink.pub`, `/ip ssh set always-allow-password-login=no`. etherwake and wakeonlan (as root
+  RouterOS: `/user group add name=homelink policy=ssh,read,test comment="HomeLink"`,
+  `/user add name=<user> group=homelink address=<address> password=[:rndstr length=32]
+  disabled=yes comment="HomeLink"`, `/user ssh-keys add user=<user> key="<key>"`,
+  `/user enable <user>`. etherwake and wakeonlan (as root
   on the relay): `apt install <tool>` (the text says to use `opkg install` on OpenWrt), the
   user's `~/.ssh` with mode 700, the key appended to `authorized_keys`, and with sudo a file in
   `/etc/sudoers.d` for `$(command -v <tool>)` with `NOPASSWD`, checked by `visudo -cf`.
-  **The RouterOS commands are unverified on a real RouterOS 7** (policies, the
-  `/file add ... contents=` and key import forms, whether `address=` takes a bare address,
-  and `always-allow-password-login`); the wizard text says so.
+  **RouterOS check (7.24.5, RB5009, 15.11.2026, a test user that was removed afterwards):** the
+  group with `ssh,read,test` logs in with its key and runs `/tool wol`, reads, and is refused a
+  write (`not enough permissions`); a bare `address=` is stored as `/32`; `/user add` refuses to
+  run without `password`, hence the random one that is never shown; `/user ssh-keys add` takes
+  the key directly (no temporary file); `/ip ssh` has no `always-allow-password-login` but
+  `password-authentication`, by default `yes-if-no-key`, so a user with a key is offered only
+  `publickey` and the commands change nothing global. **RouterOS ends an SSH command with exit
+  code 0 even when it fails** and prints the error on standard output, so `core::wake` treats
+  any output of a `routeros` relay (except `ssh` client warnings) as a failed wake
+  (`routeros_error`).
 - *PC side (built, `core::pc_setup`).* For an SSH power method with sleep or shutdown allowed,
   step 4 shows the commands to run on the PC under its key field, with a copy button, refreshed
   when the operating system, user, key file or allowed actions change. Linux (as root): the
@@ -944,7 +951,7 @@ configuration, only with the owner's approval).
 | 2b SSH-only access (done, owner decision) | REST and every secret removed; relay hosts over SSH with a key; `core::wake` builds the `ssh` argv (pure, tested); locale keys updated | no password, URL or secret type left in core; tests green |
 | 2c Relay presets and routed wake (done, owner decision) | `[[relays]]` with a preset (`routeros`, `etherwake`, `wakeonlan`); `method = "relay"`; magic packet `address` (unicast or broadcast); per-preset validation and exact-argument tests | tests green; section 3 documents the unicast + static ARP setup |
 | 3a Portable adapters (done) | `core::adapters`: TCP probe, magic packet, `StdCommandRunner`, command wake, SSH and command power runner, relay `sudo`; Linux integration tests against local stand-ins and a fake `ssh`; the real engine over them | tests green on Linux; the real-engine test passes |
-| 3b Windows adapters (code written, unit-tested on Linux; not yet run on Windows) | In `app/src/windows/`, as pure functions plus a thin layer over `CommandRunner`, no new Win32 binding: WireGuard service (`wireguard.exe` install/uninstall, state from `sc query`, parsed independently of the display language), ping (`TTL=`), OEM output decoder (code pages 437, 850, 866 from the registry value `OEMCP`; other pages decode ASCII only) plugged into `StdCommandRunner`, `.rdp` file and `mstsc`, elevation check and restart, display language from `reg query`. OpenSSH client detection is done (stage D1, `core::ssh_setup`). **Still open:** verify the RouterOS commands on RouterOS 7; real `sc query` output in a non-English OEM code page (the test samples follow the documented format and were not captured on Windows); decoders for other code pages if needed | adapter tests green in the Windows CI job (the CI `rust-app` job does not run the app's tests yet); a real `/tool wol` over SSH works |
+| 3b Windows adapters (code written, unit-tested on Linux; not yet run on Windows) | In `app/src/windows/`, as pure functions plus a thin layer over `CommandRunner`, no new Win32 binding: WireGuard service (`wireguard.exe` install/uninstall, state from `sc query`, parsed independently of the display language), ping (`TTL=`), OEM output decoder (code pages 437, 850, 866 from the registry value `OEMCP`; other pages decode ASCII only) plugged into `StdCommandRunner`, `.rdp` file and `mstsc`, elevation check and restart, display language from `reg query`. OpenSSH client detection is done (stage D1, `core::ssh_setup`). RouterOS commands and `/tool wol` over SSH verified on 7.24.5 (15.11.2026). **Still open:** real `sc query` output in a non-English OEM code page (the test samples follow the documented format and were not captured on Windows); decoders for other code pages if needed | adapter tests green in the Windows CI job (the CI `rust-app` job does not run the app's tests yet); a real `/tool wol` over SSH works |
 | 4 App shell (real mode works in code, not yet proven on Windows) | Done: panel on the real engine, tray with aggregate icon, `config.toml` with a template on the first start and every validation problem shown in the catalog language, rotating log file, single instance (file lock), elevation restart, RDP button, `--config`, cargo feature `demo` for the fake-driven mode. **Stage D1 (code written, not run on Windows):** tray balloons for notices (`Shell_NotifyIconW`, section 9; Slint's tray has no such call), the manifest with `requireAdministrator` and per-monitor DPI v2, the application icon and version information embedded by `winresource`, the settings window, wizard and tunnel form on the taskbar (only the panel and details window are hidden from it). **Done (15.11.2026):** the tray icon palette follows the taskbar theme and the display scale, the application icon in the settings and About windows, waiting up to 3 s for the engine thread on quit, local time with its UTC offset in the log, app tests in CI, `--version` and `--check-config` | a single PC with a tunnel works end to end on Windows |
 | 5 Multi-PC and wizard | Groups, shared tunnel, PC without a tunnel, wizard (add/edit/delete), About with the Slint credit, config reload. **Done (C1, core logic, tested on Linux):** `core::settings`, `core::wizard` (five steps of the handoff), `core::tunnel_form`, `core::checks`, `core::about`, `Handle::reload`, locale keys. **Done (D1, code written and unit-tested on Linux, not run on Windows):** OpenSSH client detection, key creation, SSH host-key consent, the relay setup commands (section 11); the UI of these has no designer's layout (reused Field/Btn/list styles). **Done (15.11.2026):** the PC-side commands (`core::pc_setup`), the help page (`core::help`), the third-party notices file | tunnel groups, a shared tunnel and a PC without a tunnel work by hand |
 | 6 Hardening | Manual checklist on Windows 10 LTSC and 11 (`docs/release-checklist.uk.md`, Linux and Windows remote PCs); docs rewrite done (`README*.md` for the Rust version, relay, PC and SSH setup); size and licence checks in CI; `v1.0.0-rc.1` | no open defects; parity checklist complete |

@@ -7,9 +7,12 @@
 //! computer has in the relay's network (the program cannot tell which one the relay sees).
 //! Nothing here is secret: the only key material is the public key.
 //!
-//! **The RouterOS commands are not verified on a real RouterOS 7** (see the roadmap, phase 3):
-//! the group policies, the `/file add ... contents=` and `ssh-keys import` forms and the
-//! behaviour of `always-allow-password-login` must be checked there. This is the only place to
+//! **The RouterOS commands were run on a real RouterOS 7.24.5 (RB5009) on 15.11.2026** with a
+//! test user: the group with `ssh,read,test` may log in with its key and run `/tool wol`, may
+//! read and may not write; `address=` takes a bare address (stored as `/32`); `/user add` needs a
+//! password, so a random one is generated on the router and never shown (with the default
+//! `/ip ssh password-authentication=yes-if-no-key` a user with a key cannot log in with a
+//! password at all); `/user ssh-keys add` takes the key directly. This is the only place to
 //! change them.
 
 use crate::domain::RelayKind;
@@ -23,8 +26,6 @@ pub const PLACEHOLDER_ADDRESS: &str = "<address of this computer>";
 
 /// The name of the RouterOS group HomeLink's user is put in.
 pub const ROUTEROS_GROUP: &str = "homelink";
-/// The file the public key is imported from on the router; removed after the import.
-pub const ROUTEROS_KEY_FILE: &str = "homelink.pub";
 
 /// What the commands depend on.
 #[derive(Debug, Clone, Copy)]
@@ -97,16 +98,16 @@ pub fn text(setup: &RelaySetup<'_>) -> String {
 }
 
 /// A group that can only log in over SSH, read, and run `/tool wol` (policies `ssh`, `read`,
-/// `test`); a user in it limited to the address of this computer; the key imported for that user
-/// through a file that is removed again; password login off for users that have a key.
+/// `test`); a user in it limited to the address of this computer, created disabled with a random
+/// password nobody knows; the key added for that user; then the user enabled.
 fn routeros(user: &str, key: &str, address: &str) -> Vec<String> {
     vec![
         format!("/user group add name={ROUTEROS_GROUP} policy=ssh,read,test comment=\"HomeLink\""),
-        format!("/user add name={user} group={ROUTEROS_GROUP} address={address}"),
-        format!("/file add name={ROUTEROS_KEY_FILE} contents=\"{key}\""),
-        format!("/user ssh-keys import public-key-file={ROUTEROS_KEY_FILE} user={user}"),
-        format!("/file remove {ROUTEROS_KEY_FILE}"),
-        "/ip ssh set always-allow-password-login=no".to_owned(),
+        format!(
+            "/user add name={user} group={ROUTEROS_GROUP} address={address} password=[:rndstr length=32] disabled=yes comment=\"HomeLink\""
+        ),
+        format!("/user ssh-keys add user={user} key=\"{key}\""),
+        format!("/user enable {user}"),
     ]
 }
 
@@ -154,11 +155,9 @@ mod tests {
             commands(&setup(RelayKind::RouterOs)),
             [
                 "/user group add name=homelink policy=ssh,read,test comment=\"HomeLink\"",
-                "/user add name=homelink group=homelink address=10.8.0.2",
-                "/file add name=homelink.pub contents=\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc homelink\"",
-                "/user ssh-keys import public-key-file=homelink.pub user=homelink",
-                "/file remove homelink.pub",
-                "/ip ssh set always-allow-password-login=no",
+                "/user add name=homelink group=homelink address=10.8.0.2 password=[:rndstr length=32] disabled=yes comment=\"HomeLink\"",
+                "/user ssh-keys add user=homelink key=\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc homelink\"",
+                "/user enable homelink",
             ]
         );
     }
