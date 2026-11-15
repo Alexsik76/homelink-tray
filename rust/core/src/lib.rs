@@ -22,6 +22,7 @@ pub mod notice;
 pub mod pc_setup;
 pub mod ports;
 pub mod problem;
+pub mod reasons;
 pub mod relay_setup;
 mod rules;
 pub mod settings;
