@@ -144,8 +144,16 @@ fn decode_with(upper: Option<&[char]>, bytes: &[u8]) -> String {
         .collect()
 }
 
-/// A decoder for the command runner. The table is built once.
+/// The code page of UTF-8, which Windows uses as the OEM page when "Use Unicode UTF-8 for
+/// worldwide language support" is on.
+pub(crate) const UTF8: u16 = 65001;
+
+/// A decoder for the command runner. The table is built once; with the UTF-8 code page the
+/// output is UTF-8.
 pub(crate) fn decoder(code_page: Option<u16>) -> Decoder {
+    if code_page == Some(UTF8) {
+        return Arc::new(homelink_core::adapters::command::utf8_lossy);
+    }
     let upper = code_page.and_then(upper_half);
     Arc::new(move |bytes| decode_with(upper.as_deref(), bytes))
 }
@@ -272,6 +280,13 @@ mod tests {
     fn an_unsupported_page_keeps_ascii_and_marks_the_rest() {
         assert_eq!(decode(Some(932), b"a\x83b"), "a\u{FFFD}b");
         assert_eq!(decode(None, &[0xE9]), "\u{FFFD}");
+    }
+
+    #[test]
+    fn the_utf8_code_page_decodes_utf8() {
+        let text = "Не вдалося підключитися";
+        let decode = decoder(Some(UTF8));
+        assert_eq!(decode(text.as_bytes()), text);
     }
 
     #[test]

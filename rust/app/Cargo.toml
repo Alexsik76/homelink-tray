@@ -1,6 +1,6 @@
 [package]
 name = "homelink"
-version = "1.0.0-rc.2"
+version = "1.0.0-rc.3"
 edition = "2024"
 description = "HomeLink: tray utility that wakes, sleeps and reaches remote PCs"
 publish = false
