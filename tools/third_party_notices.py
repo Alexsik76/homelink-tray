@@ -300,7 +300,8 @@ def main():
     text = render(crates, slint)
     if args.check:
         current = NOTICES.read_bytes().decode("utf-8") if NOTICES.exists() else ""
-        if current != text:
+        # A Windows checkout may turn the line ends into CRLF; only the text counts.
+        if current.replace("\r\n", "\n") != text:
             print(
                 "THIRD-PARTY-NOTICES.txt is out of date: run python3 tools/third_party_notices.py"
             )
