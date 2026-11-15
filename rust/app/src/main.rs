@@ -175,7 +175,16 @@ fn check_config(explicit: Option<&std::path::Path>) -> (bool, String) {
     };
     match homelink_core::config::load(&path) {
         Ok(_) => (true, format!("{}: valid", path.display())),
-        Err(err) => (false, format!("{}: {err}", path.display())),
+        Err(err) => {
+            // A file error already names the file; a list of problems does not.
+            let text = err.to_string();
+            let shown = path.display().to_string();
+            if text.starts_with(&shown) {
+                (false, text)
+            } else {
+                (false, format!("{shown}: {text}"))
+            }
+        }
     }
 }
 
@@ -340,6 +349,8 @@ mod tests {
         let missing = dir.join("no-such-config.toml");
         let (ok, text) = check_config(Some(&missing));
         assert!(!ok, "{text}");
+        let shown = missing.display().to_string();
+        assert_eq!(text.matches(shown.as_str()).count(), 1, "{text}");
         assert!(!missing.exists());
     }
 
