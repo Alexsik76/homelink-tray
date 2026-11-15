@@ -100,6 +100,10 @@ pub trait TunnelDriver: Send + Sync {
     fn up(&self, tunnel: &Tunnel) -> Result<(), TunnelError>;
     /// Stops the tunnel.
     fn down(&self, tunnel: &Tunnel) -> Result<(), TunnelError>;
+    /// Whether the tunnel's server answered: a recent WireGuard handshake, prompted by one
+    /// datagram into the tunnel when the last one is old. Used for a tunnel without a probe
+    /// host. Only the service's own state is read; no secret is touched.
+    fn handshake(&self, tunnel: &Tunnel) -> Result<bool, TunnelError>;
 }
 
 /// ICMP echo.

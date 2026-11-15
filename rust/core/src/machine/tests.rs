@@ -1708,3 +1708,42 @@ fn a_configuration_without_tunnels_or_ssh_announces_nothing() {
             .is_empty()
     );
 }
+
+#[test]
+fn a_tunnel_without_a_probe_host_needs_wg_and_not_ping() {
+    let mut config = multi_config();
+    for t in &mut config.tunnels {
+        if t.id == home() {
+            t.probe_host = None;
+        }
+    }
+    let mut m = Machine::new(&config, Time::ZERO);
+    let _ = m.set_capabilities(without(&[Tool::Ping]));
+    assert_eq!(tunnel_view_of(&m, "home").toggle_availability, A::Available);
+    assert_eq!(
+        tunnel_view_of(&m, "office").toggle_availability,
+        A::Missing(vec![Need::Tool(Tool::Ping)]),
+        "office keeps its probe host"
+    );
+    let _ = m.set_capabilities(without(&[Tool::Wg]));
+    assert_eq!(
+        tunnel_view_of(&m, "home").toggle_availability,
+        A::Missing(vec![Need::Tool(Tool::Wg)])
+    );
+    assert_eq!(
+        tunnel_view_of(&m, "office").toggle_availability,
+        A::Available
+    );
+    // Only home is blocked: office is still probed.
+    let out = m.step(Input::Tick, at(0));
+    assert!(
+        out.effects.iter().any(
+            |e| matches!(e, Effect::ProbeTunnel { tunnel, .. } if tunnel.as_str() == "office")
+        )
+    );
+    assert!(
+        !out.effects
+            .iter()
+            .any(|e| matches!(e, Effect::ProbeTunnel { tunnel, .. } if tunnel.as_str() == "home"))
+    );
+}

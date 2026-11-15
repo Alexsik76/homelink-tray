@@ -92,6 +92,8 @@ pub struct FakeTunnel {
     down_errors: Mutex<HashMap<TunnelId, String>>,
     ups: Mutex<Vec<TunnelId>>,
     downs: Mutex<Vec<TunnelId>>,
+    /// Tunnels whose server gives no handshake although the service runs.
+    silent: Mutex<HashSet<TunnelId>>,
 }
 
 /// Sets or clears the entry of `id` in a per-entity error map.
@@ -148,6 +150,16 @@ impl FakeTunnel {
         set_error(&self.down_errors, id, reason);
     }
 
+    /// Makes the server of a tunnel give no handshake (`true`) or answer again (`false`).
+    pub fn set_server_silent(&self, id: &TunnelId, silent: bool) {
+        let mut set = lock(&self.silent);
+        if silent {
+            set.insert(id.clone());
+        } else {
+            set.remove(id);
+        }
+    }
+
     /// Tunnels started so far.
     pub fn ups(&self) -> Vec<TunnelId> {
         lock(&self.ups).clone()
@@ -186,6 +198,10 @@ impl TunnelDriver for FakeTunnel {
         }
         self.set_running(&tunnel.id, false);
         Ok(())
+    }
+
+    fn handshake(&self, tunnel: &Tunnel) -> Result<bool, TunnelError> {
+        Ok(self.is_up(&tunnel.id) && !lock(&self.silent).contains(&tunnel.id))
     }
 }
 

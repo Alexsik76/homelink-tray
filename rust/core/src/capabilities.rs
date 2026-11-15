@@ -24,8 +24,10 @@ pub enum Tool {
     WireGuard,
     /// `sc.exe`: reads the state of a tunnel service.
     ServiceControl,
-    /// `ping`: checks that a tunnel carries traffic.
+    /// `ping`: checks a tunnel that has a probe host.
     Ping,
+    /// `wg.exe` of the WireGuard client: reads the handshake of a tunnel without a probe host.
+    Wg,
     /// The OpenSSH client `ssh`.
     Ssh,
     /// `ssh-keygen`: creates keys, computes fingerprints, finds `known_hosts` entries.
@@ -46,10 +48,11 @@ pub enum Tool {
 
 impl Tool {
     /// Every tool, in the order of the capabilities page.
-    pub const ALL: [Tool; 11] = [
+    pub const ALL: [Tool; 12] = [
         Tool::WireGuard,
         Tool::ServiceControl,
         Tool::Ping,
+        Tool::Wg,
         Tool::Ssh,
         Tool::SshKeygen,
         Tool::SshKeyscan,
@@ -66,6 +69,7 @@ impl Tool {
             Tool::WireGuard => "wireguard",
             Tool::ServiceControl => "sc",
             Tool::Ping => "ping",
+            Tool::Wg => "wg",
             Tool::Ssh => "ssh",
             Tool::SshKeygen => "ssh-keygen",
             Tool::SshKeyscan => "ssh-keyscan",
@@ -83,6 +87,7 @@ impl Tool {
             Tool::WireGuard => "wireguard",
             Tool::ServiceControl => "sc",
             Tool::Ping => "ping",
+            Tool::Wg => "wg",
             Tool::Ssh => "ssh",
             Tool::SshKeygen => "ssh_keygen",
             Tool::SshKeyscan => "ssh_keyscan",
@@ -99,7 +104,7 @@ impl Tool {
     fn known_dir(self, env: &Env) -> Option<PathBuf> {
         let system32 = env.system_root.as_ref().map(|root| root.join("System32"));
         match self {
-            Tool::WireGuard => env.program_files.as_ref().map(|p| p.join("WireGuard")),
+            Tool::WireGuard | Tool::Wg => env.program_files.as_ref().map(|p| p.join("WireGuard")),
             Tool::Ssh | Tool::SshKeygen | Tool::SshKeyscan => system32.map(|s| s.join("OpenSSH")),
             Tool::PowerShell => system32.map(|s| s.join("WindowsPowerShell").join("v1.0")),
             Tool::ServiceControl
@@ -266,8 +271,9 @@ fn first_existing(candidates: Vec<PathBuf>, exists: &dyn Fn(&Path) -> bool) -> T
 pub enum Feature {
     /// Raising and lowering tunnels and reading their service state.
     TunnelControl,
-    /// Checking that a tunnel carries traffic. Without it tunnel control is blocked too
-    /// ([`Capabilities::tunnels_available`]).
+    /// Checking that a tunnel carries traffic: its WireGuard handshake (`wg`), or ping for a
+    /// tunnel with a probe host. A tunnel whose check program is missing is blocked as a whole
+    /// ([`tunnel_needs`]).
     TunnelProbe,
     /// Waking through a relay, sleep and shutdown over SSH, the SSH checks of the wizard.
     SshActions,
@@ -300,7 +306,7 @@ impl Feature {
     pub fn tools(self) -> &'static [Tool] {
         match self {
             Feature::TunnelControl => &[Tool::WireGuard, Tool::ServiceControl],
-            Feature::TunnelProbe => &[Tool::Ping],
+            Feature::TunnelProbe => &[Tool::Wg, Tool::Ping],
             Feature::SshActions => &[Tool::Ssh],
             Feature::KeyManagement => &[Tool::SshKeygen, Tool::SshKeyscan],
             Feature::Rdp => &[Tool::Rdp],
@@ -323,6 +329,17 @@ impl Feature {
             Feature::Links => "links",
         }
     }
+}
+
+/// What a tunnel needs for everything it does: the WireGuard client and `sc` to run it, and its
+/// check program, `ping` with a probe host or `wg` without one. Without its check program its
+/// state cannot be known, so it is blocked as a whole (owner's decision of 15.11.2026).
+pub fn tunnel_needs(has_probe_host: bool) -> Vec<Need> {
+    let check = if has_probe_host { Tool::Ping } else { Tool::Wg };
+    [Tool::WireGuard, Tool::ServiceControl, check]
+        .into_iter()
+        .map(Need::Tool)
+        .collect()
 }
 
 /// Something an action needs to run.
@@ -426,19 +443,6 @@ impl Capabilities {
             .collect()
     }
 
-    /// Whether every tool of `feature` was found.
-    pub fn available(&self, feature: Feature) -> bool {
-        self.missing_for(feature).is_empty()
-    }
-
-    /// The tools missing for anything a tunnel does: control and the probe (without the probe
-    /// the tunnel's state cannot be known, so control is blocked as well).
-    pub fn missing_for_tunnels(&self) -> Vec<Tool> {
-        let mut missing = self.missing_for(Feature::TunnelControl);
-        missing.extend(self.missing_for(Feature::TunnelProbe));
-        missing
-    }
-
     /// Which of `needs` are missing, in their order.
     pub fn missing(&self, needs: &[Need]) -> Vec<Need> {
         needs
@@ -456,9 +460,9 @@ impl Capabilities {
         self.missing_programs.iter().map(String::as_str)
     }
 
-    /// Whether tunnels can be raised, lowered and checked.
-    pub fn tunnels_available(&self) -> bool {
-        self.missing_for_tunnels().is_empty()
+    /// Whether every tool of `feature` was found.
+    pub fn available(&self, feature: Feature) -> bool {
+        self.missing_for(feature).is_empty()
     }
 }
 
@@ -583,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn features_need_all_their_tools_and_tunnels_also_need_ping() {
+    fn features_need_all_their_tools_and_tunnels_need_their_check_program() {
         let found = |t: Tool| {
             (
                 t,
@@ -593,24 +597,33 @@ mod tests {
         let caps = Capabilities::from_statuses([
             found(Tool::WireGuard),
             found(Tool::ServiceControl),
+            found(Tool::Wg),
             found(Tool::Ssh),
             found(Tool::SshKeygen),
         ]);
         assert!(caps.available(Feature::TunnelControl));
-        assert!(!caps.available(Feature::TunnelProbe));
-        assert!(!caps.tunnels_available());
-        assert_eq!(caps.missing_for_tunnels(), [Tool::Ping]);
+        assert!(
+            caps.missing(&tunnel_needs(false)).is_empty(),
+            "handshake check"
+        );
+        assert_eq!(
+            caps.missing(&tunnel_needs(true)),
+            [Need::Tool(Tool::Ping)],
+            "ping check"
+        );
         assert!(caps.available(Feature::SshActions));
         assert_eq!(caps.missing_for(Feature::KeyManagement), [Tool::SshKeyscan]);
         assert!(caps.available(Feature::MagicPacket));
         assert_eq!(caps.missing_for(Feature::Rdp), [Tool::Rdp]);
-
         let none = Capabilities::from_statuses([]);
         assert_eq!(
-            none.missing_for_tunnels(),
-            [Tool::WireGuard, Tool::ServiceControl, Tool::Ping]
+            none.missing(&tunnel_needs(false)),
+            [
+                Need::Tool(Tool::WireGuard),
+                Need::Tool(Tool::ServiceControl),
+                Need::Tool(Tool::Wg)
+            ]
         );
-        assert!(Capabilities::all_found().tunnels_available());
     }
 
     #[test]

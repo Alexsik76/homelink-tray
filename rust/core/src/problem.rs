@@ -64,11 +64,13 @@ pub enum Code {
     TunnelUnknown,
     /// A tunnel cannot be deleted while PCs use it. Parameters: `tunnel`, `pcs`.
     TunnelInUse,
+    /// Another tunnel of the settings runs this WireGuard tunnel already. Parameter: `name`.
+    TunnelTaken,
 }
 
 impl Code {
     /// Every code, for tests.
-    pub const ALL: [Code; 27] = [
+    pub const ALL: [Code; 28] = [
         Self::Required,
         Self::NameTaken,
         Self::HostInvalid,
@@ -96,6 +98,7 @@ impl Code {
         Self::RelayUnknown,
         Self::TunnelUnknown,
         Self::TunnelInUse,
+        Self::TunnelTaken,
     ];
 
     /// The suffix of the locale key: `problem.<as_str>`.
@@ -128,6 +131,7 @@ impl Code {
             Self::RelayUnknown => "relay_unknown",
             Self::TunnelUnknown => "tunnel_unknown",
             Self::TunnelInUse => "tunnel_in_use",
+            Self::TunnelTaken => "tunnel_taken",
         }
     }
 
@@ -141,7 +145,7 @@ impl Code {
             | Self::PowerSshNeedsBoth
             | Self::RelayUnknown
             | Self::TunnelUnknown => &[],
-            Self::NameTaken | Self::ConfName => &["name"],
+            Self::NameTaken | Self::ConfName | Self::TunnelTaken => &["name"],
             Self::HostInvalid
             | Self::PortInvalid
             | Self::MacInvalid

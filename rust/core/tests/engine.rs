@@ -183,3 +183,35 @@ fn the_harness_is_deterministic() {
     };
     assert_eq!(run(), run());
 }
+
+/// `single_config` with the tunnel's probe host removed: the tunnel is checked by its
+/// WireGuard handshake.
+fn handshake_config() -> homelink_core::config::Config {
+    let mut config = single_config();
+    for t in &mut config.tunnels {
+        t.probe_host = None;
+    }
+    config
+}
+
+#[test]
+fn a_tunnel_without_a_probe_host_is_up_when_its_server_gives_a_handshake() {
+    let mut h = Harness::new(handshake_config());
+    h.tunnel.set_running(&tunnel_id("home"), true);
+    h.settle();
+    assert_eq!(
+        h.engine.machine().tunnel_state(&tunnel_id("home")),
+        Some(homelink_core::domain::TunnelState::Up),
+        "no ping is needed"
+    );
+
+    // The service runs but the server is silent: the tunnel is not up.
+    let mut h = Harness::new(handshake_config());
+    h.tunnel.set_running(&tunnel_id("home"), true);
+    h.tunnel.set_server_silent(&tunnel_id("home"), true);
+    h.settle();
+    assert_eq!(
+        h.engine.machine().tunnel_state(&tunnel_id("home")),
+        Some(homelink_core::domain::TunnelState::Starting)
+    );
+}

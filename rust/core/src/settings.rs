@@ -322,8 +322,9 @@ mod tests {
                 .tunnel(&tunnel_id("home"))
                 .unwrap()
                 .probe_host
-                .as_str(),
-            "192.168.88.254"
+                .as_ref()
+                .map(|h| h.as_str()),
+            Some("192.168.88.254")
         );
         assert_eq!(change.config.pcs, config.pcs);
         assert_valid(&change);

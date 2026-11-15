@@ -26,9 +26,11 @@ name = "Home"
 kind = "wireguard"
 conf = 'C:\Program Files\WireGuard\Data\Configurations\home.conf.dpapi'
 wireguard_exe = 'C:\Program Files\WireGuard\wireguard.exe'
-probe_host = "192.168.88.1"  # answers ping only while the tunnel works
-timeout = 20                 # seconds to wait for probe_host after the start
-ping_timeout_ms = 1000
+timeout = 20                 # seconds to wait for the tunnel to work after the start
+ping_timeout_ms = 1000       # used only with probe_host
+# The tunnel counts as working when its server gives a WireGuard handshake (read with wg.exe).
+# To ping a host behind the tunnel instead, add:
+# probe_host = "192.168.88.1"  # answers ping only while the tunnel works
 
 # A device in the PC's network that sends the wake-up packet when told to over SSH:
 # routeros | etherwake | wakeonlan

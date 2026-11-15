@@ -98,7 +98,11 @@ impl TunnelForm {
         Self {
             name: tunnel.name.clone(),
             conf: conf.clone(),
-            probe_host: tunnel.probe_host.to_string(),
+            probe_host: tunnel
+                .probe_host
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
             wireguard_exe: exe.clone(),
             timeout_seconds: tunnel.timeout.as_secs().to_string(),
             ping_timeout_ms: tunnel.ping_timeout.as_millis().to_string(),
@@ -131,7 +135,29 @@ impl TunnelForm {
             out.push(Problem::new(field::NAME, Code::NameTaken).with("name", name));
         }
         let conf = forms::wireguard_conf(field::CONF, &self.conf, &mut out);
-        let probe_host = forms::host(field::PROBE_HOST, &self.probe_host, &mut out);
+        // One WireGuard tunnel is one entry: two entries would fight over its service.
+        if let Some(conf) = &conf
+            && let Ok(wg_name) = TunnelKind::wireguard_name(conf)
+            && config.tunnels.iter().any(|t| {
+                Some(&t.id) != own
+                    && match &t.kind {
+                        TunnelKind::WireGuardService { conf, .. } => {
+                            TunnelKind::wireguard_name(conf)
+                                .is_ok_and(|n| n.eq_ignore_ascii_case(&wg_name))
+                        }
+                        #[allow(unreachable_patterns)]
+                        _ => false,
+                    }
+            })
+        {
+            out.push(Problem::new(field::CONF, Code::TunnelTaken).with("name", &wg_name));
+        }
+        // Optional: empty means the WireGuard handshake checks the tunnel.
+        let probe_host = if self.probe_host.trim().is_empty() {
+            Some(None)
+        } else {
+            forms::host(field::PROBE_HOST, &self.probe_host, &mut out).map(Some)
+        };
         let exe = forms::required(field::WIREGUARD_EXE, &self.wireguard_exe, &mut out);
         let timeout = forms::seconds(field::TIMEOUT, &self.timeout_seconds, &mut out);
         let ping_timeout = forms::millis(field::PING_TIMEOUT, &self.ping_timeout_ms, &mut out);
@@ -218,7 +244,10 @@ mod tests {
         let tunnel = filled(&config).validate(&config).unwrap();
         assert_eq!(tunnel.id.as_str(), "lab");
         assert_eq!(tunnel.name, "Lab");
-        assert_eq!(tunnel.probe_host.as_str(), "10.9.0.1");
+        assert_eq!(
+            tunnel.probe_host.as_ref().map(|h| h.as_str()),
+            Some("10.9.0.1")
+        );
         assert_eq!(tunnel.timeout, Duration::from_secs(20));
     }
 

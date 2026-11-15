@@ -15,6 +15,7 @@ pub mod config;
 pub mod domain;
 pub mod engine;
 mod forms;
+pub mod handshake;
 pub mod help;
 pub mod i18n;
 mod ids;

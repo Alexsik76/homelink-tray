@@ -22,6 +22,8 @@ development (release candidates are published as pre-releases). The released Pyt
   shut down ask for a second click.
 - **Tray icon.** The screen of the monitor glyph shows the PCs as a whole, the corner square
   the tunnels; the tooltip says how many tunnels are up and how many PCs are online.
+- **Tunnels** count as working when their server gives a WireGuard handshake (or, if a probe
+  host is set, when it answers ping).
 - **Wake.** On a PC behind a tunnel, "Wake" brings the tunnel up first. The program never drops
   a tunnel by itself: only the tunnel button does. A PC counts as online when all of its
   readiness ports accept a TCP connection.
@@ -60,8 +62,8 @@ to the hosts in its settings. CI fails if an HTTP or TLS client library enters t
    template ([`rust/app/config.example.toml`](rust/app/config.example.toml)) and exits.
 3. Start it again. The tunnel, relay and PC of the template are examples: in the settings
    window (the button at the bottom of the panel) edit or delete them, add tunnels with the
-   tunnel form (the `.conf.dpapi` file of the imported tunnel and a host that answers ping only
-   through it) and PCs with the wizard. The wizard creates SSH keys, shows the commands to run
+   tunnel form (pick one of the tunnels imported into the WireGuard client) and PCs with the
+   wizard. The wizard creates SSH keys, shows the commands to run
    on the relay and on the PC, checks the connections and asks before it trusts a host key.
    `config.toml` can also be edited by hand.
 

@@ -105,7 +105,7 @@
   "help.files.title": "Файли програми",
   "help.files.body": "Поруч із config.toml лежать: журнал homelink.log (до 1 МБ, дві попередні копії), файл блокування homelink.lock (не дає запустити другу копію), тека keys з ключами SSH і тека rdp з файлами віддаленого робочого стола. Програма працює з правами адміністратора, бо служба тунелю WireGuard їх потребує.",
   "help.privacy.title": "Приватність",
-  "help.privacy.body": "HomeLink не зберігає паролів, не надсилає телеметрії й не перевіряє оновлень. Програма з'єднується лише з вузлами з налаштувань: перевіряє порти, пінгує вузол тунелю, надсилає магічні пакети, підключається через SSH і виконує вказані вами команди.",
+  "help.privacy.body": "HomeLink не зберігає паролів, не надсилає телеметрії й не перевіряє оновлень. Програма з'єднується лише з вузлами з налаштувань: перевіряє порти, читає рукостискання тунелю (або пінгує вузол перевірки), надсилає магічні пакети, підключається через SSH і виконує вказані вами команди.",
   "settings.section.tunnels": "Тунелі",
   "settings.section.pcs": "ПК",
   "settings.add_tunnel": "Додати тунель",
@@ -118,8 +118,8 @@
   "tunnel.form.title_edit": "Змінити тунель {tunnel}",
   "tunnel.form.save": "Зберегти",
   "tunnel.form.cancel": "Скасувати",
-  "tunnel.field.conf": "Файл конфігурації WireGuard",
-  "tunnel.hint.conf": "Файл .conf або .conf.dpapi",
+  "tunnel.field.conf": "Тунель WireGuard",
+  "tunnel.hint.conf": "Тунелі, імпортовані в клієнт WireGuard",
   "tunnel.field.probe_host": "Адреса для перевірки",
   "tunnel.hint.probe_host": "Адреса, що відповідає на ping лише поки тунель працює.",
   "tunnel.field.exe": "Шлях до wireguard.exe",
@@ -304,5 +304,9 @@
   "notify.tunnel_programs_missing.title": "Тунелі недоступні",
   "notify.tunnel_programs_missing.body": "Не знайдено: {tools}. ПК без тунелю працюють і далі.",
   "notify.ssh_missing.title": "Дії через SSH недоступні",
-  "notify.ssh_missing.body": "Не знайдено клієнт OpenSSH: пробудження через посередника, сон і вимкнення не працюють."
+  "notify.ssh_missing.body": "Не знайдено клієнт OpenSSH: пробудження через посередника, сон і вимкнення не працюють.",
+  "problem.tunnel_taken": "Тунель {name} уже додано",
+  "tool.wg": "wg",
+  "tunnel.form.empty": "У клієнті WireGuard ще немає імпортованих тунелів. Імпортуйте тунель і натисніть «Перевірити знову».",
+  "tunnel.form.taken": "{name} — уже додано"
 }
