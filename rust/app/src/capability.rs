@@ -133,6 +133,7 @@ mod tests {
                 .all(|p| p.to_string_lossy().ends_with("wireguard.exe")),
             "{wireguard:?}"
         );
-        assert_eq!(programs, ["wakeonlan"]);
+        // laptop shuts down by an ssh command, office-pc wakes by a wakeonlan command.
+        assert_eq!(programs, ["ssh", "wakeonlan"]);
     }
 }
