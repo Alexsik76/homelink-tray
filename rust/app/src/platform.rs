@@ -124,6 +124,32 @@ pub(crate) fn info(text: &str) {
     show(text, true);
 }
 
+/// The local time zone's offset from UTC in minutes (east positive), including summer time
+/// while it applies; `None` when Windows does not say, and off Windows.
+pub(crate) fn utc_offset_minutes() -> Option<i32> {
+    #[cfg(windows)]
+    {
+        win32::utc_offset_minutes()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Writes `text` to standard output for the console options (`--version`, `--check-config`).
+/// The Windows build is a GUI program without a console of its own, so it first attaches to the
+/// console of the program that started it (a command prompt); a redirected output (a pipe or a
+/// file) is used as it is.
+pub(crate) fn console(text: &str) {
+    use std::io::Write;
+    #[cfg(windows)]
+    win32::attach_parent_console();
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{text}");
+    let _ = out.flush();
+}
+
 fn show(text: &str, information: bool) {
     #[cfg(windows)]
     win32::message_box(text, information);
@@ -141,7 +167,11 @@ mod win32 {
     use std::ffi::c_void;
 
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+    use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::System::Time::{
+        GetTimeZoneInformation, TIME_ZONE_ID_INVALID, TIME_ZONE_INFORMATION,
+    };
     use windows::Win32::UI::Shell::{
         NIF_ICON, NIF_INFO, NIF_STATE, NIIF_ERROR, NIIF_INFO, NIIF_WARNING, NIM_ADD, NIM_DELETE,
         NIM_MODIFY, NIS_HIDDEN, NOTIFYICONDATAW, Shell_NotifyIconW,
@@ -283,6 +313,33 @@ mod win32 {
             );
         }
         rect
+    }
+
+    /// The offset of local time from UTC in minutes, east positive. Windows gives the bias the
+    /// other way round (UTC = local + bias), plus the standard or daylight bias in force.
+    pub(super) fn utc_offset_minutes() -> Option<i32> {
+        let mut info = TIME_ZONE_INFORMATION::default();
+        // SAFETY: the call writes one TIME_ZONE_INFORMATION into `info`, which lives until it
+        // returns.
+        let id = unsafe { GetTimeZoneInformation(&mut info) };
+        // 1 = TIME_ZONE_ID_STANDARD, 2 = TIME_ZONE_ID_DAYLIGHT (0: the zone has no summer time).
+        let extra = match id {
+            TIME_ZONE_ID_INVALID => return None,
+            1 => info.StandardBias,
+            2 => info.DaylightBias,
+            _ => 0,
+        };
+        Some(-(info.Bias + extra))
+    }
+
+    /// Attaches to the console of the parent process when the standard output is not
+    /// redirected; nothing happens when there is no such console.
+    pub(super) fn attach_parent_console() {
+        // SAFETY: a plain call without pointers; a failure (no parent console, or one attached
+        // already) leaves the process as it was.
+        unsafe {
+            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+        }
     }
 
     /// Shows a message box with no owner window.

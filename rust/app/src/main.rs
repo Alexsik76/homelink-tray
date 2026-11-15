@@ -8,6 +8,10 @@
 //! - **`--demo`** (only in a build with the `demo` feature): the engine on the core test
 //!   fakes with simulated delays ([`demo`]).
 //!
+//! Two console options do their work and exit without a window and without administrator
+//! rights: `--version` prints the version, `--check-config` validates the settings file (the
+//! one of `--config`, or `config.toml` next to the program) and prints every problem.
+//!
 //! See `docs/rust-architecture.md`, sections 2, 7 and 9.
 #![windows_subsystem = "windows"]
 
@@ -53,6 +57,10 @@ struct Options {
     config: Option<PathBuf>,
     /// `--theme`: the colours of the panel (provisional, until the settings window has it).
     theme: ThemeSetting,
+    /// `--version`: print the version and exit.
+    version: bool,
+    /// `--check-config`: validate the settings file and exit.
+    check_config: bool,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
@@ -61,11 +69,15 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
         language: None,
         config: None,
         theme: ThemeSetting::Auto,
+        version: false,
+        check_config: false,
     };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--demo" => options.demo = true,
+            "--version" => options.version = true,
+            "--check-config" => options.check_config = true,
             "--lang" => {
                 let value = args.next().ok_or("--lang needs a value: auto, en or uk")?;
                 options.language =
@@ -99,6 +111,19 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if options.version {
+        platform::console(&version_line());
+        return ExitCode::SUCCESS;
+    }
+    if options.check_config {
+        let (ok, text) = check_config(options.config.as_deref());
+        platform::console(&text);
+        return if ok {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
+    }
     if options.demo {
         return run_demo(options.language, options.theme);
     }
@@ -133,6 +158,24 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
         Err(real::Stop::Restarted) => ExitCode::SUCCESS,
+    }
+}
+
+/// What `--version` prints.
+fn version_line() -> String {
+    format!("HomeLink {}", env!("CARGO_PKG_VERSION"))
+}
+
+/// `--check-config`: loads the settings file without creating it and says whether it is valid.
+/// The text is English: it is meant for a console and for CI, not for the panel's user.
+fn check_config(explicit: Option<&std::path::Path>) -> (bool, String) {
+    let path = match std::env::current_exe() {
+        Ok(exe) => real::config_path(explicit, &exe),
+        Err(err) => return (false, format!("cannot find the program's folder: {err}")),
+    };
+    match homelink_core::config::load(&path) {
+        Ok(_) => (true, format!("{}: valid", path.display())),
+        Err(err) => (false, format!("{}: {err}", path.display())),
     }
 }
 
@@ -235,13 +278,31 @@ fn run_ui(
         },
     )?;
     tray.show()?;
-    // The engine thread is left to end with the process: `Handle::stop` was sent on quit.
-    let _engine_thread = engine.spawn()?;
+    let engine_thread = engine.spawn()?;
     start(handle.clone());
     slint::run_event_loop_until_quit()?;
     platform::remove_balloons();
     handle.stop();
+    join_engine(&engine_thread);
     Ok(())
+}
+
+/// How long the quit waits for the engine thread to end after `Handle::stop`.
+const ENGINE_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Waits until the engine thread has ended, at most [`ENGINE_STOP_WAIT`], so that its last log
+/// lines are written. Worker threads are not waited for: a job blocked in a system call (a
+/// `ssh` that hangs) must not keep the program alive, and the process ends them.
+fn join_engine(thread: &std::thread::JoinHandle<()>) {
+    let deadline = std::time::Instant::now() + ENGINE_STOP_WAIT;
+    while !thread.is_finished() {
+        if std::time::Instant::now() >= deadline {
+            log::warn!("the engine did not stop within {ENGINE_STOP_WAIT:?}; quitting anyway");
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    log::info!("the engine stopped");
 }
 
 #[cfg(test)]
@@ -250,6 +311,36 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn the_console_options_are_parsed() {
+        let o = parse_args(args(&["--version"])).unwrap();
+        assert!(o.version && !o.check_config && !o.demo);
+        let o = parse_args(args(&["--check-config", "--config", "x.toml"])).unwrap();
+        assert!(o.check_config && !o.version);
+        assert_eq!(o.config, Some(PathBuf::from("x.toml")));
+    }
+
+    #[test]
+    fn the_version_line_names_the_package_version() {
+        assert_eq!(
+            version_line(),
+            format!("HomeLink {}", env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    #[test]
+    fn the_example_settings_pass_the_check_and_a_missing_file_fails_it() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let example = dir.join("config.example.toml");
+        let (ok, text) = check_config(Some(&example));
+        assert!(ok, "{text}");
+        assert!(text.ends_with(": valid"), "{text}");
+        let missing = dir.join("no-such-config.toml");
+        let (ok, text) = check_config(Some(&missing));
+        assert!(!ok, "{text}");
+        assert!(!missing.exists());
     }
 
     #[test]

@@ -1,8 +1,9 @@
 //! The log file. The configuration names it (`[log] file`, relative to the configuration
 //! folder) and the level. It is rotated at 1 MB with two backups (`homelink.log.1` and
 //! `.2`), as the Python version did. A line is
-//! `2026-11-13T10:15:30Z INFO    target: message`; times are UTC, because the standard library
-//! has no local time zone.
+//! `2026-11-13T12:15:30+02:00 INFO    target: message`: local time with its offset from UTC. The
+//! offset comes from Windows for every line (so a change to or from summer time is followed); when
+//! it cannot be read, and off Windows, the time is UTC with `Z`.
 //!
 //! Nothing secret is logged: states, ids, host names and error texts only.
 
@@ -53,9 +54,41 @@ fn civil_from_days(days: u64) -> (u64, u64, u64) {
     (year, month, day)
 }
 
+/// `secs` seconds after 1970-01-01T00:00:00Z in the time zone `offset_minutes` east of UTC, as
+/// `YYYY-MM-DDTHH:MM:SS+HH:MM`; `None` (or a time before the epoch after the shift) gives
+/// [`format_utc`].
+pub(crate) fn format_local(secs: u64, offset_minutes: Option<i32>) -> String {
+    let Some(offset) = offset_minutes else {
+        return format_utc(secs);
+    };
+    let shift = i64::from(offset) * 60;
+    let Some(local) = i64::try_from(secs)
+        .ok()
+        .and_then(|s| s.checked_add(shift))
+        .and_then(|s| u64::try_from(s).ok())
+    else {
+        return format_utc(secs);
+    };
+    let mut text = format_utc(local);
+    text.pop(); // the `Z`
+    let sign = if offset < 0 { '-' } else { '+' };
+    let abs = offset.unsigned_abs();
+    text.push_str(&format!("{sign}{:02}:{:02}", abs / 60, abs % 60));
+    text
+}
+
 /// One log line, without the line end.
-pub(crate) fn format_line(secs: u64, level: log::Level, target: &str, message: &str) -> String {
-    format!("{} {level:<7} {target}: {message}", format_utc(secs))
+pub(crate) fn format_line(
+    secs: u64,
+    offset_minutes: Option<i32>,
+    level: log::Level,
+    target: &str,
+    message: &str,
+) -> String {
+    format!(
+        "{} {level:<7} {target}: {message}",
+        format_local(secs, offset_minutes)
+    )
 }
 
 /// The file name of rotated copy number `n` of `path`: `homelink.log` -> `homelink.log.1`.
@@ -169,6 +202,7 @@ impl Log for FileLogger {
             .map_or(0, |d| d.as_secs());
         let line = format_line(
             secs,
+            crate::platform::utc_offset_minutes(),
             record.level(),
             record.target(),
             &record.args().to_string(),
@@ -236,13 +270,34 @@ mod tests {
     }
 
     #[test]
+    fn local_times_carry_their_offset() {
+        assert_eq!(format_local(0, Some(120)), "1970-01-01T02:00:00+02:00");
+        assert_eq!(
+            format_local(1_700_000_000, Some(180)),
+            "2023-11-15T01:13:20+03:00"
+        );
+        assert_eq!(
+            format_local(86_400, Some(-330)),
+            "1970-01-01T18:30:00-05:30"
+        );
+        assert_eq!(format_local(0, Some(0)), "1970-01-01T00:00:00+00:00");
+        assert_eq!(format_local(0, None), "1970-01-01T00:00:00Z");
+        // Before the epoch after the shift: UTC instead.
+        assert_eq!(format_local(0, Some(-60)), "1970-01-01T00:00:00Z");
+        assert_eq!(
+            format_line(7200, Some(120), log::Level::Info, "x", "m"),
+            "1970-01-01T04:00:00+02:00 INFO    x: m"
+        );
+    }
+
+    #[test]
     fn a_line_has_time_level_target_and_message() {
         assert_eq!(
-            format_line(0, log::Level::Info, "homelink", "started"),
+            format_line(0, None, log::Level::Info, "homelink", "started"),
             "1970-01-01T00:00:00Z INFO    homelink: started"
         );
         assert_eq!(
-            format_line(0, log::Level::Warn, "x", "m"),
+            format_line(0, None, log::Level::Warn, "x", "m"),
             "1970-01-01T00:00:00Z WARN    x: m"
         );
     }
