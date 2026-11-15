@@ -8,6 +8,7 @@
 
 pub mod about;
 pub mod adapters;
+pub mod capabilities;
 pub mod checks;
 pub mod config;
 pub mod domain;
