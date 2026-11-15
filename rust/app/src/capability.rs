@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use homelink_core::adapters::command::StdCommandRunner;
-use homelink_core::capabilities::{self, Capabilities, Env, Tool};
+use homelink_core::capabilities::{self, Capabilities, Env, Tool, ToolStatus};
 use homelink_core::config::Config;
 use homelink_core::domain::{PowerMethod, TunnelKind, WakeMethod};
 use homelink_core::engine::Handle;
@@ -51,8 +51,12 @@ pub(crate) fn config_paths(config: &Config) -> (Vec<PathBuf>, Vec<String>) {
 pub(crate) struct Checker {
     /// The real runner; `None` in demo mode, where every program counts as found.
     runner: Option<Arc<StdCommandRunner>>,
+    /// Demo mode: the programs it pretends are missing.
+    demo_missing: Vec<Tool>,
     handle: Handle,
     last: Mutex<Option<Capabilities>>,
+    /// The local time of the last lookup, `HH:MM`.
+    checked_at: Mutex<Option<String>>,
 }
 
 impl Checker {
@@ -60,17 +64,22 @@ impl Checker {
     pub(crate) fn real(runner: Arc<StdCommandRunner>, handle: Handle) -> Self {
         Self {
             runner: Some(runner),
+            demo_missing: Vec::new(),
             handle,
             last: Mutex::new(None),
+            checked_at: Mutex::new(None),
         }
     }
 
-    /// A checker for the demo mode: every program is found.
-    pub(crate) fn demo(handle: Handle) -> Self {
+    /// A checker for the demo mode: every program is found except `missing` (`--missing`).
+    #[cfg(feature = "demo")]
+    pub(crate) fn demo(handle: Handle, missing: Vec<Tool>) -> Self {
         Self {
             runner: None,
+            demo_missing: missing,
             handle,
             last: Mutex::new(None),
+            checked_at: Mutex::new(None),
         }
     }
 
@@ -85,15 +94,42 @@ impl Checker {
                 runner.set_programs(caps.program_paths());
                 caps
             }
-            None => Capabilities::all_found(),
+            None => Capabilities::from_statuses(
+                Tool::ALL
+                    .into_iter()
+                    .filter(|t| !self.demo_missing.contains(t))
+                    .map(|t| {
+                        (
+                            t,
+                            ToolStatus::Found(PathBuf::from(format!("demo/{}", t.program()))),
+                        )
+                    }),
+            ),
         };
         if let Ok(mut last) = self.last.lock() {
             log_changes(last.as_ref(), &caps);
             *last = Some(caps.clone());
         }
+        if let Ok(mut at) = self.checked_at.lock() {
+            *at = Some(local_time());
+        }
         self.handle.set_capabilities(caps.clone());
         caps
     }
+
+    /// The local time of the last lookup, `HH:MM`.
+    pub(crate) fn checked_at(&self) -> Option<String> {
+        self.checked_at.lock().ok().and_then(|at| at.clone())
+    }
+}
+
+/// The local time now as `HH:MM` (UTC where the time zone is unknown).
+fn local_time() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let stamp = crate::logging::format_local(secs, crate::platform::utc_offset_minutes());
+    stamp.get(11..16).unwrap_or_default().to_owned()
 }
 
 /// Logs every tool whose status differs from the previous lookup (all of them the first time),

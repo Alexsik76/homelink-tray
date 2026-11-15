@@ -1547,7 +1547,7 @@ fn tunnel_view_of(m: &Machine, id: &str) -> TunnelView {
 #[test]
 fn without_wireguard_tunnels_are_not_run_or_checked_and_loose_pcs_still_work() {
     let mut m = multi();
-    m.set_capabilities(without(&[Tool::WireGuard]));
+    let _ = m.set_capabilities(without(&[Tool::WireGuard]));
     let out = m.step(Input::Tick, at(0));
     assert_eq!(
         out.effects,
@@ -1572,7 +1572,7 @@ fn without_wireguard_tunnels_are_not_run_or_checked_and_loose_pcs_still_work() {
 #[test]
 fn without_ping_tunnels_are_blocked_as_a_whole() {
     let mut m = multi();
-    m.set_capabilities(without(&[Tool::Ping]));
+    let _ = m.set_capabilities(without(&[Tool::Ping]));
     let out = m.step(Input::Tick, at(0));
     assert!(
         !out.effects
@@ -1592,7 +1592,7 @@ fn without_ping_tunnels_are_blocked_as_a_whole() {
 #[test]
 fn without_openssh_relay_wake_and_ssh_power_are_unavailable() {
     let mut m = multi();
-    m.set_capabilities(without(&[Tool::Ssh]));
+    let _ = m.set_capabilities(without(&[Tool::Ssh]));
     let ssh = A::Missing(vec![Need::Tool(Tool::Ssh)]);
     assert_eq!(pc_view(&m, "desktop").availability.wake, ssh, "relay wake");
     assert_eq!(
@@ -1617,7 +1617,9 @@ fn without_openssh_relay_wake_and_ssh_power_are_unavailable() {
 #[test]
 fn a_missing_user_program_disables_only_its_action() {
     let mut m = multi();
-    m.set_capabilities(Capabilities::all_found().with_missing_programs(["wakeonlan".to_owned()]));
+    let _ = m.set_capabilities(
+        Capabilities::all_found().with_missing_programs(["wakeonlan".to_owned()]),
+    );
     assert_eq!(
         pc_view(&m, "office-pc").availability.wake,
         A::Missing(vec![Need::Program("wakeonlan".into())])
@@ -1631,9 +1633,9 @@ fn a_missing_user_program_disables_only_its_action() {
 #[test]
 fn programs_found_again_bring_the_tunnels_back() {
     let mut m = multi();
-    m.set_capabilities(without(&[Tool::WireGuard]));
+    let _ = m.set_capabilities(without(&[Tool::WireGuard]));
     m.step(Input::Tick, at(0));
-    m.set_capabilities(Capabilities::all_found());
+    let _ = m.set_capabilities(Capabilities::all_found());
     let out = m.step(Input::Tick, at(1));
     let probed: Vec<&Effect> = out
         .effects
@@ -1648,7 +1650,7 @@ fn programs_found_again_bring_the_tunnels_back() {
 fn losing_the_tunnel_programs_makes_an_up_tunnel_and_its_pcs_unknown() {
     let mut m = single();
     online(&mut m);
-    m.set_capabilities(without(&[Tool::ServiceControl]));
+    let _ = m.set_capabilities(without(&[Tool::ServiceControl]));
     assert_eq!(m.tunnel_state(&home()), Some(T::Down));
     assert_eq!(m.pc_state(&desktop()), Some(P::Unknown));
     let view = m.snapshot();
@@ -1658,4 +1660,51 @@ fn losing_the_tunnel_programs_makes_an_up_tunnel_and_its_pcs_unknown() {
     let out = m.step(Input::Tick, at(100));
     assert!(out.effects.is_empty(), "{:?}", out.effects);
     assert_eq!(out.next_wake, None, "nothing to poll: no busy loop");
+}
+
+#[test]
+fn missing_programs_are_announced_once_and_again_only_when_they_change() {
+    let mut m = multi();
+    let notices = m.set_capabilities(without(&[Tool::WireGuard, Tool::Ssh]));
+    assert_eq!(
+        notices,
+        [
+            Notice::TunnelProgramsMissing {
+                tools: vec![Tool::WireGuard]
+            },
+            Notice::SshMissing
+        ]
+    );
+    // The same lookup again ("Перевірити знову"): silence.
+    assert!(
+        m.set_capabilities(without(&[Tool::WireGuard, Tool::Ssh]))
+            .is_empty()
+    );
+    // Ping goes missing too: the tunnel notice comes again with both; ssh is unchanged.
+    assert_eq!(
+        m.set_capabilities(without(&[Tool::WireGuard, Tool::Ssh, Tool::Ping])),
+        [Notice::TunnelProgramsMissing {
+            tools: vec![Tool::WireGuard, Tool::Ping]
+        }]
+    );
+    // Found again: nothing to announce.
+    assert!(m.set_capabilities(Capabilities::all_found()).is_empty());
+}
+
+#[test]
+fn a_configuration_without_tunnels_or_ssh_announces_nothing() {
+    let mut config = multi_config();
+    config.tunnels.clear();
+    config.pcs.retain(|p| p.tunnel.is_none());
+    for pc in &mut config.pcs {
+        pc.power = None;
+        if matches!(pc.wake, Some(WakeMethod::Relay { .. })) {
+            pc.wake = None;
+        }
+    }
+    let mut m = Machine::new(&config, Time::ZERO);
+    assert!(
+        m.set_capabilities(Capabilities::from_statuses([]))
+            .is_empty()
+    );
 }

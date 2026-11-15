@@ -14,6 +14,7 @@
 //! thread itself never runs user-supplied code.
 
 use crate::capabilities::Capabilities;
+use crate::notice::Notice;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -104,6 +105,8 @@ pub struct Engine {
     last: Option<Snapshot>,
     stopped: bool,
     generation: u64,
+    /// Notices of the lookup made before the start, delivered when the engine runs.
+    pending: Vec<Notice>,
 }
 
 impl Engine {
@@ -121,6 +124,7 @@ impl Engine {
             last: None,
             stopped: false,
             generation: 0,
+            pending: Vec::new(),
         };
         (engine, handle)
     }
@@ -158,6 +162,10 @@ impl Engine {
 
     /// Runs until stopped: pump, then sleep until a message arrives or the next wake-up.
     pub fn run(mut self) {
+        for notice in std::mem::take(&mut self.pending) {
+            log::info!("notice: {notice:?}");
+            self.deps.sink.notify(notice);
+        }
         while !self.stopped {
             let next = self.pump();
             if self.stopped {
@@ -186,7 +194,7 @@ impl Engine {
     /// Applies a lookup of the programs before the engine starts, so that its first step
     /// already knows what is missing (later lookups go through [`Handle::set_capabilities`]).
     pub fn with_capabilities(mut self, caps: Capabilities) -> Self {
-        self.machine.set_capabilities(caps);
+        self.pending = self.machine.set_capabilities(caps);
         self.last = None;
         self
     }
@@ -215,15 +223,20 @@ impl Engine {
                 self.generation += 1;
                 let caps = self.machine.capabilities().clone();
                 self.machine = Machine::new(&config, now);
-                self.machine.set_capabilities(caps);
+                // The same programs as before: nothing to announce again.
+                let _ = self.machine.set_capabilities(caps);
                 self.config = Arc::new(*config);
                 self.last = None;
                 self.publish_if_changed();
                 return true;
             }
             Message::Capabilities(caps) => {
-                self.machine.set_capabilities(*caps);
+                let notices = self.machine.set_capabilities(*caps);
                 self.publish_if_changed();
+                for notice in notices {
+                    log::info!("notice: {notice:?}");
+                    self.deps.sink.notify(notice);
+                }
                 return true;
             }
             Message::Stop => {

@@ -13,6 +13,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use homelink_core::about::About;
+use homelink_core::capabilities::Tool;
+use homelink_core::capability_page;
 use homelink_core::config::Config;
 use homelink_core::domain::{PcId, TunnelId};
 use homelink_core::engine::Handle;
@@ -30,8 +32,8 @@ use slint::{CloseRequestResponse, ComponentHandle, ModelRc, SharedString, VecMod
 use crate::icon;
 use crate::links;
 use crate::view::{
-    Flow, HelpSection, Motion, Nav, Panel, SettingsRow, SettingsWindow, Theme, TunnelFormWindow,
-    WizardWindow, Words,
+    CapabilityTile, Flow, HelpSection, Motion, Nav, Panel, SettingsRow, SettingsWindow, Theme,
+    TunnelFormWindow, WizardWindow, Words,
 };
 use crate::windows::rdp::RdpLauncher;
 use crate::wizard_ui;
@@ -183,6 +185,11 @@ pub(crate) fn install(panel: &Panel, setup: Setup) -> Result<(), slint::Platform
         .global::<Flow>()
         .on_advance(|| with_manage(Manage::save_form));
     form_window.on_cancel(|| with_manage(Manage::cancel_form));
+    form_window.on_recheck(|| with_manage(Manage::recheck_form));
+    form_window.on_open_capabilities(|| with_manage(Manage::form_to_capabilities));
+    form_window.on_open_link(|url| {
+        with_manage(|m| links::open(Arc::clone(&m.persist.opener), url.to_string()));
+    });
     wire_wizard(&wizard);
     on_escape(settings.window(), escape_settings);
     on_escape(form_window.window(), escape_form);
@@ -227,6 +234,7 @@ fn wire_settings(settings: &SettingsWindow) {
     settings.on_delete_tunnel(|id| with_manage(|m| m.delete_tunnel(id.as_str())));
     settings.on_delete_pc(|id| with_manage(|m| m.delete_pc(id.as_str())));
     settings.on_disarm(|| with_manage(Manage::disarm));
+    settings.on_recheck(|| with_manage(Manage::recheck));
     settings.on_open_link(|url| {
         with_manage(|m| links::open(Arc::clone(&m.persist.opener), url.to_string()));
     });
@@ -278,6 +286,8 @@ fn fill_words(w: &Words, tr: &Translator) {
     w.set_settings_title(t("settings.title"));
     w.set_nav_tunnels(t("settings.nav.tunnels_pcs"));
     w.set_nav_help(t("settings.nav.help"));
+    w.set_nav_capabilities(t("settings.nav.capabilities"));
+    w.set_recheck(t("capability.recheck"));
     w.set_nav_about(t("settings.nav.about"));
     w.set_section_tunnels(t("settings.section.tunnels"));
     w.set_section_pcs(t("settings.section.pcs"));
@@ -431,7 +441,38 @@ impl Manage {
         *self.armed.borrow_mut() = None;
         self.settings.set_page_error("".into());
         self.refresh();
+        // The capability spec: the programs are looked up again when the settings open.
+        self.recheck();
         show_in_front(&self.settings);
+    }
+
+    /// Looks the programs up again and fills the capabilities page with the result.
+    pub(crate) fn recheck(&self) {
+        let caps = self.checker.check(&self.config.borrow());
+        let tiles: Vec<CapabilityTile> = capability_page::tiles(&self.tr, &caps)
+            .into_iter()
+            .map(|tile| CapabilityTile {
+                title: tile.title.into(),
+                found: tile.found,
+                line: tile.line.into(),
+                detail: tile.detail.into(),
+                link_label: tile
+                    .link
+                    .as_ref()
+                    .map(|l| l.label.clone())
+                    .unwrap_or_default()
+                    .into(),
+                link_url: tile.link.map(|l| l.url).unwrap_or_default().into(),
+            })
+            .collect();
+        self.settings
+            .set_capability_tiles(slint::ModelRc::new(slint::VecModel::from(tiles)));
+        let time = self.checker.checked_at().unwrap_or_default();
+        self.settings.set_capabilities_checked(
+            self.tr
+                .t("capability.checked", &[("time", time.as_str())])
+                .into(),
+        );
     }
 
     /// Esc on the settings: cancels a waiting delete, else closes the window.
@@ -582,8 +623,33 @@ impl Manage {
         window.set_probe_host(form.probe_host.clone().into());
         window.set_errors(model(vec![SharedString::default(); 3]));
         window.set_general_error("".into());
+        let wireguard = self.tr.t("tool.wireguard", &[]);
+        window.set_missing_title(
+            self.tr
+                .t("reason.tunnel", &[("what", wireguard.as_str())])
+                .into(),
+        );
+        window.set_missing_body(self.tr.t("tunnel.form.wireguard_missing", &[]).into());
+        window.set_install_label(self.tr.t("capability.how_install", &[]).into());
+        window.set_install_url(capability_page::WIREGUARD_URL.into());
+        window.set_capabilities_label(self.tr.t("settings.nav.capabilities", &[]).into());
         *self.form.borrow_mut() = Some(form);
+        self.recheck_form();
         show_in_front(window);
+    }
+
+    /// Looks the programs up again for the tunnel form: without the WireGuard client the form
+    /// shows the red block and cannot be saved.
+    fn recheck_form(&self) {
+        let caps = self.checker.check(&self.config.borrow());
+        self.form_window
+            .set_wireguard_missing(caps.status(Tool::WireGuard).path().is_none());
+    }
+
+    /// "Можливості системи" in the red block of the tunnel form.
+    fn form_to_capabilities(&self) {
+        self.settings.set_page(4);
+        self.open_settings();
     }
 
     /// Clears a waiting delete without redrawing (the caller redraws).
@@ -593,12 +659,28 @@ impl Manage {
 
     /// "Зберегти" of the tunnel form: saves the typed values, or shows what is wrong.
     fn save_form(&self) {
+        if self.form_window.get_wireguard_missing() {
+            return;
+        }
         let Some(mut form) = self.form.borrow().clone() else {
             return;
         };
         form.name = self.form_window.get_name().to_string();
         form.conf = self.form_window.get_conf().to_string();
         form.probe_host = self.form_window.get_probe_host().to_string();
+        // The tunnel file must exist (the capability spec, section 8); the demo has no files.
+        if self.persist.path.is_some()
+            && !form.conf.trim().is_empty()
+            && !std::path::Path::new(form.conf.trim()).is_file()
+        {
+            let mut errors = vec![SharedString::default(); 3];
+            if let Some(slot) = errors.get_mut(1) {
+                *slot = self.tr.t("tunnel.form.conf_missing", &[]).into();
+            }
+            self.form_window.set_errors(model(errors));
+            self.form_window.set_general_error("".into());
+            return;
+        }
         let result = settings::save_tunnel(&self.config.borrow(), &form);
         match result {
             Err(problems) => {

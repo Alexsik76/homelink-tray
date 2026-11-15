@@ -15,13 +15,24 @@ export component TunnelFormWindow inherits Window {
     in property <[string]> errors;
     // A failure of the save that no field shows.
     in property <string> general-error;
+    // The WireGuard client was not found: the red block, inactive fields, "Зберегти" inactive and
+    // "Перевірити знову" (artboard `TunnelForm`; the only place a missing tool is shown in red).
+    in property <bool> wireguard-missing;
+    in property <string> missing-title;
+    in property <string> missing-body;
+    in property <string> install-label;
+    in property <string> install-url;
+    in property <string> capabilities-label;
 
     callback cancel();
+    callback recheck();
+    callback open-link(string);
+    callback open-capabilities();
 
     title: Words.about-name + " — " + root.heading;
     icon: @image-url("icons/app.png");
     width: 420px;
-    height: 380px;
+    height: root.wireguard-missing ? 500px : 380px;
     background: Theme.bg;
     default-font-family: "Inter";
     default-font-size: 13px;
@@ -57,17 +68,67 @@ export component TunnelFormWindow inherits Window {
             spacing: 16px;
             alignment: start;
 
+            if root.wireguard-missing : Rectangle {
+                border-width: 1px;
+                border-color: Theme.state-fail;
+                background: Theme.surface;
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 6px;
+                    Text {
+                        text: root.missing-title;
+                        color: Theme.state-fail;
+                        font-size: 13px;
+                        font-weight: 600;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: root.missing-body;
+                        color: Theme.ink-2;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Text {
+                            text: root.install-label;
+                            color: install-ta.has-hover ? Theme.link-hover : Theme.link;
+                            font-size: 12px;
+                            install-ta := TouchArea {
+                                clicked => { root.open-link(root.install-url); }
+                            }
+                        }
+                        Text {
+                            text: "·";
+                            color: Theme.muted;
+                            font-size: 12px;
+                        }
+                        Text {
+                            text: root.capabilities-label;
+                            color: caps-ta.has-hover ? Theme.link-hover : Theme.link;
+                            font-size: 12px;
+                            caps-ta := TouchArea {
+                                clicked => { root.open-capabilities(); }
+                            }
+                        }
+                    }
+                }
+            }
             Field {
                 label: Words.field-name;
+                enabled: !root.wireguard-missing;
                 value <=> root.name;
                 error: root.errors[0];            }
             Field {
                 label: Words.tunnel-field-conf;
+                enabled: !root.wireguard-missing;
                 value <=> root.conf;
                 hint: Words.tunnel-hint-conf;
                 error: root.errors[1];            }
             Field {
                 label: Words.tunnel-field-probe;
+                enabled: !root.wireguard-missing;
                 value <=> root.probe-host;
                 hint: Words.tunnel-hint-probe;
                 error: root.errors[2];            }
@@ -90,6 +151,11 @@ export component TunnelFormWindow inherits Window {
                 padding: 12px;
                 spacing: 8px;
                 alignment: end;
+                if root.wireguard-missing : Btn {
+                    label: Words.recheck;
+                    kind: BtnKind.secondary;
+                    clicked => { root.recheck(); }
+                }
                 Btn {
                     label: Words.cancel;
                     kind: BtnKind.secondary;
@@ -98,7 +164,8 @@ export component TunnelFormWindow inherits Window {
                 Btn {
                     label: Words.save;
                     kind: BtnKind.primary;
-                    clicked => { Flow.advance(); }
+                    available: !root.wireguard-missing;
+                    clicked => { if (!root.wireguard-missing) { Flow.advance(); } }
                 }
             }
         }

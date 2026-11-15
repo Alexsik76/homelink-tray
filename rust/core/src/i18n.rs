@@ -302,7 +302,23 @@ impl Translator {
 
     /// Title and body of a notice.
     pub fn notice(&self, notice: &Notice) -> (String, String) {
-        let owned = notice.params();
+        let owned: Vec<(&str, String)> = notice
+            .params()
+            .into_iter()
+            .map(|(key, value)| {
+                if key == "tools" {
+                    // Tool codes become the names of the programs.
+                    let names: Vec<String> = value
+                        .split(',')
+                        .filter(|c| !c.is_empty())
+                        .map(|code| self.t(&format!("tool.{code}"), &[]))
+                        .collect();
+                    (key, names.join(", "))
+                } else {
+                    (key, value)
+                }
+            })
+            .collect();
         let params: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let key = notice.key();
         (
@@ -511,6 +527,22 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn a_missing_program_notice_names_the_programs() {
+        let uk = Translator::new(Lang::Uk);
+        let (title, body) = uk.notice(&Notice::TunnelProgramsMissing {
+            tools: vec![
+                crate::capabilities::Tool::WireGuard,
+                crate::capabilities::Tool::Ping,
+            ],
+        });
+        assert_eq!(title, "Тунелі недоступні");
+        assert_eq!(
+            body,
+            "Не знайдено: клієнт WireGuard, ping. ПК без тунелю працюють і далі."
+        );
     }
 
     #[test]

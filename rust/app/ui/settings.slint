@@ -14,6 +14,16 @@ export struct SettingsRow {
     armed: bool,
 }
 
+// One tile of the capabilities page (artboard `Capabilities`).
+export struct CapabilityTile {
+    title: string,
+    found: bool,
+    line: string,
+    detail: string,
+    link-label: string,
+    link-url: string,
+}
+
 // A navigation item: 36 high; the selected one has a bg fill and a 3 px ink bar on its left edge.
 component NavItem inherits Rectangle {
     in property <string> label;
@@ -143,7 +153,11 @@ export component SettingsWindow inherits Window {
     in property <string> slint-url;
     // The text of the third-party notices (page 3).
     in property <string> notices;
-    // The page: 0 tunnels and PCs, 1 help, 2 about, 3 third-party notices (opened from about).
+    // The tiles of the capabilities page and the time of the last lookup.
+    in property <[CapabilityTile]> capability-tiles;
+    in property <string> capabilities-checked;
+    // The page: 0 tunnels and PCs, 1 help, 2 about, 3 third-party notices (opened from about),
+    // 4 system capabilities.
     in-out property <int> page: 0;
 
     callback add-tunnel();
@@ -155,6 +169,8 @@ export component SettingsWindow inherits Window {
     // Any click on the page that is not one of its buttons cancels a waiting delete.
     callback disarm();
     callback open-link(string);
+    // "Перевірити знову" on the capabilities page.
+    callback recheck();
 
     title: Words.about-name + " — " + Words.settings-title;
     icon: @image-url("icons/app.png");
@@ -175,6 +191,11 @@ export component SettingsWindow inherits Window {
                     label: Words.nav-tunnels;
                     selected: root.page == 0;
                     clicked => { root.page = 0; root.disarm(); }
+                }
+                NavItem {
+                    label: Words.nav-capabilities;
+                    selected: root.page == 4;
+                    clicked => { root.page = 4; root.disarm(); }
                 }
                 NavItem {
                     label: Words.nav-help;
@@ -306,6 +327,128 @@ export component SettingsWindow inherits Window {
                     content-height: flick.content-height;
                     offset: -flick.content-y;
                     scroll-to(amount) => { flick.content-y = -amount; }
+                }
+            }
+
+            // System capabilities (artboard `Capabilities`): a header with the time of the last
+            // lookup and "Перевірити знову", then two columns of tiles. A missing program is shown
+            // neutrally: muted title, outline marker, no red.
+            if root.page == 4 : Rectangle {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+
+                caps-flick := Flickable {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    content-width: parent.width;
+                    content-height: caps-page.preferred-height;
+
+                    caps-page := VerticalLayout {
+                        padding: 16px;
+                        spacing: 12px;
+                        width: parent.width;
+
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Text {
+                                text: Words.nav-capabilities;
+                                color: Theme.ink;
+                                font-size: 13px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: root.capabilities-checked;
+                                color: Theme.muted;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+                            Btn {
+                                label: Words.recheck;
+                                clicked => { root.recheck(); }
+                            }
+                        }
+
+                        for pair in [0, 2, 4, 6] : HorizontalLayout {
+                            spacing: 8px;
+                            for i in [pair, pair + 1] : Rectangle {
+                                horizontal-stretch: 1;
+                                min-height: tile.preferred-height;
+                                background: Theme.surface;
+                                border-width: 1px;
+                                border-color: Theme.line;
+                                property <CapabilityTile> item: root.capability-tiles[i];
+                                visible: i < root.capability-tiles.length;
+                                tile := VerticalLayout {
+                                    padding: 12px;
+                                    spacing: 6px;
+                                    Text {
+                                        text: item.title;
+                                        color: item.found ? Theme.ink : Theme.muted;
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        wrap: word-wrap;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        VerticalLayout {
+                                            alignment: start;
+                                            padding-top: 4px;
+                                            StateMark {
+                                                mark: item.found ? Mark.ok : Mark.unknown;
+                                            }
+                                        }
+                                        Text {
+                                            text: item.line;
+                                            color: item.found ? Theme.ink : Theme.ink-2;
+                                            font-size: 12px;
+                                            wrap: word-wrap;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                    if item.detail != "" : Text {
+                                        text: item.detail;
+                                        color: Theme.muted;
+                                        font-size: 11px;
+                                        overflow: elide;
+                                    }
+                                    if item.link-url != "" : Rectangle {
+                                        height: 18px;
+                                        HorizontalLayout {
+                                            alignment: start;
+                                            cap-link := Text {
+                                                text: item.link-label;
+                                                color: cap-ta.has-hover ? Theme.link-hover : Theme.link;
+                                                font-size: 12px;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                        cap-ta := TouchArea {
+                                            width: cap-link.preferred-width;
+                                            height: parent.height;
+                                            x: 0px;
+                                            clicked => { root.open-link(item.link-url); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                VScroll {
+                    x: parent.width - 8px;
+                    y: 0px;
+                    height: parent.height;
+                    view-height: caps-flick.height;
+                    content-height: caps-flick.content-height;
+                    offset: -caps-flick.content-y;
+                    scroll-to(amount) => { caps-flick.content-y = -amount; }
                 }
             }
 

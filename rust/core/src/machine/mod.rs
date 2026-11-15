@@ -342,7 +342,32 @@ impl Machine {
     /// Takes the result of a new lookup of the programs. When the tunnel programs went
     /// missing, every tunnel becomes unknown (down and never checked) and so do the PCs behind
     /// them; nothing more is run for them until the programs are found again.
-    pub fn set_capabilities(&mut self, caps: Capabilities) {
+    ///
+    /// Returns the notices of the capability spec (section 6): tunnels in the settings whose
+    /// programs went missing, and SSH methods in the settings without the OpenSSH client. Each
+    /// is given once, and again only when what is missing changes (the first lookup at start
+    /// compares with "everything found").
+    pub fn set_capabilities(&mut self, caps: Capabilities) -> Vec<Notice> {
+        let mut notices = Vec::new();
+        let missing_now = caps.missing_for_tunnels();
+        if !self.tunnels.is_empty()
+            && !missing_now.is_empty()
+            && missing_now != self.caps.missing_for_tunnels()
+        {
+            notices.push(Notice::TunnelProgramsMissing {
+                tools: missing_now.clone(),
+            });
+        }
+        let uses_ssh = self.pcs.iter().any(|p| {
+            p.needs
+                .iter()
+                .flatten()
+                .any(|n| *n == Need::Tool(Tool::Ssh))
+        });
+        let ssh_missing = |c: &Capabilities| c.status(Tool::Ssh).path().is_none();
+        if uses_ssh && ssh_missing(&caps) && !ssh_missing(&self.caps) {
+            notices.push(Notice::SshMissing);
+        }
         let tunnels_lost = self.caps.tunnels_available() && !caps.tunnels_available();
         self.caps = caps;
         if tunnels_lost {
@@ -365,6 +390,7 @@ impl Machine {
                 self.set_pc_state(pi, PcState::Unknown);
             }
         }
+        notices
     }
 
     /// The programs this machine assumes.
