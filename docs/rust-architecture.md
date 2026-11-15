@@ -1,9 +1,10 @@
 # HomeLink 1.0: architecture of the Rust rewrite
 
 Status: proposal for stage 1 (design only, no code). It describes the rewrite of the
-Python 0.3.0 tray utility (`src/homelink/`, `tests/`) in Rust with Slint 1.18, released as
-v1.0.0 from the same repository. References such as `controller.py` point to the Python
-code that is ported; `docs/design.md` describes the Python-era UI and is revised in phase 6.
+Python 0.3.0 tray utility in Rust with Slint 1.18, released as v1.0.0 from the same
+repository. The Python code is archived in `legacy/python/` (`src/homelink/`, `tests/`);
+references such as `controller.py` point to it, and `legacy/python/docs/design.md` describes
+the Python-era UI.
 
 ## 1. Goals and settled decisions
 
@@ -38,7 +39,8 @@ code that is ported; `docs/design.md` describes the Python-era UI and is revised
 - Third-party users: tests, lint and CI are part of the deliverable. Own visual style
   (sharp corners, embedded Inter). Slint's royalty-free licence requires crediting Slint in
   the About window.
-- Python is deleted once the Rust build reaches feature parity (phase 7).
+- The Python code is not deleted: since 15.11.2026 it is archived in `legacy/python/` (no CI,
+  not developed), and `main` carries the Rust version (owner decision).
 
 ## 2. Workspace layout
 
@@ -692,7 +694,7 @@ unless the name changes.
   Windows target (the script reads `CARGO_CFG_TARGET_OS`, so the Linux build does nothing) and
   only for the `HomeLink` binary (`compile_for`), so the test executables of the crate do not
   ask for elevation. The same resource has the application icon (`rust/app/windows/app.ico`,
-  copied from `src/homelink/assets`) and the version information from `Cargo.toml`. The UTF-8
+  copied from `legacy/python/src/homelink/assets`) and the version information from `Cargo.toml`. The UTF-8
   active code page (`activeCodePage`) is deliberately **not** in the manifest: the decoding of
   console output (section 3b of the roadmap) depends on the OEM code page, and whether the
   setting leaves the code page a child console program writes in unchanged was not verifiable
@@ -857,7 +859,7 @@ Everything in `core` runs on Linux in CI. Goal: the logic is proven without Wind
 tests prove only the thin adapters.
 
 - **State machine, table-driven.** One test per row of section 5.2/5.3, plus every test in
-  `tests/test_controller.py` ported (single failed check keeps online, one success is enough,
+  `legacy/python/tests/test_controller.py` ported (single failed check keeps online, one success is enough,
   pc lost after N failures, silent after a power command, silent when the tunnel drops, the
   detail limit, busy skip, shorter interval while waking, etc.), with a manual clock.
 - **Multi-entity cases (new).** Two PCs on one tunnel (second `Wake` while `Starting`), PC
@@ -900,8 +902,11 @@ tests prove only the thin adapters.
 
 ## 14. CI and release changes
 
-Current: `.github/workflows/ci.yml` and `release.yml`, both Python on `windows-latest`, tag
-must equal `homelink.__version__`. Changes (the Python jobs stay until phase 7):
+Current (15.11.2026): `.github/workflows/ci.yml` has the jobs `rust-core` (ubuntu-latest:
+fmt, the licence policy and notices check, clippy, tests of `homelink-core`) and `rust-app`
+(windows-latest: fmt, clippy, tests and the release build of `homelink`, the demo artifact). The
+Python CI job and the Python `release.yml` were removed when the code was archived; there is no
+release workflow until the Rust one below is written. Planned:
 
 - `ci.yml` job `core` (ubuntu-latest): `cargo fmt --check`, `cargo clippy -p homelink-core
   --all-targets --all-features -D warnings`, `cargo test -p homelink-core --all-features`,
@@ -910,8 +915,6 @@ must equal `homelink.__version__`. Changes (the Python jobs stay until phase 7):
 - `ci.yml` job `app` (windows-latest): fmt, clippy `-D warnings` and tests for the whole workspace, release
   build with `--locked`, size-budget check, smoke run (`HomeLink.exe --version`, `--check-config`
   on the example), upload artifact.
-- Python jobs get `paths:` filters (`src/**`, `tests/**`, `pyproject.toml`) so they stop
-  running for Rust-only changes; both are deleted in phase 7.
 - `release.yml`: tag `v*` must equal the workspace version in `rust/Cargo.toml`; same
   gates as CI; build `HomeLink.exe` (name unchanged, so the README download links keep
   working); generate third-party licences with `cargo-about`; publish a SHA-256 file; create
@@ -935,7 +938,7 @@ must equal `homelink.__version__`. Changes (the Python jobs stay until phase 7):
 | 4 App shell (real mode works in code, not yet proven on Windows) | Done: panel on the real engine, tray with aggregate icon, `config.toml` with a template on the first start and every validation problem shown in the catalog language, rotating log file, single instance (file lock), elevation restart, RDP button, `--config`, cargo feature `demo` for the fake-driven mode. **Stage D1 (code written, not run on Windows):** tray balloons for notices (`Shell_NotifyIconW`, section 9; Slint's tray has no such call), the manifest with `requireAdministrator` and per-monitor DPI v2, the application icon and version information embedded by `winresource`, the settings window, wizard and tunnel form on the taskbar (only the panel and details window are hidden from it). **Remaining:** taskbar theme (light/dark icon set), the application icon for the tray and the About window from `src/homelink/assets` (the `.ico` is copied for the executable only), joining the engine thread on quit, local time in the log, app tests in CI | a single PC with a tunnel works end to end on Windows |
 | 5 Multi-PC and wizard | Groups, shared tunnel, PC without a tunnel, wizard (add/edit/delete), About with the Slint credit, config reload. **Done (C1, core logic, tested on Linux):** `core::settings`, `core::wizard` (five steps of the handoff), `core::tunnel_form`, `core::checks`, `core::about`, `Handle::reload`, locale keys. **Done (D1, code written and unit-tested on Linux, not run on Windows):** OpenSSH client detection, key creation, SSH host-key consent, the relay setup commands (section 11); the UI of these has no designer's layout (reused Field/Btn/list styles). **Open:** the PC-side `authorized_keys`/`sudoers` lines, the third-party notices file | tunnel groups, a shared tunnel and a PC without a tunnel work by hand |
 | 6 Hardening | Manual checklist on Windows 10 LTSC and 11 (Linux and Windows remote PCs), docs rewrite (`README*.md`, `design.md`, relay and router setup, SSH for Windows), size and licence check, `v1.0.0-rc.1` | no open defects; parity checklist complete |
-| 7 Release | Remove `src/homelink/`, `tests/`, `pyproject.toml`, `build.bat`, `run_homelink.pyw`, Python CI jobs; decide the future of `tools/generate_icons.py` (keep as a dev tool or port); tag `v1.0.0` | release published, README links verified |
+| 7 Release | Python already archived in `legacy/python/` (done 15.11.2026, kept, not deleted); Rust `release.yml`; tag `v1.0.0` | release published, README links verified |
 
 Technical risks to verify in phase 0: tray notifications in Slint 1.18 (checked in the sources:
 no call; a `Shell_NotifyIconW` balloon from a hidden notify icon is built, and must be seen

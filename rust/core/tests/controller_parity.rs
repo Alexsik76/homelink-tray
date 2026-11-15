@@ -1,4 +1,4 @@
-//! Every test of `tests/test_controller.py` (the Python 0.3.0 controller), ported.
+//! Every test of `legacy/python/tests/test_controller.py` (the Python 0.3.0 controller), ported.
 //!
 //! Each test carries a `// Python: <name>` comment. The Python configuration maps to
 //! `single_config()`: tunnel `home` (probe host `192.168.88.1`, timeout 20 s) and PC
