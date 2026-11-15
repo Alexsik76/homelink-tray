@@ -30,8 +30,8 @@ use slint::{CloseRequestResponse, ComponentHandle, ModelRc, SharedString, VecMod
 use crate::icon;
 use crate::links;
 use crate::view::{
-    Flow, Motion, Nav, Panel, SettingsRow, SettingsWindow, Theme, TunnelFormWindow, WizardWindow,
-    Words,
+    Flow, HelpSection, Motion, Nav, Panel, SettingsRow, SettingsWindow, Theme, TunnelFormWindow,
+    WizardWindow, Words,
 };
 use crate::windows::rdp::RdpLauncher;
 use crate::wizard_ui;
@@ -281,7 +281,14 @@ fn fill_words(w: &Words, tr: &Translator) {
     w.set_edit(t("action.edit"));
     w.set_delete(t("action.delete"));
     w.set_delete_confirm(t("action.delete_confirm"));
-    w.set_help_empty(t("settings.help.empty"));
+    let help: Vec<HelpSection> = homelink_core::help::sections(tr)
+        .into_iter()
+        .map(|s| HelpSection {
+            title: s.title.into(),
+            body: s.body.into(),
+        })
+        .collect();
+    w.set_help(slint::ModelRc::new(slint::VecModel::from(help)));
     w.set_about_name(t("app.name"));
     w.set_about_description(t("about.description"));
     w.set_about_slint(t("about.slint"));

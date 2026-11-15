@@ -77,7 +77,8 @@ rust/
                         runs programs through `CommandRunner`: WireGuard service (`sc`,
                         `wireguard.exe`), ping, OEM output decoding, `reg query` (code page,
                         display language), `.rdp` file and `mstsc`, elevation check/restart
-      logging.rs        rotating log file, instance.rs   file lock held by the running copy
+      logging.rs        rotating log file (local time), instance.rs   file lock held by the
+                        running copy
       demo.rs           (feature `demo`) the engine on the core fakes with simulated delays
       ui.rs             Slint glue: snapshot -> models, callbacks -> commands, tray, notices
       platform.rs       the only unsafe code: work area, message box (cfg(windows))
@@ -817,10 +818,19 @@ any password.
   `/etc/sudoers.d` for `$(command -v <tool>)` with `NOPASSWD`, checked by `visudo -cf`.
   **The RouterOS commands are unverified on a real RouterOS 7** (policies, the
   `/file add ... contents=` and key import forms, whether `address=` takes a bare address,
-  and `always-allow-password-login`); the wizard text says so. The PC side of an SSH power
-  method (the `authorized_keys` line and `sudoers` line) is not built.
-- *PC side.* For an SSH power method the wizard shows the line to add to `authorized_keys`
-  and, for Linux, the `sudoers` line from the README.
+  and `always-allow-password-login`); the wizard text says so.
+- *PC side (built, `core::pc_setup`).* For an SSH power method with sleep or shutdown allowed,
+  step 4 shows the commands to run on the PC under its key field, with a copy button, refreshed
+  when the operating system, user, key file or allowed actions change. Linux (as root): the
+  user's `~/.ssh` with mode 700, the public key appended to `authorized_keys`, and
+  `/etc/sudoers.d/homelink` with `<user> ALL=(root) NOPASSWD: $(command -v systemctl) poweroff,
+  $(command -v systemctl) suspend -i` (exactly the two preset commands, a test keeps them in
+  step with `ssh::power_remote_command`), checked by `visudo -cf`. Windows (PowerShell as
+  administrator): `Add-WindowsCapability ... OpenSSH.Server`, `sshd` automatic and started, the
+  key appended to `%ProgramData%\ssh\administrators_authorized_keys`, and `icacls` restricting
+  that file to Administrators and SYSTEM by SID (`*S-1-5-32-544`, `*S-1-5-18`), so a localised
+  Windows works; the user must be an administrator of the PC. **The Windows commands are
+  unverified on a real PC** (release checklist, section F).
 - *Test connection and host key consent (step 5, built: `core::checks`, `core::ssh_setup`,
   `app::ssh_ops`).* The checks run `ssh` with the same options as at run time (`BatchMode=yes`,
   `IdentitiesOnly=yes`, `-i <key>`, `StrictHostKeyChecking=yes`) and report an unknown host key
@@ -902,27 +912,27 @@ tests prove only the thin adapters.
 
 ## 14. CI and release changes
 
-Current (15.11.2026): `.github/workflows/ci.yml` has the jobs `rust-core` (ubuntu-latest:
-fmt, the licence policy and notices check, clippy, tests of `homelink-core`) and `rust-app`
-(windows-latest: fmt, clippy, tests and the release build of `homelink`, the demo artifact). The
-Python CI job and the Python `release.yml` were removed when the code was archived; there is no
-release workflow until the Rust one below is written. Planned:
+Built (15.11.2026). The Python CI job and the Python `release.yml` were removed when the code
+was archived. `rust/rust-toolchain.toml` pins the compiler (1.100.0); CI installs it with
+`rustup install`.
 
-- `ci.yml` job `core` (ubuntu-latest): `cargo fmt --check`, `cargo clippy -p homelink-core
-  --all-targets --all-features -D warnings`, `cargo test -p homelink-core --all-features`,
-  `cargo doc` with warnings denied, coverage with threshold, `cargo deny check` (licences,
-  advisories, bans, sources), locale parity.
-- `ci.yml` job `app` (windows-latest): fmt, clippy `-D warnings` and tests for the whole workspace, release
-  build with `--locked`, size-budget check, smoke run (`HomeLink.exe --version`, `--check-config`
-  on the example), upload artifact.
-- `release.yml`: tag `v*` must equal the workspace version in `rust/Cargo.toml`; same
-  gates as CI; build `HomeLink.exe` (name unchanged, so the README download links keep
-  working); generate third-party licences with `cargo-about`; publish a SHA-256 file; create
-  the release. Pre-releases (`v1.0.0-rc.N`) are marked as such.
-- `rust-cache` for `target/`; `rust-toolchain.toml` pins the compiler, a scheduled job tests
-  the newest stable. Dependabot (cargo, github-actions) is proposed; this is new CI
-  configuration, to be added only with the owner's approval.
-- Workflow files are not edited in this stage.
+- `ci.yml` runs on every push to any branch and on pull requests to `main`.
+- Job `rust-core` (ubuntu-latest): `cargo fmt --check`, the licence policy and
+  `THIRD-PARTY-NOTICES.txt` check (`tools/third_party_notices.py`, which also forbids HTTP and
+  TLS client crates and non-crates.io sources), `cargo deny check advisories bans sources`
+  (`rust/deny.toml`: RustSec advisories, the same banned clients, sources; licences are left to
+  the script), clippy `-D warnings`, `cargo doc` with warnings denied, tests.
+- Job `rust-app` (windows-latest): fmt, clippy `-D warnings`, tests of `homelink`, the release
+  build with the `demo` feature, `tools/smoke.ps1` (size budget 16 MiB, `--version` equal to the
+  package version, `--check-config` passes on the example and fails on a missing file without
+  creating it), the `HomeLink-rust-demo` artifact.
+- `release.yml`: a tag `v*` must equal the version in `rust/app/Cargo.toml`; the same gates as
+  the `rust-app` job plus the licence check; the release build (without `demo`); the smoke
+  run; a release with `HomeLink.exe` (name unchanged), `HomeLink.exe.sha256` and
+  `THIRD-PARTY-NOTICES.txt`. A tag with a suffix (`v1.0.0-rc.N`) is a pre-release.
+
+Not done: a coverage threshold, a scheduled job on the newest stable, Dependabot (new CI
+configuration, only with the owner's approval).
 
 ## 15. Roadmap to v1.0.0
 
@@ -935,9 +945,9 @@ release workflow until the Rust one below is written. Planned:
 | 2c Relay presets and routed wake (done, owner decision) | `[[relays]]` with a preset (`routeros`, `etherwake`, `wakeonlan`); `method = "relay"`; magic packet `address` (unicast or broadcast); per-preset validation and exact-argument tests | tests green; section 3 documents the unicast + static ARP setup |
 | 3a Portable adapters (done) | `core::adapters`: TCP probe, magic packet, `StdCommandRunner`, command wake, SSH and command power runner, relay `sudo`; Linux integration tests against local stand-ins and a fake `ssh`; the real engine over them | tests green on Linux; the real-engine test passes |
 | 3b Windows adapters (code written, unit-tested on Linux; not yet run on Windows) | In `app/src/windows/`, as pure functions plus a thin layer over `CommandRunner`, no new Win32 binding: WireGuard service (`wireguard.exe` install/uninstall, state from `sc query`, parsed independently of the display language), ping (`TTL=`), OEM output decoder (code pages 437, 850, 866 from the registry value `OEMCP`; other pages decode ASCII only) plugged into `StdCommandRunner`, `.rdp` file and `mstsc`, elevation check and restart, display language from `reg query`. OpenSSH client detection is done (stage D1, `core::ssh_setup`). **Still open:** verify the RouterOS commands on RouterOS 7; real `sc query` output in a non-English OEM code page (the test samples follow the documented format and were not captured on Windows); decoders for other code pages if needed | adapter tests green in the Windows CI job (the CI `rust-app` job does not run the app's tests yet); a real `/tool wol` over SSH works |
-| 4 App shell (real mode works in code, not yet proven on Windows) | Done: panel on the real engine, tray with aggregate icon, `config.toml` with a template on the first start and every validation problem shown in the catalog language, rotating log file, single instance (file lock), elevation restart, RDP button, `--config`, cargo feature `demo` for the fake-driven mode. **Stage D1 (code written, not run on Windows):** tray balloons for notices (`Shell_NotifyIconW`, section 9; Slint's tray has no such call), the manifest with `requireAdministrator` and per-monitor DPI v2, the application icon and version information embedded by `winresource`, the settings window, wizard and tunnel form on the taskbar (only the panel and details window are hidden from it). **Remaining:** taskbar theme (light/dark icon set), the application icon for the tray and the About window from `src/homelink/assets` (the `.ico` is copied for the executable only), joining the engine thread on quit, local time in the log, app tests in CI | a single PC with a tunnel works end to end on Windows |
-| 5 Multi-PC and wizard | Groups, shared tunnel, PC without a tunnel, wizard (add/edit/delete), About with the Slint credit, config reload. **Done (C1, core logic, tested on Linux):** `core::settings`, `core::wizard` (five steps of the handoff), `core::tunnel_form`, `core::checks`, `core::about`, `Handle::reload`, locale keys. **Done (D1, code written and unit-tested on Linux, not run on Windows):** OpenSSH client detection, key creation, SSH host-key consent, the relay setup commands (section 11); the UI of these has no designer's layout (reused Field/Btn/list styles). **Open:** the PC-side `authorized_keys`/`sudoers` lines, the third-party notices file | tunnel groups, a shared tunnel and a PC without a tunnel work by hand |
-| 6 Hardening | Manual checklist on Windows 10 LTSC and 11 (Linux and Windows remote PCs), docs rewrite (`README*.md`, `design.md`, relay and router setup, SSH for Windows), size and licence check, `v1.0.0-rc.1` | no open defects; parity checklist complete |
+| 4 App shell (real mode works in code, not yet proven on Windows) | Done: panel on the real engine, tray with aggregate icon, `config.toml` with a template on the first start and every validation problem shown in the catalog language, rotating log file, single instance (file lock), elevation restart, RDP button, `--config`, cargo feature `demo` for the fake-driven mode. **Stage D1 (code written, not run on Windows):** tray balloons for notices (`Shell_NotifyIconW`, section 9; Slint's tray has no such call), the manifest with `requireAdministrator` and per-monitor DPI v2, the application icon and version information embedded by `winresource`, the settings window, wizard and tunnel form on the taskbar (only the panel and details window are hidden from it). **Done (15.11.2026):** the tray icon palette follows the taskbar theme and the display scale, the application icon in the settings and About windows, waiting up to 3 s for the engine thread on quit, local time with its UTC offset in the log, app tests in CI, `--version` and `--check-config` | a single PC with a tunnel works end to end on Windows |
+| 5 Multi-PC and wizard | Groups, shared tunnel, PC without a tunnel, wizard (add/edit/delete), About with the Slint credit, config reload. **Done (C1, core logic, tested on Linux):** `core::settings`, `core::wizard` (five steps of the handoff), `core::tunnel_form`, `core::checks`, `core::about`, `Handle::reload`, locale keys. **Done (D1, code written and unit-tested on Linux, not run on Windows):** OpenSSH client detection, key creation, SSH host-key consent, the relay setup commands (section 11); the UI of these has no designer's layout (reused Field/Btn/list styles). **Done (15.11.2026):** the PC-side commands (`core::pc_setup`), the help page (`core::help`), the third-party notices file | tunnel groups, a shared tunnel and a PC without a tunnel work by hand |
+| 6 Hardening | Manual checklist on Windows 10 LTSC and 11 (`docs/release-checklist.uk.md`, Linux and Windows remote PCs); docs rewrite done (`README*.md` for the Rust version, relay, PC and SSH setup); size and licence checks in CI; `v1.0.0-rc.1` | no open defects; parity checklist complete |
 | 7 Release | Python already archived in `legacy/python/` (done 15.11.2026, kept, not deleted); Rust `release.yml`; tag `v1.0.0` | release published, README links verified |
 
 Technical risks to verify in phase 0: tray notifications in Slint 1.18 (checked in the sources:

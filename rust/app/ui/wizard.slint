@@ -148,6 +148,8 @@ export component WizardWindow inherits Window {
     in property <string> power-public-key;
     in property <string> relay-setup-intro;
     in property <string> relay-setup;
+    in property <string> pc-setup-intro;
+    in property <string> pc-setup;
 
     callback back();
     callback cancel();
@@ -168,6 +170,11 @@ export component WizardWindow inherits Window {
     changed new-user => { root.refresh-help(); }
     changed new-identity => { root.refresh-help(); }
     changed ssh-identity => { root.refresh-help(); }
+    changed ssh-user => { root.refresh-help(); }
+    changed os-index => { root.refresh-help(); }
+    changed power-index => { root.refresh-help(); }
+    changed allow-sleep => { root.refresh-help(); }
+    changed allow-shutdown => { root.refresh-help(); }
 
     title: Words.about-name + " — " + root.heading;
     icon: @image-url("icons/app.png");
@@ -581,6 +588,19 @@ export component WizardWindow inherits Window {
                                     error: root.power-key-error;
                                     public-key: root.power-public-key;
                                     create => { root.create-key(1); }
+                                }
+                                // What to run on the PC (undesigned: text and a copy button).
+                                if root.pc-setup != "" : VerticalLayout {
+                                    spacing: 8px;
+                                    Text {
+                                        text: root.pc-setup-intro;
+                                        color: Theme.muted;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
+                                    CopyBlock {
+                                        text: root.pc-setup;
+                                    }
                                 }
                             }
 

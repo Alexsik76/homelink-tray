@@ -1,0 +1,37 @@
+# cargo-deny (https://embarkstudios.github.io/cargo-deny/): security advisories, banned crates
+# and sources. CI runs `cargo deny check advisories bans sources`. Licences are checked by
+# `tools/third_party_notices.py`, which also writes THIRD-PARTY-NOTICES.txt.
+
+[graph]
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+all-features = true
+
+[advisories]
+# Vulnerabilities, unsound crates and yanked versions fail the check anywhere in the graph.
+# "Unmaintained" fails only for the workspace's own dependencies: on 15.11.2026 five crates deep
+# in Slint and winit (pin-utils, ttf-parser, zbus_names, zvariant, zvariant_derive) are
+# unmaintained with no release to move to, and only a Slint update can replace them.
+unmaintained = "workspace"
+ignore = []
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# The path dependency of the app on the core has no version; both crates are unpublished.
+allow-wildcard-paths = true
+# No HTTP or TLS client (docs/rust-architecture.md, section 4).
+deny = [
+    { crate = "reqwest" },
+    { crate = "hyper" },
+    { crate = "ureq" },
+    { crate = "isahc" },
+    { crate = "curl" },
+    { crate = "attohttpc" },
+    { crate = "rustls" },
+    { crate = "native-tls" },
+    { crate = "openssl" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

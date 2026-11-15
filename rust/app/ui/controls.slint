@@ -5,6 +5,12 @@
 
 import { Theme, Mark, StateMark } from "main.slint";
 
+// One topic of the help page.
+export struct HelpSection {
+    title: string,
+    body: string,
+}
+
 // The texts of the new windows. Each window has its own copy, filled by the app.
 export global Words {
     in-out property <string> settings-title;
@@ -18,7 +24,7 @@ export global Words {
     in-out property <string> edit;
     in-out property <string> delete;
     in-out property <string> delete-confirm;
-    in-out property <string> help-empty;
+    in-out property <[HelpSection]> help;
     in-out property <string> about-name;
     in-out property <string> about-description;
     in-out property <string> about-slint;

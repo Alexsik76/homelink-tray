@@ -16,7 +16,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn embed_windows_resources() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=windows/app.manifest");
     println!("cargo:rerun-if-changed=windows/app.ico");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+    println!("cargo:rerun-if-env-changed=HOMELINK_NO_RESOURCES");
+    // `HOMELINK_NO_RESOURCES=1` skips the resources, so that `cargo check` and `cargo clippy`
+    // for the Windows target also run off Windows, where `rc.exe` is missing.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows")
+        || std::env::var_os("HOMELINK_NO_RESOURCES").is_some()
+    {
         return Ok(());
     }
     let mut resource = winresource::WindowsResource::new();

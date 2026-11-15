@@ -3,8 +3,9 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # Every branch, so that a branch is checked before it is merged without a pull request.
   push:
-    branches: [main]
+    branches: ["**"]
 
 permissions:
   contents: read
@@ -22,8 +23,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+      - name: Install Rust (rust/rust-toolchain.toml)
+        run: rustup install
 
       - uses: actions/cache@v6
         with:
@@ -31,7 +32,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: rust-core-${{ hashFiles('rust/Cargo.lock') }}
+          key: rust-core-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
 
       - name: Format check
         run: cargo fmt -p homelink-core --check
@@ -40,22 +41,38 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: python3 tools/third_party_notices.py --check
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+
+      - name: Advisories, bans and sources
+        run: cargo deny check advisories bans sources
+
       - name: Lint
-        run: cargo clippy -p homelink-core --all-targets --all-features -- -D warnings
+        run: cargo clippy -p homelink-core --all-targets --all-features --locked -- -D warnings
+
+      - name: Documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p homelink-core --no-deps --all-features --locked
 
       - name: Test
-        run: cargo test -p homelink-core --all-features
+        run: cargo test -p homelink-core --all-features --locked
 
   rust-app:
     runs-on: windows-latest
     defaults:
       run:
         working-directory: rust
+    env:
+      # The size budget of HomeLink.exe in bytes (16 MiB; the Python 0.3.0 one-file build was
+      # 20.4 MB). Raise it only on purpose.
+      SIZE_BUDGET: 16777216
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+      - name: Install Rust (rust/rust-toolchain.toml)
+        run: rustup install
 
       - uses: actions/cache@v6
         with:
@@ -63,7 +80,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: rust-app-${{ hashFiles('rust/Cargo.lock') }}
+          key: rust-app-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
 
       - name: Format check
         run: cargo fmt -p homelink --check
@@ -76,6 +93,10 @@ jobs:
 
       - name: Build
         run: cargo build -p homelink --release --locked --features demo
+
+      - name: Size budget and smoke run
+        shell: pwsh
+        run: ../tools/smoke.ps1 -Exe target/release/HomeLink.exe -Config app/config.example.toml -Budget $env:SIZE_BUDGET
 
       - uses: actions/upload-artifact@v7
         with:
