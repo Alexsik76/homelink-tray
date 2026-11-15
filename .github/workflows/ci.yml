@@ -3,8 +3,9 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # Every branch, so that a branch is checked before it is merged without a pull request.
   push:
-    branches: [main]
+    branches: ["**"]
 
 permissions:
   contents: read
