@@ -70,7 +70,7 @@ fn raw_tunnel(t: &Tunnel) -> RawTunnel {
         kind: RawTunnelKind::Wireguard,
         conf: conf.clone(),
         wireguard_exe: exe.clone(),
-        probe_host: t.probe_host.to_string(),
+        probe_host: t.probe_host.as_ref().map(ToString::to_string),
         timeout: secs(t.timeout),
         ping_timeout_ms: millis(t.ping_timeout),
     }

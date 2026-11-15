@@ -898,6 +898,31 @@ on it.
   enough).
 - **Demo:** `--missing wireguard,ssh,...` (tool codes) pretends programs are missing.
 
+## 11b. Tunnel check by handshake and the tunnel form (built 15.11.2026)
+
+Owner's decisions of 15.11.2026, after the first check on Windows 11.
+
+- **`probe_host` is optional.** With it, a tunnel is checked by ping as before. Without it, by
+  its WireGuard handshake (`core::handshake`): `wg.exe show <tunnel> latest-handshakes` prints
+  `<peer key>\t<unix time>`; a handshake younger than 180 s (WireGuard's reject-after time)
+  means the server is alive. When it is older, one empty UDP datagram to the first address of
+  the first network of `wg.exe show <tunnel> allowed-ips` (e.g. `10.10.0.1` for `10.10.0.0/16`)
+  makes WireGuard start a handshake; the check waits up to 6 s for it. Nothing is guessed about a
+  host behind the tunnel; whether the network behind the server works is shown by the PCs' own
+  port checks. Only `latest-handshakes` and `allowed-ips` are run, never `showconf`, `dump`,
+  `private-key` or `preshared-keys`. `TunnelDriver::handshake` is the port; the Windows driver
+  runs `wg` (resolved to `%ProgramFiles%\WireGuard\wg.exe` by the capability lookup) and sends
+  the datagram with a std UDP socket.
+- **Each tunnel has its own needs** (`capabilities::tunnel_needs`): the WireGuard client and `sc`,
+  plus `ping` with a probe host or `wg` without one. A missing check program blocks only that
+  tunnel. `Tool::Wg` is a new tool; the "Перевірка тунелю" tile names `wg` and `ping`.
+- **Tunnel form:** a list of the tunnels imported into the WireGuard client, read from the file
+  names of `<WireGuard>\Data\Configurations` (the files themselves hold the private keys and are
+  never opened); tunnels already in the settings are marked and refused (`Code::TunnelTaken`).
+  Choosing one fills the name while the user has not typed another; the path of the file and of
+  `wireguard.exe` (the found one) are set by the program. The probe host is no longer in the form;
+  an existing one is kept on edit. The template no longer sets `probe_host`.
+
 ## 12. Open questions (not decided here)
 
 1. **Does the custom panel work well on screen?** Window focus on show and hide, hide-on-blur

@@ -302,7 +302,13 @@ fn run_effect(deps: &Deps, config: &Config, effect: &Effect) -> Input {
             };
             let observation = if !running {
                 Observation::NotRunning
-            } else if deps.pinger.ping(&t.probe_host, t.ping_timeout) {
+            } else if match &t.probe_host {
+                Some(host) => deps.pinger.ping(host, t.ping_timeout),
+                None => deps.tunnel.handshake(t).unwrap_or_else(|err| {
+                    log::warn!("cannot read the handshake of tunnel {}: {err}", t.id);
+                    false
+                }),
+            } {
                 Observation::Reachable
             } else {
                 Observation::Silent

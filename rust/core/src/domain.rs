@@ -374,8 +374,9 @@ pub struct Tunnel {
     pub name: String,
     /// How the tunnel is controlled.
     pub kind: TunnelKind,
-    /// A host that answers ping only while the tunnel works.
-    pub probe_host: Host,
+    /// A host that answers ping only while the tunnel works. `None`: the tunnel is checked by
+    /// its WireGuard handshake instead (`wg.exe show <tunnel> latest-handshakes`).
+    pub probe_host: Option<Host>,
     /// How long to wait for `probe_host` after the start.
     pub timeout: Duration,
     /// Timeout of one ping.

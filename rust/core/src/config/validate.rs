@@ -341,7 +341,11 @@ fn validate_tunnels(ctx: &mut Ctx, raw: &[RawTunnel]) -> Vec<Tunnel> {
         let conf_ok = ctx
             .check(&at("conf"), TunnelKind::wireguard_name(&t.conf))
             .is_some();
-        let probe_host = ctx.check(&at("probe_host"), Host::parse(&t.probe_host));
+        // Optional: without it the tunnel is checked by its WireGuard handshake.
+        let probe_host = match &t.probe_host {
+            None => Some(None),
+            Some(text) => ctx.check(&at("probe_host"), Host::parse(text)).map(Some),
+        };
         let timeout = ctx.seconds(&at("timeout"), t.timeout);
         let ping_timeout = ctx.millis(&at("ping_timeout_ms"), t.ping_timeout_ms);
         if let (Some(id), true, true, true, Some(probe_host), Some(timeout), Some(ping_timeout)) = (

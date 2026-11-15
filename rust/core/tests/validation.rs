@@ -997,3 +997,13 @@ fn error_text_lists_each_issue_on_its_own_line() {
     // One line for the ports and one for each of the two relays whose timeout is 8.
     assert_eq!(err.lines().count(), 3, "{err}");
 }
+
+#[test]
+fn a_tunnel_without_a_probe_host_is_valid_and_saved_without_the_key() {
+    let text = change("probe_host = \"192.168.88.1\"\n", "");
+    let loaded = config::parse(&text).unwrap();
+    let tunnel = loaded.config.tunnels.first().unwrap();
+    assert!(tunnel.probe_host.is_none());
+    let rendered = config::render(&loaded.config).unwrap();
+    assert!(!rendered.contains("probe_host"), "{rendered}");
+}

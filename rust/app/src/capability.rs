@@ -15,6 +15,44 @@ use homelink_core::config::Config;
 use homelink_core::domain::{PowerMethod, TunnelKind, WakeMethod};
 use homelink_core::engine::Handle;
 
+/// A tunnel imported into the WireGuard client: a file of its `Data\\Configurations` folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ImportedTunnel {
+    /// The tunnel name WireGuard derives from the file name.
+    pub(crate) name: String,
+    /// The file.
+    pub(crate) path: PathBuf,
+}
+
+/// The tunnels imported into the WireGuard client whose `wireguard.exe` is `exe` (or that of
+/// `%ProgramFiles%\\WireGuard` when it was not found), sorted by name. Only the file names are
+/// read: the files hold the tunnels' private keys and are never opened.
+pub(crate) fn imported_tunnels(exe: Option<&Path>) -> Vec<ImportedTunnel> {
+    let base = exe
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("WireGuard")));
+    let Some(dir) = base.map(|b| b.join("Data").join("Configurations")) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        log::info!("cannot list {}", dir.display());
+        return Vec::new();
+    };
+    let mut tunnels: Vec<ImportedTunnel> = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| {
+            let path = e.path();
+            let name = TunnelKind::wireguard_name(&path.to_string_lossy()).ok()?;
+            Some(ImportedTunnel { name, path })
+        })
+        .collect();
+    tunnels.sort_by_key(|t| t.name.to_lowercase());
+    tunnels.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name));
+    tunnels
+}
+
 /// The tunnels' `wireguard_exe` and the programs of the user's commands in `config`.
 pub(crate) fn config_paths(config: &Config) -> (Vec<PathBuf>, Vec<String>) {
     let wireguard = config

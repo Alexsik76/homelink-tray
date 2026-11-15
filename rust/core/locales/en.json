@@ -105,7 +105,7 @@
   "help.files.title": "Program files",
   "help.files.body": "Next to config.toml are: the log homelink.log (up to 1 MB, two older copies), the lock file homelink.lock (stops a second copy), the keys folder with SSH keys and the rdp folder with Remote Desktop files. The program runs with administrator rights because the WireGuard tunnel service needs them.",
   "help.privacy.title": "Privacy",
-  "help.privacy.body": "HomeLink stores no passwords, sends no telemetry and checks for no updates. It connects only to the hosts in its settings: it checks ports, pings the tunnel probe host, sends magic packets, connects over SSH and runs the commands you gave.",
+  "help.privacy.body": "HomeLink stores no passwords, sends no telemetry and checks for no updates. It connects only to the hosts in its settings: it checks ports, reads the tunnel's handshake (or pings its probe host), sends magic packets, connects over SSH and runs the commands you gave.",
   "settings.section.tunnels": "Tunnels",
   "settings.section.pcs": "PCs",
   "settings.add_tunnel": "Add tunnel",
@@ -118,8 +118,8 @@
   "tunnel.form.title_edit": "Edit tunnel {tunnel}",
   "tunnel.form.save": "Save",
   "tunnel.form.cancel": "Cancel",
-  "tunnel.field.conf": "WireGuard configuration file",
-  "tunnel.hint.conf": "A .conf or .conf.dpapi file",
+  "tunnel.field.conf": "WireGuard tunnel",
+  "tunnel.hint.conf": "Tunnels imported into the WireGuard client",
   "tunnel.field.probe_host": "Probe address",
   "tunnel.hint.probe_host": "An address that answers ping only while the tunnel works.",
   "tunnel.field.exe": "Path to wireguard.exe",
@@ -304,5 +304,9 @@
   "notify.tunnel_programs_missing.title": "Tunnels are unavailable",
   "notify.tunnel_programs_missing.body": "Not found: {tools}. PCs without a tunnel keep working.",
   "notify.ssh_missing.title": "Actions over SSH are unavailable",
-  "notify.ssh_missing.body": "The OpenSSH client was not found: waking through a relay, sleep and shut down do not work."
+  "notify.ssh_missing.body": "The OpenSSH client was not found: waking through a relay, sleep and shut down do not work.",
+  "problem.tunnel_taken": "The tunnel {name} is already added",
+  "tool.wg": "wg",
+  "tunnel.form.empty": "The WireGuard client has no imported tunnel yet. Import a tunnel and press \"Check again\".",
+  "tunnel.form.taken": "{name} (already added)"
 }

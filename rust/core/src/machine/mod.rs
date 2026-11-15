@@ -16,7 +16,7 @@
 
 use std::time::Duration;
 
-use crate::capabilities::{Capabilities, Need, Tool};
+use crate::capabilities::{Capabilities, Need, Tool, tunnel_needs};
 use crate::config::Config;
 use crate::domain::{
     Host, PcId, PcState, PowerAction, PowerMethod, Timing, TunnelId, TunnelState, WakeMethod,
@@ -237,6 +237,8 @@ struct TunnelRt {
     /// The user asked to stop it, so its disappearance is not "lost" (`user_stopped`).
     expect_down: bool,
     next_probe: Time,
+    /// The programs it needs ([`tunnel_needs`]).
+    needs: Vec<Need>,
 }
 
 #[derive(Debug)]
@@ -299,6 +301,7 @@ impl Machine {
                 awaiting: None,
                 expect_down: false,
                 next_probe: now,
+                needs: tunnel_needs(t.probe_host.is_some()),
             })
             .collect();
         let pcs = config
@@ -317,7 +320,13 @@ impl Machine {
                 can_sleep: supports(p.power.as_ref(), PowerAction::Sleep),
                 can_shutdown: supports(p.power.as_ref(), PowerAction::Shutdown),
                 can_rdp: p.rdp.is_some(),
-                needs: pc_needs(p),
+                needs: pc_needs(
+                    p,
+                    p.tunnel
+                        .as_ref()
+                        .and_then(|id| config.tunnel(id))
+                        .map(|t| tunnel_needs(t.probe_host.is_some())),
+                ),
                 ports: p.ports.clone(),
                 wake: p.wake.as_ref().and_then(|w| wake_summary(config, w)),
                 failed: None,
@@ -339,9 +348,9 @@ impl Machine {
         }
     }
 
-    /// Takes the result of a new lookup of the programs. When the tunnel programs went
-    /// missing, every tunnel becomes unknown (down and never checked) and so do the PCs behind
-    /// them; nothing more is run for them until the programs are found again.
+    /// Takes the result of a new lookup of the programs. A tunnel whose programs went missing
+    /// becomes unknown (down and never checked) and so do the PCs behind it; nothing more is run
+    /// for it until the programs are found again.
     ///
     /// Returns the notices of the capability spec (section 6): tunnels in the settings whose
     /// programs went missing, and SSH methods in the settings without the OpenSSH client. Each
@@ -349,14 +358,10 @@ impl Machine {
     /// compares with "everything found").
     pub fn set_capabilities(&mut self, caps: Capabilities) -> Vec<Notice> {
         let mut notices = Vec::new();
-        let missing_now = caps.missing_for_tunnels();
-        if !self.tunnels.is_empty()
-            && !missing_now.is_empty()
-            && missing_now != self.caps.missing_for_tunnels()
-        {
-            notices.push(Notice::TunnelProgramsMissing {
-                tools: missing_now.clone(),
-            });
+        let missing_before = self.tunnel_tools_missing(&self.caps);
+        let missing_now = self.tunnel_tools_missing(&caps);
+        if !missing_now.is_empty() && missing_now != missing_before {
+            notices.push(Notice::TunnelProgramsMissing { tools: missing_now });
         }
         let uses_ssh = self.pcs.iter().any(|p| {
             p.needs
@@ -368,17 +373,25 @@ impl Machine {
         if uses_ssh && ssh_missing(&caps) && !ssh_missing(&self.caps) {
             notices.push(Notice::SshMissing);
         }
-        let tunnels_lost = self.caps.tunnels_available() && !caps.tunnels_available();
+        let lost: Vec<usize> = self
+            .tunnels
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                self.caps.missing(&t.needs).is_empty() && !caps.missing(&t.needs).is_empty()
+            })
+            .map(|(ti, _)| ti)
+            .collect();
         self.caps = caps;
-        if tunnels_lost {
-            log::info!("tunnel programs missing: tunnels are not run or checked");
-            for t in &mut self.tunnels {
+        for ti in lost {
+            if let Some(t) = self.tunnels.get_mut(ti) {
+                log::info!("tunnel {}: programs missing, not run or checked", t.id);
                 t.state = TunnelState::Down;
                 t.last_check = None;
                 t.awaiting = None;
             }
             let behind: Vec<usize> = (0..self.pcs.len())
-                .filter(|&pi| self.pcs.get(pi).is_some_and(|p| p.tunnel.is_some()))
+                .filter(|&pi| self.pcs.get(pi).is_some_and(|p| p.tunnel == Some(ti)))
                 .collect();
             for pi in behind {
                 if let Some(p) = self.pcs.get_mut(pi) {
@@ -393,18 +406,34 @@ impl Machine {
         notices
     }
 
+    /// The tools that some tunnel of the configuration needs and `caps` lacks, in tool order.
+    fn tunnel_tools_missing(&self, caps: &Capabilities) -> Vec<Tool> {
+        Tool::ALL
+            .into_iter()
+            .filter(|tool| {
+                self.tunnels
+                    .iter()
+                    .any(|t| caps.missing(&t.needs).contains(&Need::Tool(*tool)))
+            })
+            .collect()
+    }
+
     /// The programs this machine assumes.
     pub fn capabilities(&self) -> &Capabilities {
         &self.caps
     }
 
-    /// The programs a tunnel needs that are missing, as needs.
-    fn tunnel_missing(&self) -> Vec<Need> {
-        self.caps
-            .missing_for_tunnels()
-            .into_iter()
-            .map(Need::Tool)
-            .collect()
+    /// The programs a tunnel needs that are missing.
+    fn tunnel_missing(&self, t: &TunnelRt) -> Vec<Need> {
+        self.caps.missing(&t.needs)
+    }
+
+    /// Whether the tunnel with this id has every program it needs.
+    pub(super) fn tunnel_runnable(&self, id: &TunnelId) -> bool {
+        self.tunnels
+            .iter()
+            .find(|t| t.id == *id)
+            .is_some_and(|t| self.tunnel_missing(t).is_empty())
     }
 
     /// The missing programs of action `index` (0 wake, 1 sleep, 2 shutdown, 3 RDP) of a PC.
@@ -455,7 +484,7 @@ impl Machine {
                 kind,
                 observation,
             } => {
-                if self.caps.tunnels_available() {
+                if self.tunnel_runnable(&tunnel) {
                     self.tunnel_probed(&tunnel, kind, observation, now, &mut out);
                 } else if let Some(t) = self.tunnels.iter_mut().find(|t| t.id == tunnel) {
                     // Started before the programs went missing: the result means nothing now.
@@ -519,17 +548,17 @@ impl Machine {
             wake: p.wake.clone(),
             ports: p.ports.clone(),
         };
-        let tunnel_missing = self.tunnel_missing();
         let mut groups: Vec<GroupView> = Vec::new();
         for (i, t) in self.tunnels.iter().enumerate() {
             let behind: Vec<&PcRt> = self.pcs.iter().filter(|p| p.tunnel == Some(i)).collect();
+            let tunnel_missing = self.tunnel_missing(t);
             groups.push(GroupView {
                 tunnel: Some(TunnelView {
                     id: t.id.clone(),
                     name: t.name.clone(),
                     state: t.state,
                     toggle_availability: if !tunnel_missing.is_empty() {
-                        Availability::Missing(tunnel_missing.clone())
+                        Availability::Missing(tunnel_missing)
                     } else if t.action.is_none() {
                         Availability::Available
                     } else {
@@ -585,8 +614,12 @@ impl Machine {
 
     /// Issues the probes that are due: tunnels, and PCs that have no tunnel.
     fn issue_due(&mut self, now: Time, out: &mut Output) {
-        let tunnels_available = self.caps.tunnels_available();
-        for t in self.tunnels.iter_mut().filter(|_| tunnels_available) {
+        let caps = &self.caps;
+        for t in self
+            .tunnels
+            .iter_mut()
+            .filter(|t| caps.missing(&t.needs).is_empty())
+        {
             if t.action.is_none() && !t.probing && t.next_probe <= now {
                 let kind = if t.awaiting.is_some() {
                     TunnelProbe::ReachOnly
@@ -612,11 +645,10 @@ impl Machine {
     }
 
     fn next_wake(&self) -> Option<Time> {
-        let tunnels_available = self.caps.tunnels_available();
         let tunnels = self
             .tunnels
             .iter()
-            .filter(|t| tunnels_available && t.action.is_none() && !t.probing)
+            .filter(|t| self.caps.missing(&t.needs).is_empty() && t.action.is_none() && !t.probing)
             .map(|t| t.next_probe);
         let pcs = self
             .pcs
@@ -735,15 +767,9 @@ fn wake_summary(config: &Config, wake: &WakeMethod) -> Option<WakeSummary> {
 }
 
 /// What each action of `pc` needs, in the order wake, sleep, shutdown, RDP.
-fn pc_needs(pc: &crate::domain::Pc) -> [Vec<Need>; 4] {
-    let tunnel: Vec<Need> = if pc.tunnel.is_some() {
-        [Tool::WireGuard, Tool::ServiceControl, Tool::Ping]
-            .into_iter()
-            .map(Need::Tool)
-            .collect()
-    } else {
-        Vec::new()
-    };
+/// `tunnel` is what the PC's tunnel needs; every action of a PC behind a tunnel needs it too.
+fn pc_needs(pc: &crate::domain::Pc, tunnel: Option<Vec<Need>>) -> [Vec<Need>; 4] {
+    let tunnel = tunnel.unwrap_or_default();
     let program = |argv: &crate::domain::Argv| {
         argv.items()
             .first()

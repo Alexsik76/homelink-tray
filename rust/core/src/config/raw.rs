@@ -87,7 +87,8 @@ pub struct RawTunnel {
     pub kind: RawTunnelKind,
     pub conf: String,
     pub wireguard_exe: String,
-    pub probe_host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe_host: Option<String>,
     pub timeout: u64,
     pub ping_timeout_ms: u64,
 }

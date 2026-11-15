@@ -11,6 +11,7 @@
 //! The programs run through the core's `CommandRunner`, whose output is decoded from the OEM
 //! code page by the app.
 
+use homelink_core::handshake;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -222,6 +223,28 @@ impl TunnelDriver for WireGuardDriver {
             output.text
         );
         interpret_uninstall(&output).map_err(TunnelError)
+    }
+
+    fn handshake(&self, tunnel: &Tunnel) -> Result<bool, TunnelError> {
+        let (_, _, name) = parts(tunnel)?;
+        let now = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs())
+        };
+        let send = |target: std::net::Ipv4Addr| {
+            let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0))?;
+            socket
+                .send_to(&[], (target, handshake::DISCARD_PORT))
+                .map(|_| ())
+        };
+        let sys = handshake::System {
+            runner: self.runner.as_ref(),
+            now: &now,
+            send: &send,
+            sleep: &std::thread::sleep,
+        };
+        handshake::check(&sys, &name).map_err(TunnelError)
     }
 }
 

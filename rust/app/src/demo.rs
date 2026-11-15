@@ -62,14 +62,22 @@ impl TunnelDriver for DemoTunnel {
     fn up(&self, tunnel: &Tunnel) -> Result<(), TunnelError> {
         thread::sleep(TUNNEL_UP_DELAY);
         self.inner.up(tunnel)?;
-        self.net.set(tunnel.probe_host.as_str(), true);
+        if let Some(host) = &tunnel.probe_host {
+            self.net.set(host.as_str(), true);
+        }
         Ok(())
     }
 
     fn down(&self, tunnel: &Tunnel) -> Result<(), TunnelError> {
         self.inner.down(tunnel)?;
-        self.net.set(tunnel.probe_host.as_str(), false);
+        if let Some(host) = &tunnel.probe_host {
+            self.net.set(host.as_str(), false);
+        }
         Ok(())
+    }
+
+    fn handshake(&self, tunnel: &Tunnel) -> Result<bool, TunnelError> {
+        self.inner.handshake(tunnel)
     }
 }
 

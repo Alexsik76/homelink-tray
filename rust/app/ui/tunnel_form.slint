@@ -3,15 +3,19 @@
 // WireGuard path, the timeouts) are kept by the app and not shown.
 
 import { Theme } from "main.slint";
-import { Words, Flow, Btn, BtnKind, Field, Divider } from "controls.slint";
+import { Words, Flow, Btn, BtnKind, Field, Divider, RadioRow } from "controls.slint";
 
 export component TunnelFormWindow inherits Window {
     // The header: "Додати тунель", or "Змінити тунель <name>".
     in property <string> heading;
     in-out property <string> name;
-    in-out property <string> conf;
-    in-out property <string> probe-host;
-    // The problems by field: 0 name, 1 conf, 2 probe host.
+    // The tunnels imported into the WireGuard client (from its Configurations folder), as
+    // labels; the one chosen, -1 for none. Choosing one fills the name.
+    in property <[string]> tunnel-labels;
+    in-out property <int> tunnel-index: -1;
+    // Shown instead of the list when the client has no imported tunnel.
+    in property <string> tunnels-empty;
+    // The problems by field: 0 name, 1 tunnel, 2 (unused).
     in property <[string]> errors;
     // A failure of the save that no field shows.
     in property <string> general-error;
@@ -25,6 +29,7 @@ export component TunnelFormWindow inherits Window {
     in property <string> capabilities-label;
 
     callback cancel();
+    callback tunnel-chosen(int);
     callback recheck();
     callback open-link(string);
     callback open-capabilities();
@@ -32,7 +37,7 @@ export component TunnelFormWindow inherits Window {
     title: Words.about-name + " — " + root.heading;
     icon: @image-url("icons/app.png");
     width: 420px;
-    height: root.wireguard-missing ? 500px : 380px;
+    height: (root.wireguard-missing ? 520px : 400px) + max(0, root.tunnel-labels.length - 2) * 32px;
     background: Theme.bg;
     default-font-family: "Inter";
     default-font-size: 13px;
@@ -115,23 +120,49 @@ export component TunnelFormWindow inherits Window {
                     }
                 }
             }
+            VerticalLayout {
+                spacing: 6px;
+                Text {
+                    text: Words.tunnel-field-conf;
+                    color: root.wireguard-missing ? Theme.disabled : Theme.ink;
+                    font-size: 12px;
+                    font-weight: 600;
+                }
+                if root.tunnel-labels.length == 0 && !root.wireguard-missing : Text {
+                    text: root.tunnels-empty;
+                    color: Theme.ink-2;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+                Rectangle {
+                    border-width: root.tunnel-labels.length > 0 ? 1px : 0px;
+                    border-color: root.errors[1] != "" ? Theme.state-fail : Theme.line;
+                    VerticalLayout {
+                        for label[i] in root.tunnel-labels : RadioRow {
+                            label: label;
+                            selected: root.tunnel-index == i;
+                            clicked => {
+                                if (!root.wireguard-missing) {
+                                    root.tunnel-index = i;
+                                    root.tunnel-chosen(i);
+                                }
+                            }
+                        }
+                    }
+                }
+                Text {
+                    text: root.errors[1] != "" ? root.errors[1] : Words.tunnel-hint-conf;
+                    color: root.errors[1] != "" ? Theme.state-fail : Theme.muted;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+            }
             Field {
                 label: Words.field-name;
                 enabled: !root.wireguard-missing;
                 value <=> root.name;
-                error: root.errors[0];            }
-            Field {
-                label: Words.tunnel-field-conf;
-                enabled: !root.wireguard-missing;
-                value <=> root.conf;
-                hint: Words.tunnel-hint-conf;
-                error: root.errors[1];            }
-            Field {
-                label: Words.tunnel-field-probe;
-                enabled: !root.wireguard-missing;
-                value <=> root.probe-host;
-                hint: Words.tunnel-hint-probe;
-                error: root.errors[2];            }
+                error: root.errors[0];
+            }
             if root.general-error != "" : Text {
                 text: root.general-error;
                 color: Theme.state-fail;

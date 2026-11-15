@@ -8,7 +8,7 @@
 //! does; the wizard that adds and edits PCs is in `wizard_ui.rs`.
 
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ use homelink_core::about::About;
 use homelink_core::capabilities::Tool;
 use homelink_core::capability_page;
 use homelink_core::config::Config;
-use homelink_core::domain::{PcId, TunnelId};
+use homelink_core::domain::{PcId, TunnelId, TunnelKind};
 use homelink_core::engine::Handle;
 use homelink_core::i18n::Translator;
 use homelink_core::ports::{CommandRunner, PortProbe};
@@ -114,6 +114,8 @@ pub(crate) struct Manage {
     armed: RefCell<Option<Armed>>,
     /// The tunnel being added or edited, while its form is open.
     form: RefCell<Option<TunnelForm>>,
+    /// The tunnels imported into the WireGuard client, as listed in the form.
+    form_tunnels: RefCell<Vec<crate::capability::ImportedTunnel>>,
     /// The wizard's session, while it is open.
     pub(crate) session: RefCell<Option<wizard_ui::Session>>,
     /// Counts the runs of the checks; a result of an older run is dropped.
@@ -186,6 +188,7 @@ pub(crate) fn install(panel: &Panel, setup: Setup) -> Result<(), slint::Platform
         .on_advance(|| with_manage(Manage::save_form));
     form_window.on_cancel(|| with_manage(Manage::cancel_form));
     form_window.on_recheck(|| with_manage(Manage::recheck_form));
+    form_window.on_tunnel_chosen(|index| with_manage(|m| m.tunnel_chosen(index)));
     form_window.on_open_capabilities(|| with_manage(Manage::form_to_capabilities));
     form_window.on_open_link(|url| {
         with_manage(|m| links::open(Arc::clone(&m.persist.opener), url.to_string()));
@@ -214,6 +217,7 @@ pub(crate) fn install(panel: &Panel, setup: Setup) -> Result<(), slint::Platform
         config: RefCell::new(setup.config),
         armed: RefCell::new(None),
         form: RefCell::new(None),
+        form_tunnels: RefCell::new(Vec::new()),
         session: RefCell::new(None),
         check_run: Cell::new(0),
         session_id: Cell::new(0),
@@ -619,8 +623,7 @@ impl Manage {
         let window = &self.form_window;
         window.set_heading(heading.into());
         window.set_name(form.name.clone().into());
-        window.set_conf(form.conf.clone().into());
-        window.set_probe_host(form.probe_host.clone().into());
+        window.set_tunnels_empty(self.tr.t("tunnel.form.empty", &[]).into());
         window.set_errors(model(vec![SharedString::default(); 3]));
         window.set_general_error("".into());
         let wireguard = self.tr.t("tool.wireguard", &[]);
@@ -639,11 +642,77 @@ impl Manage {
     }
 
     /// Looks the programs up again for the tunnel form: without the WireGuard client the form
-    /// shows the red block and cannot be saved.
+    /// shows the red block and cannot be saved. Also reads the list of imported tunnels again.
     fn recheck_form(&self) {
         let caps = self.checker.check(&self.config.borrow());
-        self.form_window
-            .set_wireguard_missing(caps.status(Tool::WireGuard).path().is_none());
+        let wireguard = caps.status(Tool::WireGuard).path().map(Path::to_path_buf);
+        self.form_window.set_wireguard_missing(wireguard.is_none());
+        let tunnels = crate::capability::imported_tunnels(wireguard.as_deref());
+        let (own, current) = match self.form.borrow().as_ref() {
+            Some(form) => (
+                form.editing().cloned(),
+                TunnelKind::wireguard_name(&form.conf).ok(),
+            ),
+            None => (None, None),
+        };
+        let config = self.config.borrow();
+        let taken = |name: &str| {
+            config.tunnels.iter().any(|t| {
+                Some(&t.id) != own.as_ref()
+                    && match &t.kind {
+                        TunnelKind::WireGuardService { conf, .. } => {
+                            TunnelKind::wireguard_name(conf)
+                                .is_ok_and(|n| n.eq_ignore_ascii_case(name))
+                        }
+                        #[allow(unreachable_patterns)]
+                        _ => false,
+                    }
+            })
+        };
+        let labels: Vec<SharedString> = tunnels
+            .iter()
+            .map(|t| {
+                if taken(&t.name) {
+                    self.tr
+                        .t("tunnel.form.taken", &[("name", t.name.as_str())])
+                        .into()
+                } else {
+                    t.name.clone().into()
+                }
+            })
+            .collect();
+        let index = current
+            .and_then(|c| tunnels.iter().position(|t| t.name.eq_ignore_ascii_case(&c)))
+            .map_or(-1, |i| i32::try_from(i).unwrap_or(-1));
+        drop(config);
+        // The WireGuard client found by the lookup is the one the tunnel will be run with.
+        if let (Some(exe), Some(form)) = (&wireguard, self.form.borrow_mut().as_mut()) {
+            form.wireguard_exe = exe.display().to_string();
+        }
+        self.form_window.set_tunnel_labels(model(labels));
+        self.form_window.set_tunnel_index(index);
+        *self.form_tunnels.borrow_mut() = tunnels;
+    }
+
+    /// A tunnel of the list was chosen: its file becomes the tunnel's, and the name follows it
+    /// while the user has not typed one of their own.
+    fn tunnel_chosen(&self, index: i32) {
+        let Some(chosen) = usize::try_from(index)
+            .ok()
+            .and_then(|i| self.form_tunnels.borrow().get(i).cloned())
+        else {
+            return;
+        };
+        let mut form = self.form.borrow_mut();
+        let Some(form) = form.as_mut() else {
+            return;
+        };
+        let typed = self.form_window.get_name().to_string();
+        let previous = TunnelKind::wireguard_name(&form.conf).unwrap_or_default();
+        if typed.trim().is_empty() || typed.trim() == previous {
+            self.form_window.set_name(chosen.name.clone().into());
+        }
+        form.conf = chosen.path.display().to_string();
     }
 
     /// "Можливості системи" in the red block of the tunnel form.
@@ -666,8 +735,7 @@ impl Manage {
             return;
         };
         form.name = self.form_window.get_name().to_string();
-        form.conf = self.form_window.get_conf().to_string();
-        form.probe_host = self.form_window.get_probe_host().to_string();
+        // `conf` was set by the choice in the list; `probe_host` keeps what the file had.
         // The tunnel file must exist (the capability spec, section 8); the demo has no files.
         if self.persist.path.is_some()
             && !form.conf.trim().is_empty()
