@@ -103,7 +103,9 @@ export global Flow {
     callback advance();
 }
 
-export enum BtnKind { primary, secondary, text }
+// `compact`: a secondary button for list rows, 28 high and as wide as its label, whose label
+// takes `tone` (the delete button is red).
+export enum BtnKind { primary, secondary, text, compact }
 
 // A button: primary (ink fill, on-ink label), secondary (surface with a line-strong border) or a
 // text button. Enter and Space press it while it has the keyboard focus.
@@ -114,10 +116,12 @@ export component Btn inherits Rectangle {
     in property <color> tone: Theme.ink;
     callback clicked();
 
-    height: root.kind == BtnKind.text ? 28px : 32px;
-    min-width: root.kind == BtnKind.text ? 0px : 96px;
+    property <bool> small: root.kind == BtnKind.text || root.kind == BtnKind.compact;
+    height: root.small ? 28px : 32px;
+    min-width: root.small ? 0px : 96px;
     background: root.kind == BtnKind.primary ? (root.available ? Theme.ink : Theme.line)
-        : root.kind == BtnKind.secondary ? (ta.pressed ? Theme.pressed : ta.has-hover ? Theme.hover : Theme.surface)
+        : root.kind == BtnKind.secondary || root.kind == BtnKind.compact
+            ? (ta.pressed ? Theme.pressed : ta.has-hover ? Theme.hover : Theme.surface)
         : transparent;
     border-width: fs.has-focus ? 2px : (root.kind == BtnKind.text ? 0px : 1px);
     border-color: fs.has-focus ? Theme.state-off
@@ -143,13 +147,13 @@ export component Btn inherits Rectangle {
     // children were sized from the parent), which made the text buttons of the list rows
     // zero wide: packed at the left, and with no area to click.
     HorizontalLayout {
-        padding-left: root.kind == BtnKind.text ? 6px : 16px;
-        padding-right: root.kind == BtnKind.text ? 6px : 16px;
+        padding-left: root.kind == BtnKind.text ? 6px : root.kind == BtnKind.compact ? 12px : 16px;
+        padding-right: root.kind == BtnKind.text ? 6px : root.kind == BtnKind.compact ? 12px : 16px;
         Text {
             text: root.label;
             color: !root.available ? Theme.disabled
                 : root.kind == BtnKind.primary ? Theme.on-ink
-                : root.kind == BtnKind.text ? root.tone
+                : root.kind == BtnKind.text || root.kind == BtnKind.compact ? root.tone
                 : Theme.ink;
             font-size: 12px;
             font-weight: root.kind == BtnKind.text ? 400 : 600;
@@ -213,6 +217,7 @@ export component Field inherits VerticalLayout {
     }
 
     if root.error != "" || root.hint != "" : Text {
+        width: parent.width;
         text: root.error != "" ? root.error : root.hint;
         color: root.error != "" ? Theme.state-fail : Theme.muted;
         font-size: 11px;
@@ -385,10 +390,8 @@ export component CopyBlock inherits VerticalLayout {
         text: root.label;
     }
 
-    // The text is shown by a wrapped Text inside a layout, so that the layout knows its real
-    // height (a TextInput placed by x/y reported the height of one line, and a step with long
-    // commands could not be scrolled to its end). A tiny transparent TextInput holds the same
-    // text for the copy button.
+    // The text is shown by a wrapped Text (a TextInput placed by x/y reported the height of one
+    // line). A tiny transparent TextInput holds the same text for the copy button.
     Rectangle {
         background: Theme.surface;
         border-width: 1px;
@@ -399,6 +402,9 @@ export component CopyBlock inherits VerticalLayout {
             padding-top: 8px;
             padding-bottom: 8px;
             Text {
+                // An explicit width: without it Slint counts a wrapped text in a nested layout
+                // as one line, and the scrolled step ends too early.
+                width: parent.width - 20px;
                 text: root.text;
                 font-size: 11px;
                 color: Theme.ink;
@@ -448,6 +454,7 @@ export component KeyTools inherits VerticalLayout {
         }
     }
     if root.error != "" : Text {
+        width: parent.width;
         text: root.error;
         color: Theme.state-fail;
         font-size: 11px;

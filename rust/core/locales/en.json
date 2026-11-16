@@ -311,7 +311,7 @@
   "tunnel.form.taken": "{name} (already added)",
   "check.name.relay_neighbor": "PC in the router's network",
   "check.result.neighbor_matches": "{interface}, {mac}",
-  "check.result.neighbor_differs": "the router sees {mac} on {interface}",
+  "check.result.neighbor_differs": "router: {interface}, {mac}",
   "check.result.neighbor_not_seen": "the router does not see this address now",
   "wizard.check.use_values": "Use these values",
   "wizard.hint.identity": "The key HomeLink logs in with over SSH, without a password. Press \"Create key\" or give the full path of an existing key.",

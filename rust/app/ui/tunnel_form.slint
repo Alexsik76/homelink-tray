@@ -81,6 +81,7 @@ export component TunnelFormWindow inherits Window {
                     padding: 12px;
                     spacing: 6px;
                     Text {
+                        width: parent.width - 24px;
                         text: root.missing-title;
                         color: Theme.state-fail;
                         font-size: 13px;
@@ -88,6 +89,7 @@ export component TunnelFormWindow inherits Window {
                         wrap: word-wrap;
                     }
                     Text {
+                        width: parent.width - 24px;
                         text: root.missing-body;
                         color: Theme.ink-2;
                         font-size: 12px;
@@ -129,6 +131,7 @@ export component TunnelFormWindow inherits Window {
                     font-weight: 600;
                 }
                 if root.tunnel-labels.length == 0 && !root.wireguard-missing : Text {
+                    width: parent.width;
                     text: root.tunnels-empty;
                     color: Theme.ink-2;
                     font-size: 12px;
@@ -151,6 +154,7 @@ export component TunnelFormWindow inherits Window {
                     }
                 }
                 Text {
+                    width: parent.width;
                     text: root.errors[1] != "" ? root.errors[1] : Words.tunnel-hint-conf;
                     color: root.errors[1] != "" ? Theme.state-fail : Theme.muted;
                     font-size: 11px;

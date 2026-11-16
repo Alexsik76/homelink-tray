@@ -67,14 +67,16 @@ component ListRow inherits Rectangle {
     callback edit();
     callback remove();
 
-    height: 36px;
+    height: 44px;
     background: transparent;
 
+    // The name and its note on the left; "Змінити" and "Видалити" as bordered buttons on the
+    // right (as text they did not read as buttons). A delete waiting for its confirmation says
+    // so on the button.
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 8px;
-        spacing: 12px;
-        alignment: start;
+        spacing: 8px;
         Text {
             text: root.name;
             color: Theme.ink;
@@ -82,7 +84,6 @@ component ListRow inherits Rectangle {
             font-weight: 600;
             vertical-alignment: center;
             overflow: elide;
-            horizontal-stretch: 1;
         }
         Text {
             text: root.secondary;
@@ -90,14 +91,13 @@ component ListRow inherits Rectangle {
             font-size: 12px;
             vertical-alignment: center;
             overflow: elide;
+            horizontal-stretch: 1;
         }
-        // The buttons are 28 high: each sits in a column that centres it in the 36 px row.
         VerticalLayout {
             alignment: center;
             Btn {
-                kind: BtnKind.text;
+                kind: BtnKind.compact;
                 label: Words.edit;
-                tone: Theme.ink;
                 clicked => {
                     root.edit();
                 }
@@ -106,7 +106,7 @@ component ListRow inherits Rectangle {
         VerticalLayout {
             alignment: center;
             Btn {
-                kind: BtnKind.text;
+                kind: BtnKind.compact;
                 label: root.armed ? Words.delete-confirm : Words.delete;
                 tone: Theme.state-fail;
                 clicked => {
@@ -305,12 +305,14 @@ export component SettingsWindow inherits Window {
                         }
 
                         if root.armed-hint != "" : Text {
+                            width: parent.width - 32px;
                             text: root.armed-hint;
                             color: Theme.ink-2;
                             font-size: 12px;
                             wrap: word-wrap;
                         }
                         if root.page-error != "" : Text {
+                            width: parent.width - 32px;
                             text: root.page-error;
                             color: Theme.state-fail;
                             font-size: 12px;
@@ -476,6 +478,7 @@ export component SettingsWindow inherits Window {
                         for section in Words.help : VerticalLayout {
                             spacing: 6px;
                             Text {
+                                width: parent.width;
                                 text: section.title;
                                 color: Theme.ink;
                                 font-size: 13px;
@@ -483,6 +486,7 @@ export component SettingsWindow inherits Window {
                                 wrap: word-wrap;
                             }
                             Text {
+                                width: parent.width;
                                 text: section.body;
                                 color: Theme.ink-2;
                                 font-size: 12px;
@@ -530,6 +534,7 @@ export component SettingsWindow inherits Window {
                     font-size: 12px;
                 }
                 Text {
+                    width: parent.width;
                     text: Words.about-description;
                     color: Theme.ink-2;
                     font-size: 13px;
@@ -570,6 +575,7 @@ export component SettingsWindow inherits Window {
                     }
                 }
                 Text {
+                    width: parent.width;
                     text: Words.about-font;
                     color: Theme.muted;
                     font-size: 12px;

@@ -11,3 +11,9 @@ config.json
 *.cer
 *.log
 rust/target/
+rust/target-*/
+rust/tools/ui-shots/ui/
+rust/tools/ui-shots/target/
+rust/tools/ui-shots/shots/
+rust/tools/ui-shots/src/words.rs
+rust/tools/ui-shots/Cargo.lock

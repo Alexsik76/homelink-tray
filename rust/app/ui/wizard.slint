@@ -294,6 +294,7 @@ export component WizardWindow inherits Window {
                             clicked => { root.tunnel-index = i; }
                         }
                         if root.errors[3] != "" : Text {
+                            width: parent.width;
                             text: root.errors[3];
                             color: Theme.state-fail;
                             font-size: 11px;
@@ -342,6 +343,7 @@ export component WizardWindow inherits Window {
                                 }
                             }
                             if root.errors[7] != "" : Text {
+                                width: parent.width;
                                 text: root.errors[7];
                                 color: Theme.state-fail;
                                 font-size: 11px;
@@ -385,6 +387,7 @@ export component WizardWindow inherits Window {
                                     error: root.errors[10];
                                 }
                                 if root.openssh-missing : Text {
+                                    width: parent.width;
                                     text: Words.openssh-missing;
                                     color: Theme.state-fail;
                                     font-size: 11px;
@@ -421,12 +424,14 @@ export component WizardWindow inherits Window {
                                         }
                                     }
                                     if root.errors[12] != "" : Text {
+                                        width: parent.width;
                                         text: root.errors[12];
                                         color: Theme.state-fail;
                                         font-size: 11px;
                                         wrap: word-wrap;
                                     }
                                     Text {
+                                        width: parent.width;
                                         text: Words.hint-sudo;
                                         color: Theme.muted;
                                         font-size: 11px;
@@ -444,6 +449,7 @@ export component WizardWindow inherits Window {
                             if root.relay-setup != "" : VerticalLayout {
                                 spacing: 8px;
                                 Text {
+                                    width: parent.width;
                                     text: root.relay-setup-intro;
                                     color: Theme.muted;
                                     font-size: 11px;
@@ -487,6 +493,7 @@ export component WizardWindow inherits Window {
                                 error: root.errors[5];
                             }
                             Text {
+                                width: parent.width;
                                 text: Words.magic-routed-help;
                                 color: Theme.muted;
                                 font-size: 11px;
@@ -540,6 +547,7 @@ export component WizardWindow inherits Window {
                         }
                         // Over SSH sleep and shutdown come together: the problem is shown here.
                         if root.errors[18] != "" || root.errors[19] != "" : Text {
+                            width: parent.width;
                             text: root.errors[18] != "" ? root.errors[18] : root.errors[19];
                             color: Theme.state-fail;
                             font-size: 11px;
@@ -591,6 +599,7 @@ export component WizardWindow inherits Window {
                                     error: root.errors[21];
                                 }
                                 if root.openssh-missing : Text {
+                                    width: parent.width;
                                     text: Words.openssh-missing;
                                     color: Theme.state-fail;
                                     font-size: 11px;
@@ -612,6 +621,7 @@ export component WizardWindow inherits Window {
                                 if root.pc-setup != "" : VerticalLayout {
                                     spacing: 8px;
                                     Text {
+                                        width: parent.width;
                                         text: root.pc-setup-intro;
                                         color: Theme.muted;
                                         font-size: 11px;
@@ -648,6 +658,7 @@ export component WizardWindow inherits Window {
                                 error: root.errors[25];
                             }
                             Text {
+                                width: parent.width;
                                 text: Words.rdp-note;
                                 color: Theme.muted;
                                 font-size: 11px;
@@ -677,6 +688,7 @@ export component WizardWindow inherits Window {
                             }
                         }
                         if root.openssh-missing : Text {
+                            width: parent.width;
                             text: Words.openssh-missing;
                             color: Theme.state-fail;
                             font-size: 11px;
@@ -693,12 +705,14 @@ export component WizardWindow inherits Window {
                                 padding: 12px;
                                 spacing: 8px;
                                 Text {
+                                    width: parent.width - 24px;
                                     text: root.trust-prompt;
                                     color: Theme.ink;
                                     font-size: 12px;
                                     wrap: word-wrap;
                                 }
                                 for fingerprint in root.trust-fingerprints : Text {
+                                    width: parent.width - 24px;
                                     text: fingerprint;
                                     color: Theme.ink;
                                     font-size: 12px;
@@ -722,6 +736,7 @@ export component WizardWindow inherits Window {
                             }
                         }
                         if root.ssh-note != "" : Text {
+                            width: parent.width;
                             text: root.ssh-note;
                             color: Theme.ink-2;
                             font-size: 11px;
@@ -736,6 +751,7 @@ export component WizardWindow inherits Window {
                             }
                         }
                         Text {
+                            width: parent.width;
                             text: Words.test-note;
                             color: Theme.muted;
                             font-size: 11px;
@@ -746,6 +762,7 @@ export component WizardWindow inherits Window {
                     // Problems that no field of this step shows (the tunnel or the relay that
                     // was removed meanwhile, for example).
                     if root.general-error != "" : Text {
+                        width: parent.width - 32px;
                         text: root.general-error;
                         color: Theme.state-fail;
                         font-size: 12px;
