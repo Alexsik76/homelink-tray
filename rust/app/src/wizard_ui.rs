@@ -28,7 +28,7 @@ use crate::ui;
 use crate::view::{CheckLine, Flow, Mark};
 
 /// The number of error slots of the window (see `wizard.slint`).
-const ERRORS: usize = 26;
+const ERRORS: usize = 25;
 
 /// The wizard while it is open: the step and the lists its indexes refer to.
 pub(crate) struct Session {
@@ -69,12 +69,12 @@ fn slot(name: &str) -> Option<usize> {
         field::WAKE_COMMAND => 16,
         field::WAKE_TIMEOUT => 17,
         field::ALLOW_POWER => 18,
-        field::SSH_USER => 20,
-        field::SSH_PORT => 21,
-        field::SSH_KEY => 22,
-        field::SLEEP_COMMAND => 23,
-        field::SHUTDOWN_COMMAND => 24,
-        field::RDP_USER => 25,
+        field::SSH_USER => 19,
+        field::SSH_PORT => 20,
+        field::SSH_KEY => 21,
+        field::SLEEP_COMMAND => 22,
+        field::SHUTDOWN_COMMAND => 23,
+        field::RDP_USER => 24,
         _ => return None,
     })
 }

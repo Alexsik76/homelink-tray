@@ -599,12 +599,12 @@ export component WizardWindow inherits Window {
                                 Field {
                                     label: Words.field-user;
                                     value <=> root.ssh-user;
-                                    error: root.errors[20];
+                                    error: root.errors[19];
                                 }
                                 Field {
                                     label: Words.field-port;
                                     value <=> root.ssh-port;
-                                    error: root.errors[21];
+                                    error: root.errors[20];
                                 }
                                 if root.openssh-missing : Text {
                                     width: parent.width;
@@ -617,7 +617,7 @@ export component WizardWindow inherits Window {
                                     label: Words.field-identity;
                                     hint: Words.hint-identity;
                                     value <=> root.ssh-identity;
-                                    error: root.errors[22];
+                                    error: root.errors[21];
                                 }
                                 KeyTools {
                                     available: !root.openssh-missing && !root.key-busy;
@@ -648,13 +648,13 @@ export component WizardWindow inherits Window {
                                     label: Words.field-sleep-command;
                                     value <=> root.sleep-command;
                                     hint: Words.hint-power-command;
-                                    error: root.errors[23];
+                                    error: root.errors[22];
                                 }
                                 Field {
                                     label: Words.field-shutdown-command;
                                     value <=> root.shutdown-command;
                                     hint: Words.hint-power-command;
-                                    error: root.errors[24];
+                                    error: root.errors[23];
                                 }
                             }
                         }
@@ -664,7 +664,7 @@ export component WizardWindow inherits Window {
                             Field {
                                 label: Words.field-rdp-user;
                                 value <=> root.rdp-user;
-                                error: root.errors[25];
+                                error: root.errors[24];
                             }
                             Text {
                                 width: parent.width;
