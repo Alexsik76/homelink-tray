@@ -182,8 +182,7 @@ identity_file = '{key}'
         d.new_relay.port = self.rport.into();
         d.mac = self.mac.into();
         d.interface = self.interface.into();
-        d.allow_sleep = true;
-        d.allow_shutdown = true;
+        d.allow_power = true;
         d.power = PowerChoice::Ssh;
         d.ssh_user = self.user.into();
         d.ssh_identity_file = self.key.into();
@@ -434,28 +433,33 @@ fn step_three_depends_on_the_method_and_the_preset() {
 }
 
 #[test]
-fn step_four_checks_the_boxes_against_the_method() {
+fn step_four_checks_the_power_box_against_the_method() {
     let config = single_config();
     let mut d = blank(&config);
-    d.allow_sleep = true;
+    d.allow_power = true;
     d.power = PowerChoice::Ssh;
     d.ssh_user = "u".into();
     d.ssh_identity_file = "/k".into();
-    assert_eq!(
-        fields(&d.validate_step(Step::Power, &config)),
-        [(field::ALLOW_SHUTDOWN, Code::PowerSshNeedsBoth)]
-    );
-    d.allow_shutdown = true;
     assert!(d.validate_step(Step::Power, &config).is_empty());
-    // Commands: each box on its own, its command required.
+    // Commands: at least one of the two; an empty one means that action is not offered.
     d.power = PowerChoice::Command;
-    d.allow_shutdown = false;
     assert_eq!(
         fields(&d.validate_step(Step::Power, &config)),
-        [(field::SLEEP_COMMAND, Code::Required)]
+        [(field::SLEEP_COMMAND, Code::PowerCommandNeeded)]
     );
     d.sleep_command = "ssh u@{host} \"systemctl suspend\"".into();
     assert!(d.validate_step(Step::Power, &config).is_empty());
+    d.name = "Spare".into();
+    d.host = "10.0.0.9".into();
+    d.ports = "22".into();
+    let pc = d.build(&config).unwrap().pc;
+    assert!(matches!(
+        pc.power,
+        Some(homelink_core::domain::PowerMethod::Command {
+            sleep: Some(_),
+            shutdown: None
+        })
+    ));
     d.allow_rdp = true;
     assert_eq!(
         fields(&d.validate_step(Step::Power, &config)),

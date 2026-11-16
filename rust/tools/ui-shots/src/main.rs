@@ -155,8 +155,7 @@ fn main() {
     // Step 4: SSH power for Linux.
     wiz.set_step(4);
     wiz.set_step_text("Step 4 of 5 · Sleep and shutdown".into());
-    wiz.set_allow_sleep(true);
-    wiz.set_allow_shutdown(true);
+    wiz.set_allow_power(true);
     wiz.set_allow_rdp(true);
     wiz.set_power_index(0);
     wiz.set_os_index(1);
