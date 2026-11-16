@@ -280,15 +280,26 @@ fn main() {
             let mut caps = homelink_core::capabilities::Capabilities::from_statuses(
                 homelink_core::capabilities::Tool::ALL.map(|tool| {
                     let path = match tool {
-                        homelink_core::capabilities::Tool::WireGuard => "C:/Program Files/WireGuard/wireguard.exe".to_owned(),
-                        homelink_core::capabilities::Tool::Wg => "C:/Program Files/WireGuard/wg.exe".to_owned(),
+                        homelink_core::capabilities::Tool::WireGuard => {
+                            "C:/Program Files/WireGuard/wireguard.exe".to_owned()
+                        }
+                        homelink_core::capabilities::Tool::Wg => {
+                            "C:/Program Files/WireGuard/wg.exe".to_owned()
+                        }
                         homelink_core::capabilities::Tool::Ssh
                         | homelink_core::capabilities::Tool::SshKeygen
-                        | homelink_core::capabilities::Tool::SshKeyscan => format!("C:/Windows/System32/OpenSSH/{}.exe", tool.program()),
-                        homelink_core::capabilities::Tool::PowerShell => "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe".to_owned(),
+                        | homelink_core::capabilities::Tool::SshKeyscan => {
+                            format!("C:/Windows/System32/OpenSSH/{}.exe", tool.program())
+                        }
+                        homelink_core::capabilities::Tool::PowerShell => {
+                            "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe".to_owned()
+                        }
                         other => format!("C:/Windows/System32/{}.exe", other.program()),
                     };
-                    (tool, homelink_core::capabilities::ToolStatus::Found(path.into()))
+                    (
+                        tool,
+                        homelink_core::capabilities::ToolStatus::Found(path.into()),
+                    )
                 }),
             );
             for (name, missing) in [("settings-caps", false), ("settings-caps-missing", true)] {
@@ -302,9 +313,17 @@ fn main() {
                         found: tile.found,
                         line: tile.line.into(),
                         details: slint::ModelRc::new(slint::VecModel::from(
-                    tile.details.into_iter().map(SharedString::from).collect::<Vec<_>>(),
-                )),
-                        link_label: tile.link.as_ref().map(|l| l.label.clone()).unwrap_or_default().into(),
+                            tile.details
+                                .into_iter()
+                                .map(SharedString::from)
+                                .collect::<Vec<_>>(),
+                        )),
+                        link_label: tile
+                            .link
+                            .as_ref()
+                            .map(|l| l.label.clone())
+                            .unwrap_or_default()
+                            .into(),
                         link_url: tile.link.map(|l| l.url).unwrap_or_default().into(),
                     })
                     .collect();
@@ -354,4 +373,40 @@ fn main() {
         println!("{name}: content-height={h}");
         shot(&pw, 420, h.ceil() as u32 + 40, &format!("{out}/{name}.png"));
     }
+
+    // The details window of a PC: the ports in their colours.
+    let details = DetailsWindow::new().unwrap();
+    details.global::<Theme>().set_dark(true);
+    details.show().unwrap();
+    let dw = list.0.borrow().last().unwrap().clone();
+    let plain = |label: &str, value: &str| DetailRow {
+        label: label.into(),
+        value: value.into(),
+        strong: false,
+        fail: false,
+        ports: ModelRc::default(),
+    };
+    let mut ports = plain("Ports", "22, 3389");
+    ports.ports = ModelRc::new(VecModel::from(vec![
+        PortMark {
+            port: "22".into(),
+            state: 2,
+        },
+        PortMark {
+            port: "3389".into(),
+            state: 1,
+        },
+    ]));
+    details.set_name("win10-vm".into());
+    details.set_mark(Mark::Off);
+    details.set_rows(ModelRc::new(VecModel::from(vec![
+        plain("State", "off"),
+        plain("Address", "10.10.70.110"),
+        plain("Tunnel", "Home"),
+        plain("Wake", "none"),
+        ports,
+        plain("Last check", "just now"),
+        plain("Last error", "none"),
+    ])));
+    shot(&dw, 300, 260, &format!("{out}/details-ports.png"));
 }

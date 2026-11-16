@@ -93,6 +93,7 @@ export global Words {
     in-out property <string> public-key-label;
     in-out property <string> trust-host;
     in-out property <string> use-values;
+    in-out property <string> browse;
     in-out property <string> trust;
     in-out property <string> openssh-missing;
 }
@@ -101,6 +102,9 @@ export global Words {
 // button, all call it. The app wires it for each window.
 export global Flow {
     callback advance();
+    // Raised by the app each time it shows the problems of a check; a field's problem that was
+    // hidden because the field was edited shows again.
+    in-out property <int> error-generation;
 }
 
 // `compact`: a secondary button for list rows, 28 high and as wide as its label, whose label
@@ -181,6 +185,14 @@ export component Field inherits VerticalLayout {
     in property <string> error;
     // false: shown inactive and not editable (artboard `TunnelForm`, the WireGuard client missing).
     in property <bool> enabled: true;
+    // The problem is hidden once the field is edited: it belongs to the old value. The next
+    // check shows it again if it still applies.
+    property <bool> edited;
+    property <int> generation: Flow.error-generation;
+    property <string> shown-error: root.edited ? "" : root.error;
+    changed generation => { root.edited = false; }
+    changed error => { root.edited = false; }
+    changed value => { root.edited = true; }
 
     spacing: 6px;
 
@@ -196,7 +208,7 @@ export component Field inherits VerticalLayout {
         height: 32px;
         background: Theme.surface;
         border-width: ti.has-focus ? 2px : 1px;
-        border-color: root.error != "" ? Theme.state-fail
+        border-color: root.shown-error != "" ? Theme.state-fail
             : ti.has-focus ? Theme.state-off
             : Theme.line-strong;
 
@@ -216,10 +228,10 @@ export component Field inherits VerticalLayout {
         }
     }
 
-    if root.error != "" || root.hint != "" : Text {
+    if root.shown-error != "" || root.hint != "" : Text {
         width: parent.width;
-        text: root.error != "" ? root.error : root.hint;
-        color: root.error != "" ? Theme.state-fail : Theme.muted;
+        text: root.shown-error != "" ? root.shown-error : root.hint;
+        color: root.shown-error != "" ? Theme.state-fail : Theme.muted;
         font-size: 11px;
         wrap: word-wrap;
     }
@@ -443,14 +455,21 @@ export component KeyTools inherits VerticalLayout {
     in property <string> error;
     in property <string> public-key;
     callback create();
+    // "Огляд…": the standard Windows dialog to pick an existing key file.
+    callback browse();
     spacing: 8px;
 
     HorizontalLayout {
         alignment: start;
+        spacing: 8px;
         Btn {
             label: Words.create-key;
             available: root.available;
             clicked => { root.create(); }
+        }
+        Btn {
+            label: Words.browse;
+            clicked => { root.browse(); }
         }
     }
     if root.error != "" : Text {

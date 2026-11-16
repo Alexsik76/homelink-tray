@@ -961,6 +961,21 @@ old form: an explicit width there is a binding loop. The list rows of the settin
 3–5 at the top and scrolled to their end, the settings list in both themes, the help page and the
 panel with reason lines.
 
+## 11e. Wizard and details improvements (rc.9, 16.11.2026)
+
+- A refused "Далі" scrolls the step to its top and says by the buttons to fix the fields marked in
+  red; a field's problem hides as soon as the field is edited and shows again at the next check
+  (`Flow.error-generation`, raised with each set of problems).
+- The step bar is clickable (each segment lit under the mouse, no labels): back to any step;
+  forward checks every step on the way and stops at the first with a problem.
+- Key fields: "Огляд…" opens the standard Windows "Open" dialog (`platform::pick_file`,
+  `GetOpenFileNameW`) in the profile's `.ssh`; an empty key field is filled when that folder has
+  exactly one private key with its `.pub` (only file names are read).
+- The details window shows the PC's ports in colour: green answered, red did not, plain before
+  the first check (`PortProbe::open_ports`, `PcView::open_ports`).
+- A new entry is written in the template's layout: its sub-tables and their keys indented by two
+  spaces.
+
 ## 12. Open questions (not decided here)
 
 1. **Does the custom panel work well on screen?** Window focus on show and hide, hide-on-blur

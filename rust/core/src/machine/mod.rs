@@ -132,6 +132,8 @@ pub enum Input {
         kind: PcProbe,
         /// Whether every port accepted a connection.
         ready: bool,
+        /// The ports that accepted, when known (for the details window).
+        open: Option<Vec<u16>>,
     },
     /// Starting a tunnel finished.
     TunnelUpDone {
@@ -256,6 +258,8 @@ struct PcRt {
     /// tunnel also needs the tunnel's programs for all of them).
     needs: [Vec<Need>; 4],
     ports: Vec<u16>,
+    /// The ports that answered the last probe that counted.
+    open_ports: Option<Vec<u16>>,
     wake: Option<WakeSummary>,
     failed: Option<Failure<PcFailKind>>,
     /// When the last probe result that counted was applied.
@@ -328,6 +332,7 @@ impl Machine {
                         .map(|t| tunnel_needs(t.probe_host.is_some())),
                 ),
                 ports: p.ports.clone(),
+                open_ports: None,
                 wake: p.wake.as_ref().and_then(|w| wake_summary(config, w)),
                 failed: None,
                 last_check: None,
@@ -491,7 +496,12 @@ impl Machine {
                     t.probing = false;
                 }
             }
-            Input::PcProbed { pc, kind, ready } => self.pc_probed(&pc, kind, ready, now, &mut out),
+            Input::PcProbed {
+                pc,
+                kind,
+                ready,
+                open,
+            } => self.pc_probed(&pc, kind, ready, open, now, &mut out),
             Input::TunnelUpDone { tunnel, result } => {
                 self.tunnel_up_done(&tunnel, result, now, &mut out);
             }
@@ -547,6 +557,12 @@ impl Machine {
                 .map(|t| t.name.clone()),
             wake: p.wake.clone(),
             ports: p.ports.clone(),
+            // Not known while the PC is unknown (its tunnel is down).
+            open_ports: if p.state == PcState::Unknown {
+                None
+            } else {
+                p.open_ports.clone()
+            },
         };
         let mut groups: Vec<GroupView> = Vec::new();
         for (i, t) in self.tunnels.iter().enumerate() {

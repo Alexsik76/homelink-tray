@@ -323,13 +323,15 @@ fn run_effect(deps: &Deps, config: &Config, effect: &Effect) -> Input {
             let Some(p) = config.pc(pc) else {
                 return lost();
             };
-            let ready = deps
+            // Every port is tried, so that the details window can show each one.
+            let open = deps
                 .ports
-                .all_open(&p.host, &p.ports, p.timing.port_timeout);
+                .open_ports(&p.host, &p.ports, p.timing.port_timeout);
             Input::PcProbed {
                 pc: pc.clone(),
                 kind: *kind,
-                ready,
+                ready: open.len() == p.ports.len(),
+                open: Some(open),
             }
         }
         Effect::TunnelUp(tunnel) => {

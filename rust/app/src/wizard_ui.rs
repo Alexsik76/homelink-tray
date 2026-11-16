@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use crate::manage::{Manage, model, place_problems, show_in_front, with_manage};
 use crate::ssh_ops::{self, HostKeyOffer, NewKey, TrustError};
 use crate::ui;
-use crate::view::{CheckLine, Mark};
+use crate::view::{CheckLine, Flow, Mark};
 
 /// The number of error slots of the window (see `wizard.slint`).
 const ERRORS: usize = 26;
@@ -377,10 +377,14 @@ impl Manage {
             s.step = step;
         }
         self.wizard.set_step(step_index(step));
+        if matches!(step, Step::Wake | Step::Power) {
+            self.fill_default_keys();
+        }
         self.wizard.set_step_text(self.tr.wizard_step(step).into());
         self.wizard
             .set_errors(model(vec![SharedString::default(); ERRORS]));
         self.wizard.set_general_error("".into());
+        self.wizard.set_footer_note("".into());
         if step != Step::Checks {
             // A run that is still going belongs to the step that was left.
             self.check_run.set(self.check_run.get() + 1);
@@ -492,6 +496,40 @@ impl Manage {
         };
         w.set_pc_setup_intro(intro.into());
         w.set_pc_setup(commands.into());
+    }
+
+    /// "Огляд…" next to the key field `which` (0 the new relay's, 1 the PC's): the standard
+    /// dialog, starting in the profile's `.ssh` folder; the chosen file goes into the field.
+    pub(crate) fn browse_key(&self, which: i32) {
+        let start = ssh_ops::profile_dir().map(|p| p.join(".ssh"));
+        let Some(path) = crate::platform::pick_file(start.as_deref()) else {
+            return;
+        };
+        let path = path.display().to_string();
+        log::info!("wizard: key file chosen: {path}");
+        self.set_key_error(which, "");
+        if which == 0 {
+            self.wizard.set_new_identity(path.into());
+        } else {
+            self.wizard.set_ssh_identity(path.into());
+        }
+        self.refresh_help();
+    }
+
+    /// Fills an empty key field with the only key of the profile's `.ssh` folder, if there is
+    /// exactly one (a private file with its `.pub` beside it).
+    fn fill_default_keys(&self) {
+        let Some(key) = ssh_ops::profile_dir().and_then(|p| ssh_ops::only_key(&p.join(".ssh")))
+        else {
+            return;
+        };
+        let key = key.display().to_string();
+        if self.wizard.get_ssh_identity().trim().is_empty() {
+            self.wizard.set_ssh_identity(key.clone().into());
+        }
+        if self.wizard.get_new_identity().trim().is_empty() {
+            self.wizard.set_new_identity(key.into());
+        }
     }
 
     /// "Створити ключ" next to the key field `which` (0 the new relay's, 1 the PC's).
@@ -689,6 +727,27 @@ impl Manage {
         let (errors, general) = place_problems(&self.tr, problems, slot, ERRORS);
         self.wizard.set_errors(model(errors));
         self.wizard.set_general_error(general.into());
+        let flow = self.wizard.global::<Flow>();
+        flow.set_error_generation(flow.get_error_generation().wrapping_add(1));
+        // The marked fields may be scrolled away: say so by the buttons and go to the top.
+        let marked = problems.iter().any(|p| slot(p.field).is_some());
+        let note = if marked {
+            self.tr.t("wizard.fix_fields", &[])
+        } else {
+            String::new()
+        };
+        if marked {
+            log::info!(
+                "wizard: refused, fields: {}",
+                problems
+                    .iter()
+                    .map(|p| p.field)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            self.wizard.invoke_scroll_to_top();
+        }
+        self.wizard.set_footer_note(note.into());
     }
 
     /// Shows the problems, on the first step that has one of them.
@@ -718,6 +777,45 @@ impl Manage {
             if next == Step::Checks {
                 self.start_checks(&draft);
             }
+        }
+    }
+
+    /// A click on the step bar. Going back needs nothing; going forward checks every step on
+    /// the way and stops at the first one with a problem, so a PC cannot skip a step's rules.
+    pub(crate) fn wizard_go_to(&self, number: i32) {
+        let Some((draft, current)) = self.current() else {
+            return;
+        };
+        let Some(target) = Step::ALL
+            .into_iter()
+            .find(|s| i32::try_from(s.number()).ok() == Some(number))
+        else {
+            return;
+        };
+        if target == current {
+            return;
+        }
+        if target.number() < current.number() {
+            self.set_step(target);
+            return;
+        }
+        let config = self.config.borrow().clone();
+        for step in Step::ALL
+            .into_iter()
+            .filter(|s| s.number() >= current.number() && s.number() < target.number())
+        {
+            let problems = draft.validate_step(step, &config);
+            if !problems.is_empty() {
+                if step != current {
+                    self.set_step(step);
+                }
+                self.show_problems(&problems);
+                return;
+            }
+        }
+        self.set_step(target);
+        if target == Step::Checks {
+            self.start_checks(&draft);
         }
     }
 

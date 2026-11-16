@@ -18,7 +18,7 @@ use homelink_core::adapters::command::{CommandWake, StdCommandRunner};
 use homelink_core::adapters::default_wake_registry;
 use homelink_core::adapters::magic::{MAGIC_PACKET_LEN, MagicPacketWake, magic_packet};
 use homelink_core::adapters::power::CommandPowerRunner;
-use homelink_core::adapters::tcp::{TcpPortProbe, all_open};
+use homelink_core::adapters::tcp::{TcpPortProbe, all_open, open_ports};
 use homelink_core::domain::{Host, MacAddr, PowerAction, WakeMethod};
 use homelink_core::ports::{
     CommandOutcome, CommandRunner, PortProbe, PowerError, PowerRunner, WakeError, WakeRequest,
@@ -200,6 +200,21 @@ fn the_magic_sender_refuses_other_methods() {
 // ======================================================================================
 
 #[cfg(unix)]
+#[test]
+fn open_ports_names_each_port_that_answers_in_settings_order() {
+    let (_a, a) = listen();
+    let (_b, b) = listen();
+    let closed = closed_port();
+    assert_eq!(
+        open_ports("127.0.0.1", &[closed, b, a], Duration::from_secs(2)),
+        [b, a]
+    );
+    assert_eq!(
+        open_ports("127.0.0.1", &[], Duration::from_secs(2)),
+        Vec::<u16>::new()
+    );
+}
+
 mod commands {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

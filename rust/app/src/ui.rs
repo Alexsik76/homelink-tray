@@ -33,8 +33,8 @@ use crate::appearance::Appearance;
 use crate::icon;
 use crate::platform;
 use crate::view::{
-    DetailRow, DetailsWindow, GroupRow, Mark, Motion, Nav, Panel, PcRow, PowerKind, Strings, Theme,
-    Tray, TunnelRow,
+    DetailRow, DetailsWindow, GroupRow, Mark, Motion, Nav, Panel, PcRow, PortMark, PowerKind,
+    Strings, Theme, Tray, TunnelRow,
 };
 
 /// Longest tooltip the tray accepts, in UTF-16 code units (Windows allows 127 and a NUL).
@@ -691,7 +691,25 @@ impl Ui {
                         false,
                     ),
                     self.row("details.wake", wake, false, false),
-                    self.row("details.ports", ports, false, false),
+                    {
+                        // Each port of the settings, green when it answered the last check, red
+                        // when it did not, plain before the first check.
+                        let marks: Vec<PortMark> = pc
+                            .ports
+                            .iter()
+                            .map(|port| PortMark {
+                                port: port.to_string().into(),
+                                state: match &pc.open_ports {
+                                    None => 0,
+                                    Some(open) if open.contains(port) => 1,
+                                    Some(_) => 2,
+                                },
+                            })
+                            .collect();
+                        let mut row = self.row("details.ports", ports, false, false);
+                        row.ports = ModelRc::new(VecModel::from(marks));
+                        row
+                    },
                     self.row(
                         "details.last_check",
                         self.age(pc.last_checked),
@@ -715,6 +733,7 @@ impl Ui {
             value: value.into(),
             strong,
             fail,
+            ports: ModelRc::default(),
         }
     }
 

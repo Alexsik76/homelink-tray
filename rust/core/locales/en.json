@@ -315,5 +315,7 @@
   "check.result.neighbor_not_seen": "the router does not see this address now",
   "wizard.check.use_values": "Use these values",
   "wizard.hint.identity": "The key HomeLink logs in with over SSH, without a password. Press \"Create key\" or give the full path of an existing key.",
-  "wizard.hint.interface": "For a network in a VLAN, the interface of that VLAN (such as TrustVlan10); without VLANs, bridge. The \"Checks\" step shows the right one from the router."
+  "wizard.hint.interface": "For a network in a VLAN, the interface of that VLAN (such as TrustVlan10); without VLANs, bridge. The \"Checks\" step shows the right one from the router.",
+  "wizard.fix_fields": "Fix the fields marked in red above",
+  "wizard.ssh.browse": "Browse…"
 }

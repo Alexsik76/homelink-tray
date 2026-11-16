@@ -315,5 +315,7 @@
   "check.result.neighbor_not_seen": "роутер зараз не бачить цієї адреси",
   "wizard.check.use_values": "Застосувати ці значення",
   "wizard.hint.identity": "Ключ, яким HomeLink входить через SSH без пароля. Натисніть «Створити ключ» або вкажіть повний шлях до наявного ключа.",
-  "wizard.hint.interface": "Для мережі у VLAN — інтерфейс цієї VLAN (наприклад TrustVlan10), без VLAN — bridge. На кроці «Перевірка» роутер підкаже правильний."
+  "wizard.hint.interface": "Для мережі у VLAN — інтерфейс цієї VLAN (наприклад TrustVlan10), без VLAN — bridge. На кроці «Перевірка» роутер підкаже правильний.",
+  "wizard.fix_fields": "Виправте поля, позначені червоним вище",
+  "wizard.ssh.browse": "Огляд…"
 }

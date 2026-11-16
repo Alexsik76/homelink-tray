@@ -67,6 +67,25 @@ pub(crate) fn create_key(runner: &dyn CommandRunner, config_dir: &Path) -> Resul
     })
 }
 
+/// The only private key in `dir`: a file whose `<name>.pub` is beside it. `None` when there is
+/// none or more than one (then the user chooses). Only file names are looked at.
+pub(crate) fn only_key(dir: &Path) -> Option<PathBuf> {
+    let names: Vec<String> = fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    let keys: Vec<&String> = names
+        .iter()
+        .filter(|n| !n.ends_with(".pub") && names.contains(&format!("{n}.pub")))
+        .collect();
+    match keys.as_slice() {
+        [one] => Some(dir.join(one)),
+        _ => None,
+    }
+}
+
 /// The public key of the key file `private`, if its `.pub` file exists and holds a public key.
 /// Only the `.pub` file is opened.
 pub(crate) fn read_public_key(private: &str) -> Option<String> {

@@ -151,6 +151,21 @@ pub(crate) fn info(text: &str) {
     show(text, true);
 }
 
+/// Asks the user for an existing file with the standard Windows dialog, starting in `start`;
+/// `None` when the dialog is cancelled (and always off Windows). Blocks until it closes.
+pub(crate) fn pick_file(start: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        win32::pick_file(start)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = start;
+        log::info!("a file dialog is only available on Windows");
+        None
+    }
+}
+
 /// The local time zone's offset from UTC in minutes (east positive), including summer time
 /// while it applies; `None` when Windows does not say, and off Windows.
 pub(crate) fn utc_offset_minutes() -> Option<i32> {
@@ -402,6 +417,45 @@ mod win32 {
         unsafe {
             let _ = AttachConsole(ATTACH_PARENT_PROCESS);
         }
+    }
+
+    /// The standard "Open" dialog for one existing file.
+    pub(super) fn pick_file(start: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows::Win32::UI::Controls::Dialogs::{
+            GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+        };
+        use windows::core::PWSTR;
+
+        let mut buffer = [0u16; 1024];
+        let dir: Vec<u16> = start
+            .filter(|d| d.is_dir())
+            .map(|d| d.as_os_str().encode_wide().chain([0]).collect())
+            .unwrap_or_default();
+        // Pairs of "name\0pattern\0", then a final "\0".
+        let filter: Vec<u16> = "*\0*\0\0".encode_utf16().collect();
+        let mut ofn = OPENFILENAMEW {
+            lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+            lpstrFile: PWSTR(buffer.as_mut_ptr()),
+            nMaxFile: buffer.len() as u32,
+            lpstrFilter: PCWSTR(filter.as_ptr()),
+            lpstrInitialDir: if dir.is_empty() {
+                PCWSTR::null()
+            } else {
+                PCWSTR(dir.as_ptr())
+            },
+            Flags: OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR,
+            ..Default::default()
+        };
+        // SAFETY: every pointer in `ofn` points to a buffer that lives until the call returns;
+        // `nMaxFile` is the length of `buffer`.
+        let chosen = unsafe { GetOpenFileNameW(&mut ofn) }.as_bool();
+        if !chosen {
+            return None;
+        }
+        let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+        let name = buffer.get(..len)?;
+        Some(std::ffi::OsString::from_wide(name).into())
     }
 
     /// Shows a message box with no owner window.

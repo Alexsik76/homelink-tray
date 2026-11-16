@@ -127,6 +127,7 @@ impl Machine {
         id: &PcId,
         kind: PcProbe,
         ready: bool,
+        open: Option<Vec<u16>>,
         now: Time,
         out: &mut Output,
     ) {
@@ -147,6 +148,9 @@ impl Machine {
                     return;
                 }
                 p.last_check = Some(now);
+                if open.is_some() {
+                    p.open_ports = open;
+                }
                 self.poll_result(pi, ready, now, out);
             }
             PcProbe::Check => {
@@ -158,6 +162,9 @@ impl Machine {
                     return;
                 }
                 p.last_check = Some(now);
+                if open.is_some() {
+                    p.open_ports = open;
+                }
                 if ready {
                     // P6
                     p.action = None;

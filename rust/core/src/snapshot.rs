@@ -236,6 +236,9 @@ pub struct PcView {
     pub wake: Option<WakeSummary>,
     /// TCP ports that must be open for the PC to count as online.
     pub ports: Vec<u16>,
+    /// Which of them answered the last probe; `None` before the first one and while the PC
+    /// is unknown.
+    pub open_ports: Option<Vec<u16>>,
 }
 
 impl PcView {

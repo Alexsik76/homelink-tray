@@ -222,6 +222,17 @@ fn walk_tables(table: &mut Table, f: &mut dyn FnMut(&mut Table)) {
     }
 }
 
+/// A new `[[pcs]]` (or other) entry in the layout of the template: its sub-tables
+/// (`[pcs.wake]` …) and their keys indented by two spaces, a blank line before each sub-table.
+fn indent_children(entry: &mut Table) {
+    walk_tables(entry, &mut |t| {
+        t.decor_mut().set_prefix("\n  ");
+        for (mut key, _) in t.iter_mut() {
+            key.leaf_decor_mut().set_prefix("  ");
+        }
+    });
+}
+
 fn scale_positions(root: &mut Table) {
     walk_tables(root, &mut |t| {
         let scaled = t.position().map(|p| p * GAP);
@@ -453,7 +464,7 @@ fn merge_entries(
             None => {
                 let mut table = new_table.clone();
                 table.decor_mut().set_prefix("\n");
-                walk_tables(&mut table, &mut |t| t.decor_mut().set_prefix("\n"));
+                indent_children(&mut table);
                 table.set_position(None);
                 entries.push(Entry {
                     table,

@@ -56,11 +56,20 @@ export global Motion {
     in-out property <bool> blink-on: true;
 }
 
+// One port of the details window: open (green), closed (red) or not checked (ink).
+export struct PortMark {
+    port: string,
+    // 0 not checked, 1 open, 2 closed.
+    state: int,
+}
+
 export struct DetailRow {
     label: string,
     value: string,
     strong: bool,
     fail: bool,
+    // When not empty, the row shows these ports in their colours instead of `value`.
+    ports: [PortMark],
 }
 
 export struct TunnelRow {
@@ -722,13 +731,26 @@ export component DetailsWindow inherits Window {
                             font-size: 12px;
                             wrap: word-wrap;
                         }
-                        Text {
+                        if row.ports.length == 0 : Text {
                             horizontal-stretch: 1;
                             text: row.value;
                             color: row.fail ? Theme.state-fail : Theme.ink;
                             font-size: 12px;
                             font-weight: row.strong ? 600 : 400;
                             wrap: word-wrap;
+                        }
+                        if row.ports.length > 0 : HorizontalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 8px;
+                            alignment: start;
+                            for mark in row.ports : Text {
+                                text: mark.port;
+                                color: mark.state == 1 ? Theme.state-ok
+                                    : mark.state == 2 ? Theme.state-fail
+                                    : Theme.ink;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
                         }
                     }
                 }

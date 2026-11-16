@@ -25,6 +25,46 @@ impl PortProbe for TcpPortProbe {
     fn all_open(&self, host: &Host, ports: &[u16], timeout: Duration) -> bool {
         all_open(host.as_str(), ports, timeout)
     }
+
+    fn open_ports(&self, host: &Host, ports: &[u16], timeout: Duration) -> Vec<u16> {
+        open_ports(host.as_str(), ports, timeout)
+    }
+}
+
+/// The ports of `host` that accept a TCP connection within `timeout` in total, tried
+/// concurrently, each to the end (unlike [`all_open`], one closed port does not stop the others).
+pub fn open_ports(host: &str, ports: &[u16], timeout: Duration) -> Vec<u16> {
+    if ports.is_empty() {
+        return Vec::new();
+    }
+    let deadline = Instant::now() + timeout;
+    let Some(addresses) = resolve(host, timeout) else {
+        log::debug!("cannot resolve {host}");
+        return Vec::new();
+    };
+    let never = AtomicBool::new(false);
+    let open: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+    thread::scope(|scope| {
+        for &port in ports {
+            let (addresses, never, open) = (&addresses, &never, &open);
+            let _ = thread::Builder::new()
+                .name("homelink-probe".into())
+                .spawn_scoped(scope, move || {
+                    if connect_any(addresses, port, deadline, never)
+                        && let Ok(mut open) = open.lock()
+                    {
+                        open.push(port);
+                    }
+                });
+        }
+    });
+    let found = open.into_inner().unwrap_or_default();
+    // In the order of the settings.
+    ports
+        .iter()
+        .copied()
+        .filter(|p| found.contains(p))
+        .collect()
 }
 
 /// Whether every port of `host` accepts a TCP connection within `timeout` in total.

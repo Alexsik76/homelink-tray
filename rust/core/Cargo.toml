@@ -1,6 +1,6 @@
 [package]
 name = "homelink-core"
-version = "1.0.0-rc.8"
+version = "1.0.0-rc.9"
 edition = "2024"
 description = "Platform-independent core of HomeLink: domain model, configuration, notices, i18n"
 publish = false

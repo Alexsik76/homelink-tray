@@ -137,6 +137,12 @@ export component WizardWindow inherits Window {
     // Problems, by field index (see above), and the problems with no field on this step.
     in property <[string]> errors;
     in property <string> general-error;
+    // Next to the buttons when "Далі" was refused: the fields to fix may be scrolled away.
+    in property <string> footer-note;
+    // Scrolls the step to its top, where the first marked field is.
+    public function scroll-to-top() {
+        flick.content-y = 0;
+    }
 
     // Step 5.
     in property <[CheckLine]> checks;
@@ -174,6 +180,10 @@ export component WizardWindow inherits Window {
     callback trust-host(int);
     callback trust-confirm();
     callback trust-cancel();
+    // "Огляд…" by the key field `which` (0 the new relay's, 1 the PC's).
+    callback browse-key(int);
+    // A click on a segment of the step bar: the step number, 1 to 5.
+    callback go-to-step(int);
     // "Застосувати ці значення": the MAC and interface the router sees go to step 3.
     callback use-found-values();
 
@@ -188,8 +198,13 @@ export component WizardWindow inherits Window {
     changed ssh-user => { root.refresh-help(); }
     changed os-index => { root.refresh-help(); }
     changed power-index => { root.refresh-help(); }
-    changed allow-sleep => { root.refresh-help(); }
-    changed allow-shutdown => { root.refresh-help(); }
+    changed allow-sleep => { root.refresh-help(); root.power-edited = true; }
+    changed allow-shutdown => { root.refresh-help(); root.power-edited = true; }
+    // The sleep-and-shutdown problem belongs to the boxes as they were; it shows again after
+    // the next check when it still applies.
+    property <bool> power-edited;
+    property <int> error-generation: Flow.error-generation;
+    changed error-generation => { root.power-edited = false; }
 
     title: Words.about-name + " — " + root.heading;
     icon: @image-url("icons/app.png");
@@ -237,14 +252,26 @@ export component WizardWindow inherits Window {
             height: 27px;
             padding-left: 16px;
             padding-right: 16px;
-            padding-top: 12px;
+            padding-top: 6px;
             spacing: 4px;
+            // Each segment goes to its step on a click; the one under the mouse is lit. The
+            // segment is a 15 px high area (easy to hit) with the 3 px bar at the place the bar
+            // always had.
             for i in 5 : Rectangle {
                 horizontal-stretch: 1;
-                height: 3px;
-                background: i + 1 < root.step ? Theme.ink
-                    : i + 1 == root.step ? Theme.state-off
-                    : Theme.line;
+                height: 15px;
+                Rectangle {
+                    y: 6px;
+                    height: 3px;
+                    background: seg-ta.has-hover && i + 1 != root.step ? Theme.ink-2
+                        : i + 1 < root.step ? Theme.ink
+                        : i + 1 == root.step ? Theme.state-off
+                        : Theme.line;
+                }
+                seg-ta := TouchArea {
+                    mouse-cursor: i + 1 == root.step ? default : pointer;
+                    clicked => { root.go-to-step(i + 1); }
+                }
             }
         }
 
@@ -404,6 +431,7 @@ export component WizardWindow inherits Window {
                                     error: root.relay-key-error;
                                     public-key: root.relay-public-key;
                                     create => { root.create-key(0); }
+                                    browse => { root.browse-key(0); }
                                 }
                                 if root.relay-kind != 0 : VerticalLayout {
                                     spacing: 6px;
@@ -546,7 +574,7 @@ export component WizardWindow inherits Window {
                             }
                         }
                         // Over SSH sleep and shutdown come together: the problem is shown here.
-                        if root.errors[18] != "" || root.errors[19] != "" : Text {
+                        if (root.errors[18] != "" || root.errors[19] != "") && !root.power-edited : Text {
                             width: parent.width;
                             text: root.errors[18] != "" ? root.errors[18] : root.errors[19];
                             color: Theme.state-fail;
@@ -616,6 +644,7 @@ export component WizardWindow inherits Window {
                                     error: root.power-key-error;
                                     public-key: root.power-public-key;
                                     create => { root.create-key(1); }
+                                    browse => { root.browse-key(1); }
                                 }
                                 // What to run on the PC (undesigned: text and a copy button).
                                 if root.pc-setup != "" : VerticalLayout {
@@ -793,7 +822,14 @@ export component WizardWindow inherits Window {
                 height: parent.height;
                 padding: 12px;
                 spacing: 8px;
-                alignment: end;
+                Text {
+                    text: root.footer-note;
+                    color: Theme.state-fail;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
                 Btn {
                     label: root.step == 1 ? Words.cancel : Words.back;
                     kind: BtnKind.secondary;

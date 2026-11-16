@@ -53,6 +53,7 @@ fn pc_probed(m: &mut Machine, id: &PcId, kind: PcProbe, ready: bool, now: Time) 
             pc: id.clone(),
             kind,
             ready,
+            open: None,
         },
         now,
     )
@@ -1746,4 +1747,34 @@ fn a_tunnel_without_a_probe_host_needs_wg_and_not_ping() {
             .iter()
             .any(|e| matches!(e, Effect::ProbeTunnel { tunnel, .. } if tunnel.as_str() == "home"))
     );
+}
+
+#[test]
+fn the_open_ports_of_the_last_probe_reach_the_details() {
+    let mut m = multi();
+    let nas = pc_id("nas");
+    m.step(Input::Tick, at(0));
+    assert_eq!(pc_view(&m, "nas").open_ports, None, "not probed yet");
+    m.step(
+        Input::PcProbed {
+            pc: nas.clone(),
+            kind: PcProbe::Poll,
+            ready: false,
+            open: Some(vec![]),
+        },
+        at(0),
+    );
+    assert_eq!(pc_view(&m, "nas").open_ports, Some(vec![]));
+    m.step(Input::Tick, at(10));
+    m.step(
+        Input::PcProbed {
+            pc: nas,
+            kind: PcProbe::Poll,
+            ready: true,
+            open: Some(pc_view(&m, "nas").ports.clone()),
+        },
+        at(10),
+    );
+    let view = pc_view(&m, "nas");
+    assert_eq!(view.open_ports, Some(view.ports.clone()));
 }

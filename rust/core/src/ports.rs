@@ -116,6 +116,16 @@ pub trait Pinger: Send + Sync {
 pub trait PortProbe: Send + Sync {
     /// Whether every port accepts a connection; stops at the first one that does not.
     fn all_open(&self, host: &Host, ports: &[u16], timeout: Duration) -> bool;
+
+    /// The ports that accept a connection, each tried to the end (for the details window,
+    /// which shows every port of the PC open or closed).
+    fn open_ports(&self, host: &Host, ports: &[u16], timeout: Duration) -> Vec<u16> {
+        ports
+            .iter()
+            .copied()
+            .filter(|port| self.all_open(host, &[*port], timeout))
+            .collect()
+    }
 }
 
 /// Why a wake request failed.

@@ -256,6 +256,8 @@ fn wire_wizard(wizard: &WizardWindow) {
     wizard.on_trust_host(|index| with_manage(|m| m.trust_host(index)));
     wizard.on_trust_confirm(|| with_manage(Manage::trust_confirm));
     wizard.on_trust_cancel(|| with_manage(Manage::trust_cancel));
+    wizard.on_go_to_step(|number| with_manage(|m| m.wizard_go_to(number)));
+    wizard.on_browse_key(|which| with_manage(|m| m.browse_key(which)));
     wizard.on_use_found_values(|| with_manage(Manage::use_found_values));
 }
 
@@ -375,6 +377,7 @@ fn fill_words(w: &Words, tr: &Translator) {
     w.set_public_key_label(t("wizard.ssh.public_key"));
     w.set_trust_host(t("wizard.ssh.trust_host"));
     w.set_use_values(t("wizard.check.use_values"));
+    w.set_browse(t("wizard.ssh.browse"));
     w.set_trust(t("wizard.ssh.trust"));
     w.set_openssh_missing(t("wizard.ssh.openssh_missing"));
 }
@@ -763,6 +766,8 @@ impl Manage {
             Err(problems) => {
                 let (errors, general) = place_problems(&self.tr, &problems, tunnel_slot, 3);
                 self.form_window.set_errors(model(errors));
+                let flow = self.form_window.global::<Flow>();
+                flow.set_error_generation(flow.get_error_generation().wrapping_add(1));
                 self.form_window.set_general_error(general.into());
             }
             Ok(change) => match self.commit(change) {
