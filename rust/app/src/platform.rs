@@ -55,14 +55,41 @@ pub(crate) fn hide_from_taskbar(window: &slint::Window) {
 /// Shows a tray balloon with this title and body, in the system's notification style for the
 /// severity. Call on the event loop thread (the window that owns the balloon icon must be on a
 /// thread that pumps messages). Off Windows there is no balloon: the notice is in the log.
+///
+/// Windows 10 LTSC accepted balloons from the hidden icon and showed none (seen on 16.11.2026),
+/// so the icon is made visible for the balloon and hidden again [`BALLOON_VISIBLE`] after the
+/// last one. For those seconds the tray may show a second HomeLink icon.
 pub(crate) fn show_balloon(title: &str, body: &str, severity: Severity) {
     let balloon = Balloon::new(title, body, severity);
     #[cfg(windows)]
-    if !win32::show_balloon(&balloon) {
-        log::warn!("the tray balloon could not be shown");
+    {
+        if win32::show_balloon(&balloon) {
+            let generation = BALLOON_GENERATION.with(|g| {
+                g.set(g.get().wrapping_add(1));
+                g.get()
+            });
+            slint::Timer::single_shot(BALLOON_VISIBLE, move || {
+                // A later balloon keeps the icon for its own time.
+                if BALLOON_GENERATION.with(std::cell::Cell::get) == generation {
+                    win32::hide_balloon_icon();
+                }
+            });
+        } else {
+            log::warn!("the tray balloon could not be shown");
+        }
     }
     #[cfg(not(windows))]
     let _ = balloon;
+}
+
+/// How long the balloon icon stays visible after the last balloon.
+#[cfg(windows)]
+const BALLOON_VISIBLE: Duration = Duration::from_secs(10);
+
+#[cfg(windows)]
+thread_local! {
+    /// Counts the balloons, so that only the timer of the last one hides the icon.
+    static BALLOON_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Removes the icon that carries the balloons. Call once, when the event loop has ended.
@@ -173,8 +200,8 @@ mod win32 {
         GetTimeZoneInformation, TIME_ZONE_ID_INVALID, TIME_ZONE_INFORMATION,
     };
     use windows::Win32::UI::Shell::{
-        NIF_ICON, NIF_INFO, NIF_STATE, NIIF_ERROR, NIIF_INFO, NIIF_WARNING, NIM_ADD, NIM_DELETE,
-        NIM_MODIFY, NIS_HIDDEN, NOTIFYICONDATAW, Shell_NotifyIconW,
+        NIF_ICON, NIF_INFO, NIF_STATE, NIF_TIP, NIIF_ERROR, NIIF_INFO, NIIF_WARNING, NIM_ADD,
+        NIM_DELETE, NIM_MODIFY, NIS_HIDDEN, NOTIFYICONDATAW, Shell_NotifyIconW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, HWND_MESSAGE, IDI_APPLICATION, LoadIconW,
@@ -251,9 +278,18 @@ mod win32 {
                 None,
             )
             .ok()?;
+            // The application icon of the executable's resources (id 1, from `build.rs`),
+            // else the generic one; it is seen while a balloon is up.
+            let icon = LoadIconW(
+                Some(hinstance.into()),
+                PCWSTR(std::ptr::without_provenance(1)), /* MAKEINTRESOURCE(1) */
+            )
+            .or_else(|_| LoadIconW(None, IDI_APPLICATION))
+            .unwrap_or_default();
             let data = NOTIFYICONDATAW {
-                uFlags: NIF_ICON | NIF_STATE,
-                hIcon: LoadIconW(None, IDI_APPLICATION).unwrap_or_default(),
+                uFlags: NIF_ICON | NIF_STATE | NIF_TIP,
+                hIcon: icon,
+                szTip: balloon::fill(&"HomeLink".encode_utf16().collect::<Vec<u16>>()),
                 dwState: NIS_HIDDEN,
                 dwStateMask: NIS_HIDDEN,
                 ..icon_data(hwnd)
@@ -267,11 +303,37 @@ mod win32 {
         }
     }
 
-    /// Shows the balloon; `false` when Windows did not take it.
+    /// Shows or hides the balloon icon in the tray.
+    fn set_icon_hidden(hwnd: HWND, hidden: bool) -> bool {
+        let data = NOTIFYICONDATAW {
+            uFlags: NIF_STATE,
+            dwState: if hidden {
+                NIS_HIDDEN
+            } else {
+                Default::default()
+            },
+            dwStateMask: NIS_HIDDEN,
+            ..icon_data(hwnd)
+        };
+        // SAFETY: `data` is a live NOTIFYICONDATAW with its size set, for the duration of the call.
+        unsafe { Shell_NotifyIconW(NIM_MODIFY, &data).as_bool() }
+    }
+
+    /// Hides the balloon icon again (the balloon itself stays in the notification centre).
+    pub(super) fn hide_balloon_icon() {
+        if let Some(hwnd) = BALLOON_WINDOW.get() {
+            let _ = set_icon_hidden(hwnd, true);
+        }
+    }
+
+    /// Shows the balloon from the icon, made visible first; `false` when Windows did not take it.
     pub(super) fn show_balloon(balloon: &Balloon) -> bool {
         let Some(hwnd) = balloon_window() else {
             return false;
         };
+        if !set_icon_hidden(hwnd, false) {
+            log::warn!("the balloon icon could not be made visible");
+        }
         let data = NOTIFYICONDATAW {
             uFlags: NIF_INFO,
             szInfoTitle: balloon::fill(&balloon.title),

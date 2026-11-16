@@ -679,7 +679,10 @@ unless the name changes.
   PC that goes off after an accepted power command, for a PC that becomes unknown because its
   tunnel dropped) hold for balloons too. Not verified on Windows: that a balloon of a hidden
   icon is shown on Windows 10 LTSC and 11 (if not, the fallback is to show the icon only while a
-  balloon is up). Off Windows there are no balloons, only the log. An RDP failure is shown in a
+  balloon is up). **Seen on 16.11.2026 on Windows 10 LTSC: balloons of the hidden icon were
+  accepted and not shown.** Since rc.6 the icon (the application icon, resource id 1, tip
+  "HomeLink") is made visible for each balloon and hidden 10 s after the last one
+  (`platform::show_balloon`). Off Windows there are no balloons, only the log. An RDP failure is shown in a
   message box.
 - Elevation: v0.3 relaunches itself elevated because the WireGuard service needs admin. The
   app does the same at the start of the real mode: `whoami /groups` shows the integrity level
