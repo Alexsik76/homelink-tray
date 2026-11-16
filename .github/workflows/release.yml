@@ -35,6 +35,16 @@ jobs:
       - name: Install Rust (rust/rust-toolchain.toml)
         run: rustup install
 
+      # Restore only: the cache saved by the rust-app job of CI on main. A tag run saves none.
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-app-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
+          restore-keys: rust-app-
+
       - name: Licence policy and third-party notices
         working-directory: ${{ github.workspace }}
         run: python tools/third_party_notices.py --check

@@ -1035,13 +1035,18 @@ tests prove only the thin adapters.
   (`rust/deny.toml`: RustSec advisories, the same banned clients, sources; licences are left to
   the script), clippy `-D warnings`, `cargo doc` with warnings denied, tests.
 - Job `rust-app` (windows-latest): fmt, clippy `-D warnings`, tests of `homelink`, the release
-  build, `tools/smoke.ps1` (size budget 16 MiB, `--version` equal to the
-  package version, `--check-config` passes on the example and fails on a missing file without
-  creating it), the `HomeLink-rust-demo` artifact.
-- `release.yml`: a tag `v*` must equal the version in `rust/app/Cargo.toml`; the same gates as
-  the `rust-app` job plus the licence check; the release build; the smoke
+  build (exactly the one of `release.yml`), `tools/smoke.ps1` (size budget 16 MiB, `--version`
+  equal to the package version, `--check-config` passes on the example and fails on a missing
+  file without creating it), the `HomeLink` artifact (kept 14 days). That artifact of the
+  branch's run is the executable for manual testing on Windows; no tag is needed for it.
+- Both jobs cache `~/.cargo` and `rust/target` under a key of `Cargo.lock` and the toolchain;
+  `restore-keys` falls back to the job's newest cache when the key changes.
+- `release.yml`: a tag `v*` must equal the version in `rust/app/Cargo.toml`; it restores (and
+  never saves) the cache of the `rust-app` job saved on `main`; the same gates as the `rust-app`
+  job plus the licence check; the release build; the smoke
   run; a release with `HomeLink.exe` (name unchanged), `HomeLink.exe.sha256` and
-  `THIRD-PARTY-NOTICES.txt`. A tag with a suffix (`v1.0.0-rc.N`) is a pre-release.
+  `THIRD-PARTY-NOTICES.txt`. A tag with a suffix (`v1.0.0-rc.N`) is a pre-release. Tags are made
+  only for real release candidates and releases.
 
 Not done: a coverage threshold, a scheduled job on the newest stable, Dependabot (new CI
 configuration, only with the owner's approval).
