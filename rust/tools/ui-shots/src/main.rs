@@ -276,6 +276,43 @@ fn main() {
         if dark {
             set.set_page(1);
             shot(&sw, 720, 480, &format!("{out}/settings-help.png"));
+            // The capabilities page with the paths of a Windows machine (from the check of 16.11).
+            let mut caps = homelink_core::capabilities::Capabilities::from_statuses(
+                homelink_core::capabilities::Tool::ALL.map(|tool| {
+                    let path = match tool {
+                        homelink_core::capabilities::Tool::WireGuard => "C:/Program Files/WireGuard/wireguard.exe".to_owned(),
+                        homelink_core::capabilities::Tool::Wg => "C:/Program Files/WireGuard/wg.exe".to_owned(),
+                        homelink_core::capabilities::Tool::Ssh
+                        | homelink_core::capabilities::Tool::SshKeygen
+                        | homelink_core::capabilities::Tool::SshKeyscan => format!("C:/Windows/System32/OpenSSH/{}.exe", tool.program()),
+                        homelink_core::capabilities::Tool::PowerShell => "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe".to_owned(),
+                        other => format!("C:/Windows/System32/{}.exe", other.program()),
+                    };
+                    (tool, homelink_core::capabilities::ToolStatus::Found(path.into()))
+                }),
+            );
+            for (name, missing) in [("settings-caps", false), ("settings-caps-missing", true)] {
+                if missing {
+                    caps = homelink_core::capabilities::Capabilities::from_statuses([]);
+                }
+                let tiles: Vec<CapabilityTile> = homelink_core::capability_page::tiles(&tr, &caps)
+                    .into_iter()
+                    .map(|tile| CapabilityTile {
+                        title: tile.title.into(),
+                        found: tile.found,
+                        line: tile.line.into(),
+                        details: slint::ModelRc::new(slint::VecModel::from(
+                    tile.details.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+                )),
+                        link_label: tile.link.as_ref().map(|l| l.label.clone()).unwrap_or_default().into(),
+                        link_url: tile.link.map(|l| l.url).unwrap_or_default().into(),
+                    })
+                    .collect();
+                set.set_capability_tiles(ModelRc::new(VecModel::from(tiles)));
+                set.set_capabilities_checked("Checked 12:37".into());
+                set.set_page(4);
+                shot(&sw, 720, 480, &format!("{out}/{name}.png"));
+            }
         }
     }
 

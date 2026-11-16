@@ -463,7 +463,12 @@ impl Manage {
                 title: tile.title.into(),
                 found: tile.found,
                 line: tile.line.into(),
-                detail: tile.detail.into(),
+                details: slint::ModelRc::new(slint::VecModel::from(
+                    tile.details
+                        .into_iter()
+                        .map(SharedString::from)
+                        .collect::<Vec<_>>(),
+                )),
                 link_label: tile
                     .link
                     .as_ref()
