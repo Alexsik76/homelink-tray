@@ -416,23 +416,6 @@ mod tests {
     }
 
     #[test]
-    fn state_names_exist() {
-        use crate::domain::{PcState, TunnelState};
-        let c = catalog(Lang::En);
-        for s in [TunnelState::Down, TunnelState::Starting, TunnelState::Up] {
-            assert!(c.template(&format!("tunnel.{}", s.as_str())).is_some());
-        }
-        for s in [
-            PcState::Unknown,
-            PcState::Offline,
-            PcState::Waking,
-            PcState::Online,
-        ] {
-            assert!(c.template(&format!("pc.{}", s.as_str())).is_some());
-        }
-    }
-
-    #[test]
     fn every_display_state_has_a_word_in_every_language() {
         use DisplayState as D;
         for lang in Lang::ALL {
@@ -711,7 +694,6 @@ mod tests {
             "wizard.test.note",
             "wizard.hint.ports",
             "tunnel.field.conf",
-            "tunnel.field.probe_host",
             "tunnel.form.save",
         ];
         for lang in Lang::ALL {

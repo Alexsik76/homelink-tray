@@ -601,17 +601,6 @@ pub enum TunnelState {
     Up,
 }
 
-impl TunnelState {
-    /// Suffix of the locale key `tunnel.<name>`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Down => "down",
-            Self::Starting => "starting",
-            Self::Up => "up",
-        }
-    }
-}
-
 /// State of a PC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PcState {
@@ -623,18 +612,6 @@ pub enum PcState {
     Waking,
     /// All ports answer.
     Online,
-}
-
-impl PcState {
-    /// Suffix of the locale key `pc.<name>`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Unknown => "unknown",
-            Self::Offline => "offline",
-            Self::Waking => "waking",
-            Self::Online => "online",
-        }
-    }
 }
 
 #[cfg(test)]
@@ -768,11 +745,5 @@ mod tests {
         ] {
             assert!(TunnelKind::wireguard_name(bad).is_err(), "{bad}");
         }
-    }
-
-    #[test]
-    fn state_names_match_locale_keys() {
-        assert_eq!(TunnelState::Starting.as_str(), "starting");
-        assert_eq!(PcState::Waking.as_str(), "waking");
     }
 }

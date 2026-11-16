@@ -326,8 +326,6 @@ fn fill_words(w: &Words, tr: &Translator) {
     w.set_field_name(t("wizard.field.name"));
     w.set_tunnel_field_conf(t("tunnel.field.conf"));
     w.set_tunnel_hint_conf(t("tunnel.hint.conf"));
-    w.set_tunnel_field_probe(t("tunnel.field.probe_host"));
-    w.set_tunnel_hint_probe(t("tunnel.hint.probe_host"));
     w.set_save(t("tunnel.form.save"));
     w.set_cancel(t("wizard.cancel"));
     w.set_back(t("wizard.back"));
@@ -336,13 +334,11 @@ fn fill_words(w: &Words, tr: &Translator) {
     w.set_field_host(t("wizard.field.host"));
     w.set_field_ports(t("wizard.field.ports"));
     w.set_hint_ports(t("wizard.hint.ports"));
-    w.set_tunnel_none(t("wizard.tunnel.none"));
     w.set_wake_none(t("wizard.wake.none"));
     w.set_wake_relay(t("wizard.wake.relay"));
     w.set_wake_magic(t("wizard.wake.magic_packet"));
     w.set_wake_command(t("wizard.wake.command"));
     w.set_relay_label(t("wizard.field.relay"));
-    w.set_relay_new(t("wizard.relay.new"));
     w.set_relay_routeros(t("wizard.relay.routeros"));
     w.set_relay_etherwake(t("wizard.relay.etherwake"));
     w.set_relay_wakeonlan(t("wizard.relay.wakeonlan"));
