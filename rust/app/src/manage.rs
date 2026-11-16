@@ -262,10 +262,15 @@ fn wire_wizard(wizard: &WizardWindow) {
 }
 
 /// Esc closes the window (or, in the settings, cancels a waiting delete first). The action runs
-/// once the window has finished the event that carried the key.
+/// once the window has finished the event that carried the key. A synthetic press (sent when the
+/// window gets the focus while Esc is still held, e.g. after Esc closed a file dialog) is ignored.
 fn on_escape(window: &slint::Window, action: fn()) {
     window.on_winit_window_event(move |_, event| {
-        if let WindowEvent::KeyboardInput { event: key, .. } = event
+        if let WindowEvent::KeyboardInput {
+            event: key,
+            is_synthetic: false,
+            ..
+        } = event
             && key.state == ElementState::Pressed
             && key.logical_key == Key::Named(NamedKey::Escape)
         {

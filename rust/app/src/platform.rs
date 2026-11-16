@@ -425,6 +425,7 @@ mod win32 {
         use windows::Win32::UI::Controls::Dialogs::{
             GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
         };
+        use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
         use windows::core::PWSTR;
 
         let mut buffer = [0u16; 1024];
@@ -435,6 +436,10 @@ mod win32 {
         // Pairs of "name\0pattern\0", then a final "\0".
         let filter: Vec<u16> = "*\0*\0\0".encode_utf16().collect();
         let mut ofn = OPENFILENAMEW {
+            // The window whose button opened the dialog: it stays disabled while the dialog is
+            // open and gets the focus back when it closes.
+            // SAFETY: no arguments; returns a null handle when this thread has no active window.
+            hwndOwner: unsafe { GetActiveWindow() },
             lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
             lpstrFile: PWSTR(buffer.as_mut_ptr()),
             nMaxFile: buffer.len() as u32,
