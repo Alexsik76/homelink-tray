@@ -197,10 +197,7 @@ impl Translator {
     /// One line describing how a PC is woken.
     pub fn wake_summary(&self, wake: &WakeSummary) -> String {
         match wake {
-            WakeSummary::Relay { relay, kind } => self.t(
-                "details.wake_relay",
-                &[("relay", relay.as_str()), ("kind", kind.code())],
-            ),
+            WakeSummary::Relay { host } => self.t("details.wake_relay", &[("host", host.as_str())]),
             WakeSummary::MagicPacket { address, port } => self.t(
                 "details.wake_magic_packet",
                 &[
@@ -497,8 +494,7 @@ mod tests {
     #[test]
     fn wake_summaries_render_in_both_languages() {
         let relay = WakeSummary::Relay {
-            relay: "gateway".into(),
-            kind: crate::domain::RelayKind::RouterOs,
+            host: "192.168.88.1".into(),
         };
         let magic = WakeSummary::MagicPacket {
             address: std::net::Ipv4Addr::new(192, 168, 88, 255),
@@ -508,7 +504,7 @@ mod tests {
             program: "wakeonlan".into(),
         };
         let en = Translator::new(Lang::En);
-        assert_eq!(en.wake_summary(&relay), "Relay gateway (routeros)");
+        assert_eq!(en.wake_summary(&relay), "Relay 192.168.88.1");
         assert_eq!(en.wake_summary(&magic), "Magic packet to 192.168.88.255:9");
         assert_eq!(en.wake_summary(&command), "Command: wakeonlan");
         let uk = Translator::new(Lang::Uk);

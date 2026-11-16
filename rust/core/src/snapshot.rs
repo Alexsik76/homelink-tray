@@ -5,7 +5,7 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use crate::capabilities::Need;
-use crate::domain::{PcId, PcState, RelayKind, TunnelId, TunnelState};
+use crate::domain::{PcId, PcState, TunnelId, TunnelState};
 use crate::notice::Notice;
 use crate::ports::Time;
 
@@ -188,10 +188,8 @@ impl PcAvailability {
 pub enum WakeSummary {
     /// Through a relay host over SSH.
     Relay {
-        /// Id of the relay.
-        relay: String,
-        /// Its preset.
-        kind: RelayKind,
+        /// Address of the relay host.
+        host: String,
     },
     /// A magic packet sent from this computer.
     MagicPacket {

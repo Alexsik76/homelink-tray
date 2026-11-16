@@ -1431,8 +1431,7 @@ fn the_snapshot_describes_each_pc_and_tunnel() {
     assert_eq!(
         desktop_v.wake,
         Some(WakeSummary::Relay {
-            relay: "gateway".into(),
-            kind: crate::domain::RelayKind::RouterOs
+            host: "192.168.88.1".into(),
         })
     );
     let laptop = &snap.groups[0].pcs[1];
