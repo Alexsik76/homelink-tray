@@ -231,7 +231,6 @@
   "error.startup": "HomeLink не вдалося запустити:\n{detail}",
   "error.elevation": "Для керування тунелями HomeLink потрібні права адміністратора, але перезапуститися з ними не вдалося:\n{detail}",
   "error.rdp": "Не вдалося відкрити віддалений робочий стіл для {pc}:\n{detail}",
-  "error.demo_unavailable": "У цій збірці HomeLink немає демонстраційного режиму.",
   "tool.wireguard": "клієнт WireGuard",
   "tool.sc": "sc",
   "tool.ping": "ping",

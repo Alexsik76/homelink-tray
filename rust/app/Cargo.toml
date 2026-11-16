@@ -9,11 +9,6 @@ publish = false
 name = "HomeLink"
 path = "src/main.rs"
 
-[features]
-# `--demo`: the engine on the core test fakes with simulated delays. Off in a normal build,
-# so the fakes are not part of the release executable; the CI demo artifact turns it on.
-demo = ["homelink-core/testing"]
-
 [dependencies]
 homelink-core = { path = "../core" }
 log = "0.4"

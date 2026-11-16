@@ -391,10 +391,9 @@ impl Manage {
         }
     }
 
-    /// Whether the OpenSSH client is missing on this computer. Demo mode has a fake runner and
-    /// never needs the client.
+    /// Whether the OpenSSH client is missing on this computer.
     fn openssh_missing(&self) -> bool {
-        self.persist.path.is_some() && !ssh_ops::missing_client().is_empty()
+        !ssh_ops::missing_client().is_empty()
     }
 
     /// Withdraws the offer of a host key and the notes about host keys.
@@ -410,12 +409,9 @@ impl Manage {
         self.wizard.set_ssh_note("".into());
     }
 
-    /// The folder of the settings file; the keys go in its `keys` folder. Demo mode has no file.
+    /// The folder of the settings file; the keys go in its `keys` folder.
     fn config_dir(&self) -> PathBuf {
-        match &self.persist.path {
-            Some(path) => crate::real::config_dir(path),
-            None => std::env::temp_dir().join("homelink-demo"),
-        }
+        crate::real::config_dir(&self.persist.path)
     }
 
     /// Recomputes what depends on the key files and on the relay's values: the public key under

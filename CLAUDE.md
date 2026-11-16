@@ -64,7 +64,7 @@ Read this file first; it is short on purpose. Details live in the documents list
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
-cargo build -p homelink --release --locked --features demo
+cargo build -p homelink --release --locked
 python3 ../tools/third_party_notices.py --check
 ```
 

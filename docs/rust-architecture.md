@@ -70,7 +70,8 @@ rust/
     tests/              integration tests with local servers and fixtures
   app/                  crate `homelink` (bin, produces HomeLink.exe): Windows + Slint
     src/
-      main.rs           arguments (--demo, --lang, --config), mode choice, the panel run
+      main.rs           arguments (--lang, --config, --theme, --version, --check-config), the
+                        panel run
       real.rs           real mode: elevation, config.toml (template on the first start),
                         single instance, log, `Deps` from the real adapters
       windows/          adapters built from pure, unit-tested functions and a thin layer that
@@ -79,7 +80,6 @@ rust/
                         display language), `.rdp` file and `mstsc`, elevation check/restart
       logging.rs        rotating log file (local time), instance.rs   file lock held by the
                         running copy
-      demo.rs           (feature `demo`) the engine on the core fakes with simulated delays
       ui.rs             Slint glue: snapshot -> models, callbacks -> commands, tray, notices
       platform.rs       the only unsafe code: work area, message box (cfg(windows))
     ui/                 *.slint (panel, wizard, about), fonts/, icons/
@@ -890,7 +890,6 @@ on it.
   `SshMissing` (an SSH method configured, `ssh` missing), once per start and again only when
   what is missing changes. No notice for `mstsc` (owner's answer: the inactive RDP button is
   enough).
-- **Demo:** `--missing wireguard,ssh,...` (tool codes) pretends programs are missing.
 
 ## 11b. Tunnel check by handshake and the tunnel form (built 15.11.2026)
 
@@ -1036,11 +1035,11 @@ tests prove only the thin adapters.
   (`rust/deny.toml`: RustSec advisories, the same banned clients, sources; licences are left to
   the script), clippy `-D warnings`, `cargo doc` with warnings denied, tests.
 - Job `rust-app` (windows-latest): fmt, clippy `-D warnings`, tests of `homelink`, the release
-  build with the `demo` feature, `tools/smoke.ps1` (size budget 16 MiB, `--version` equal to the
+  build, `tools/smoke.ps1` (size budget 16 MiB, `--version` equal to the
   package version, `--check-config` passes on the example and fails on a missing file without
   creating it), the `HomeLink-rust-demo` artifact.
 - `release.yml`: a tag `v*` must equal the version in `rust/app/Cargo.toml`; the same gates as
-  the `rust-app` job plus the licence check; the release build (without `demo`); the smoke
+  the `rust-app` job plus the licence check; the release build; the smoke
   run; a release with `HomeLink.exe` (name unchanged), `HomeLink.exe.sha256` and
   `THIRD-PARTY-NOTICES.txt`. A tag with a suffix (`v1.0.0-rc.N`) is a pre-release.
 
@@ -1052,7 +1051,7 @@ configuration, only with the owner's approval).
 | Phase | Content | Exit criterion |
 | --- | --- | --- |
 | 3b Windows adapters | In `app/src/windows/`, as pure functions plus a thin layer over `CommandRunner`, no new Win32 binding: WireGuard service (`wireguard.exe` install/uninstall, state from `sc query`, parsed independently of the display language), ping (`TTL=`), OEM output decoder (code pages 437, 850, 866 from the registry value `OEMCP`; other pages decode ASCII only) plugged into `StdCommandRunner`, `.rdp` file and `mstsc`, elevation check and restart, display language from `reg query`. OpenSSH client detection is done (stage D1, `core::ssh_setup`). RouterOS commands and `/tool wol` over SSH verified on 7.24.5 (15.11.2026). **Still open:** real `sc query` output in a non-English OEM code page (the test samples follow the documented format and were not captured on Windows); decoders for other code pages if needed (the UTF-8 code page 65001 is decoded as UTF-8 since rc.3; it was seen on a Windows 11 machine) | adapter tests green in the Windows CI job; a real `/tool wol` over SSH works |
-| 4 App shell | Done: panel on the real engine, tray with aggregate icon, `config.toml` with a template on the first start and every validation problem shown in the catalog language, rotating log file, single instance (file lock), elevation restart, RDP button, `--config`, cargo feature `demo` for the fake-driven mode. **Stage D1:** tray balloons for notices (`Shell_NotifyIconW`, section 9; Slint's tray has no such call), the manifest with `requireAdministrator` and per-monitor DPI v2, the application icon and version information embedded by `winresource`, the settings window, wizard and tunnel form on the taskbar (only the panel and details window are hidden from it). **Done (15.11.2026):** the tray icon palette follows the taskbar theme and the display scale, the application icon in the settings and About windows, waiting up to 3 s for the engine thread on quit, local time with its UTC offset in the log, app tests in CI, `--version` and `--check-config` | a single PC with a tunnel works end to end on Windows |
+| 4 App shell | Done: panel on the real engine, tray with aggregate icon, `config.toml` with a template on the first start and every validation problem shown in the catalog language, rotating log file, single instance (file lock), elevation restart, RDP button, `--config`. **Stage D1:** tray balloons for notices (`Shell_NotifyIconW`, section 9; Slint's tray has no such call), the manifest with `requireAdministrator` and per-monitor DPI v2, the application icon and version information embedded by `winresource`, the settings window, wizard and tunnel form on the taskbar (only the panel and details window are hidden from it). **Done (15.11.2026):** the tray icon palette follows the taskbar theme and the display scale, the application icon in the settings and About windows, waiting up to 3 s for the engine thread on quit, local time with its UTC offset in the log, app tests in CI, `--version` and `--check-config` | a single PC with a tunnel works end to end on Windows |
 | 5 Multi-PC and wizard | Groups, shared tunnel, PC without a tunnel, wizard (add/edit/delete), About with the Slint credit, config reload. **Done (C1, core logic, tested on Linux):** `core::settings`, `core::wizard` (five steps of the handoff), `core::tunnel_form`, `core::checks`, `core::about`, `Handle::reload`, locale keys. **Done (D1):** OpenSSH client detection, key creation, SSH host-key consent, the relay setup commands (section 11); the UI of these has no designer's layout (reused Field/Btn/list styles). **Done (15.11.2026):** the PC-side commands (`core::pc_setup`), the help page (`core::help`), the third-party notices file | tunnel groups, a shared tunnel and a PC without a tunnel work by hand |
 | 6 Hardening | Manual checklist on Windows 10 LTSC and 11 (`docs/release-checklist.uk.md`, Linux and Windows remote PCs); docs rewrite done (`README*.md` for the Rust version, relay, PC and SSH setup); size and licence checks in CI; `v1.0.0-rc.1` | no open defects; parity checklist complete |
 | 7 Release | Python already archived in `legacy/python/` (done 15.11.2026, kept, not deleted); Rust `release.yml`; tag `v1.0.0` | release published, README links verified |

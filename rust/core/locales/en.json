@@ -231,7 +231,6 @@
   "error.startup": "HomeLink could not start:\n{detail}",
   "error.elevation": "HomeLink needs administrator rights to manage tunnels, but could not restart with them:\n{detail}",
   "error.rdp": "Could not open Remote Desktop for {pc}:\n{detail}",
-  "error.demo_unavailable": "This build of HomeLink has no demo mode.",
   "tool.wireguard": "WireGuard client",
   "tool.sc": "sc",
   "tool.ping": "ping",

@@ -76,8 +76,6 @@
 | `--theme auto\|light\|dark` | Кольори панелі (типово — тема застосунків Windows) |
 | `--check-config` | Перевірити файл налаштувань, показати всі помилки й завершитися |
 | `--version` | Показати версію й завершитися |
-| `--demo` | Імітовані ПК і тунелі (лише у збірці CI з ознакою `demo`) |
-| `--missing <програми>` | З `--demo`: вважати ці програми невстановленими, наприклад `wireguard,ssh` |
 
 ### Автозапуск без запиту UAC
 
@@ -143,7 +141,6 @@ HomeLink не займається: введіть його у вікні від
 cd rust
 cargo test --workspace --all-features
 cargo build -p homelink --release              # збірка для випуску
-cargo build -p homelink --release --features demo
 ```
 
 На Linux застосунок можна перевірити для Windows командою
