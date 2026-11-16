@@ -977,6 +977,15 @@ panel with reason lines.
 - A new entry is written in the template's layout: its sub-tables and their keys indented by two
   spaces.
 
+## 11f. Sleep and shutdown box, file dialog (rc.10, 16.11.2026)
+
+- Step 4 has one box "Дозволити сон і вимкнення" instead of two; the "allow both over SSH" check
+  is gone. With commands either command may be left empty (`Code::PowerCommandNeeded` when both
+  are). The panel keeps separate sleep and shutdown buttons.
+- The "Open" dialog is owned by the active window, and Esc handlers ignore winit's synthetic key
+  presses (sent to a window that gets the focus while a key is held), so Esc in the dialog no
+  longer closes the settings.
+
 ## 12. Open questions (not decided here)
 
 1. **Does the custom panel work well on screen?** Window focus on show and hide, hide-on-blur
