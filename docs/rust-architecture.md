@@ -923,6 +923,27 @@ Owner's decisions of 15.11.2026, after the first check on Windows 11.
   `wireguard.exe` (the found one) are set by the program. The probe host is no longer in the form;
   an existing one is kept on edit. The template no longer sets `probe_host`.
 
+## 11c. Fixes after the check on Windows 10 LTSC (rc.5, 16.11.2026)
+
+- **Wizard height:** the command and public-key blocks showed their text with a `TextInput`
+  placed by x/y, whose preferred height was one line; a step with long commands could not be
+  scrolled to its end, which hid the interface field (step 3), the RDP user (step 4) and parts of
+  step 5. The text is now a wrapped `Text` inside a layout (a transparent `TextInput` keeps the
+  copy button working); the host-key box is a padded layout too.
+- **"ПК у мережі роутера"** (step 5, `CheckKind::RelayNeighbor`, RouterOS relay and a PC with an
+  IPv4 address): `ssh` to the relay runs `checks::routeros_neighbor_command`, which prints the
+  MAC and interface of the address from the ARP table, else from the DHCP leases, else `none`
+  (read-only; checked on 7.24.5). Same values as step 3: ok; others: "Застосувати ці значення"
+  puts them into step 3 and runs the checks again; not seen: unknown, not a failure. On the RB5009
+  the PC was in VLAN 10 (`TrustVlan10`) while the settings said `bridge`, so the magic packet
+  went to VLAN 1.
+- A RouterOS `Permission denied` names the two causes (key not added for the user, group without
+  the `ssh` policy); the first one met was a user made for the REST API.
+- The trust of a host key logs each step (fetch, offer, write), to find why the offer did not
+  appear on that machine.
+- Labels: "SSH-ключ (файл приватного ключа)" with a hint, the interface field with a hint about
+  VLANs.
+
 ## 12. Open questions (not decided here)
 
 1. **Does the custom panel work well on screen?** Window focus on show and hide, hide-on-blur

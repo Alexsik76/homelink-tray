@@ -517,7 +517,10 @@ mod commands {
         assert_eq!(
             wake(&dir),
             WakeError::Failed(
-                "ssh could not connect or authenticate: Permission denied (publickey).".into()
+                "ssh could not connect or authenticate: Permission denied (publickey). (RouterOS: \
+                 the key must be added for user homelink and the user's group must have the ssh \
+                 policy)"
+                    .into()
             )
         );
 

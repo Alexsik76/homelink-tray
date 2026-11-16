@@ -24,7 +24,7 @@
 use std::time::Duration;
 
 use crate::config::Config;
-use crate::domain::{Host, Pc, PowerMethod, Relay, RelayKind, WakeMethod};
+use crate::domain::{Host, InterfaceName, MacAddr, Pc, PowerMethod, Relay, RelayKind, WakeMethod};
 use crate::notice::DETAIL_LIMIT;
 use crate::ports::{CommandOutcome, CommandOutput, CommandRunner, PortProbe};
 use crate::snapshot::DisplayState;
@@ -47,6 +47,50 @@ pub fn relay_check_command(kind: RelayKind) -> &'static str {
     }
 }
 
+/// The RouterOS command that prints how the router sees `address`: `<MAC> <interface>` from
+/// its ARP table, else from its DHCP leases (the interface of the lease's server), else `none`.
+/// It only reads (policy `read`). Checked on RouterOS 7.24.5.
+pub fn routeros_neighbor_command(address: std::net::Ipv4Addr) -> String {
+    format!(
+        ":local a \"{address}\"; :local i [/ip arp find where address=$a]; \
+         :if ([:len $i]>0) do={{:put ([/ip arp get ($i->0) mac-address].\" \".[/ip arp get ($i->0) interface])}} \
+         else={{:local l [/ip dhcp-server lease find where address=$a]; \
+         :if ([:len $l]>0) do={{:local s [/ip dhcp-server lease get ($l->0) server]; \
+         :put ([/ip dhcp-server lease get ($l->0) mac-address].\" \".[/ip dhcp-server get [find where name=$s] interface])}} \
+         else={{:put \"none\"}}}}"
+    )
+}
+
+/// How the router sees the PC, from the output of [`routeros_neighbor_command`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Neighbor {
+    /// It knows the address: this MAC on this interface.
+    Seen {
+        /// The MAC address.
+        mac: MacAddr,
+        /// The interface.
+        interface: String,
+    },
+    /// It does not know the address now.
+    NotSeen,
+}
+
+/// Reads the output of [`routeros_neighbor_command`]; `None` when it is something else (an
+/// error RouterOS printed).
+pub fn parse_neighbor(text: &str) -> Option<Neighbor> {
+    let line = text.lines().map(str::trim).rfind(|l| !l.is_empty())?;
+    if line == "none" {
+        return Some(Neighbor::NotSeen);
+    }
+    let (mac, interface) = line.split_once(' ')?;
+    let mac = MacAddr::parse(mac).ok()?;
+    let interface = InterfaceName::parse(interface.trim()).ok()?;
+    Some(Neighbor::Seen {
+        mac,
+        interface: interface.as_str().to_owned(),
+    })
+}
+
 /// What a check looks at (the check name in the list: `check.name.<as_str>`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckKind {
@@ -56,6 +100,8 @@ pub enum CheckKind {
     RelaySsh,
     /// The SSH login to the PC for sleep and shutdown.
     PowerSsh,
+    /// How a RouterOS relay sees the PC: its MAC and interface against the wake settings.
+    RelayNeighbor,
 }
 
 impl CheckKind {
@@ -65,6 +111,7 @@ impl CheckKind {
             Self::Ports => "check.name.ports",
             Self::RelaySsh => "check.name.relay_ssh",
             Self::PowerSsh => "check.name.power_ssh",
+            Self::RelayNeighbor => "check.name.relay_neighbor",
         }
     }
 }
@@ -83,6 +130,14 @@ enum Spec {
         host: Host,
         port: u16,
     },
+    /// [`CheckKind::RelayNeighbor`]: `ssh` to the relay running
+    /// [`routeros_neighbor_command`], compared with the wake settings.
+    Neighbor {
+        argv: Vec<String>,
+        timeout: Duration,
+        mac: MacAddr,
+        interface: Option<InterfaceName>,
+    },
 }
 
 /// One check to run.
@@ -97,7 +152,7 @@ impl Check {
     /// The `ssh` command line of an SSH check; `None` for the ports check.
     pub fn ssh_command(&self) -> Option<&[String]> {
         match &self.spec {
-            Spec::Ssh { argv, .. } => Some(argv),
+            Spec::Ssh { argv, .. } | Spec::Neighbor { argv, .. } => Some(argv),
             Spec::Ports { .. } => None,
         }
     }
@@ -106,7 +161,8 @@ impl Check {
     pub fn ssh_endpoint(&self) -> Option<(String, u16)> {
         match &self.spec {
             Spec::Ssh { host, port, .. } => Some((host.to_string(), *port)),
-            Spec::Ports { .. } => None,
+            // The relay's host key is offered on the relay's own SSH row.
+            Spec::Ports { .. } | Spec::Neighbor { .. } => None,
         }
     }
 }
@@ -136,6 +192,7 @@ impl CheckPlan {
 /// The checks for a PC that is about to be saved. `relay` is the relay of its wake method,
 /// existing or new ([`PcOutcome::new_relay`]).
 pub fn plan_for(pc: &Pc, relay: Option<&Relay>) -> CheckPlan {
+    let mut neighbor = None;
     let mut checks = vec![Check {
         kind: CheckKind::Ports,
         spec: Spec::Ports {
@@ -144,7 +201,7 @@ pub fn plan_for(pc: &Pc, relay: Option<&Relay>) -> CheckPlan {
             timeout: pc.timing.port_timeout,
         },
     }];
-    if let (Some(WakeMethod::Relay { .. }), Some(relay)) = (&pc.wake, relay) {
+    if let (Some(WakeMethod::Relay { mac, interface, .. }), Some(relay)) = (&pc.wake, relay) {
         let target = SshTarget {
             host: &relay.host,
             port: relay.port,
@@ -161,6 +218,21 @@ pub fn plan_for(pc: &Pc, relay: Option<&Relay>) -> CheckPlan {
                 port: relay.port,
             },
         });
+        // A RouterOS relay can say how it sees the PC, when the PC has an IPv4 address; this
+        // row goes last.
+        if relay.kind == RelayKind::RouterOs
+            && let Ok(address) = pc.host.as_str().parse::<std::net::Ipv4Addr>()
+        {
+            neighbor = Some(Check {
+                kind: CheckKind::RelayNeighbor,
+                spec: Spec::Neighbor {
+                    argv: ssh_argv(&target, &routeros_neighbor_command(address)),
+                    timeout: relay.timeout,
+                    mac: *mac,
+                    interface: interface.clone(),
+                },
+            });
+        }
     }
     if let Some(PowerMethod::Ssh {
         user,
@@ -185,6 +257,7 @@ pub fn plan_for(pc: &Pc, relay: Option<&Relay>) -> CheckPlan {
             },
         });
     }
+    checks.extend(neighbor);
     CheckPlan {
         needs_tunnel: pc.tunnel.is_some(),
         checks,
@@ -234,19 +307,39 @@ pub enum CheckResult {
     },
     /// The tunnel is down, so nothing was checked.
     TunnelDown,
+    /// The router sees the PC with the MAC and interface of the settings.
+    NeighborMatches {
+        /// The MAC address.
+        mac: MacAddr,
+        /// The interface.
+        interface: String,
+    },
+    /// The router sees the PC with another MAC or on another interface than the settings say;
+    /// the wizard offers to use these values.
+    NeighborDiffers {
+        /// The MAC address the router sees.
+        mac: MacAddr,
+        /// The interface the router sees it on.
+        interface: String,
+    },
+    /// The router does not know the PC's address now (it has not been seen for a while).
+    NeighborNotSeen,
 }
 
 impl CheckResult {
     /// Whether the check passed.
     pub fn is_ok(&self) -> bool {
-        matches!(self, Self::PortsOpen(_) | Self::SshOk)
+        matches!(
+            self,
+            Self::PortsOpen(_) | Self::SshOk | Self::NeighborMatches { .. }
+        )
     }
 
     /// The marker: ok, fail, or unknown when nothing was checked.
     pub fn display(&self) -> DisplayState {
         match self {
-            Self::PortsOpen(_) | Self::SshOk => DisplayState::Ok,
-            Self::TunnelDown => DisplayState::Unknown,
+            Self::PortsOpen(_) | Self::SshOk | Self::NeighborMatches { .. } => DisplayState::Ok,
+            Self::TunnelDown | Self::NeighborNotSeen => DisplayState::Unknown,
             _ => DisplayState::Fail,
         }
     }
@@ -338,12 +431,54 @@ pub fn run_check(
             Spec::Ssh { argv, timeout, .. } => {
                 ssh_result(&deps.runner.run(argv, command_timeout(*timeout)))
             }
+            Spec::Neighbor { .. } if !deps.ssh_available => CheckResult::SshNotInstalled,
+            Spec::Neighbor {
+                argv,
+                timeout,
+                mac,
+                interface,
+            } => {
+                let output = deps.runner.run(argv, command_timeout(*timeout));
+                match ssh_result(&output) {
+                    CheckResult::SshOk => neighbor_result(&output.text, mac, interface.as_ref()),
+                    other => other,
+                }
+            }
         }
     };
     CheckRow {
         kind: check.kind,
         display: result.display(),
         result,
+    }
+}
+
+/// Compares how the router sees the PC with the wake settings.
+fn neighbor_result(text: &str, mac: &MacAddr, interface: Option<&InterfaceName>) -> CheckResult {
+    match parse_neighbor(text) {
+        Some(Neighbor::NotSeen) => CheckResult::NeighborNotSeen,
+        Some(Neighbor::Seen {
+            mac: seen_mac,
+            interface: seen_interface,
+        }) => {
+            let same_interface = interface.is_some_and(|i| i.as_str() == seen_interface);
+            if seen_mac == *mac && same_interface {
+                CheckResult::NeighborMatches {
+                    mac: seen_mac,
+                    interface: seen_interface,
+                }
+            } else {
+                CheckResult::NeighborDiffers {
+                    mac: seen_mac,
+                    interface: seen_interface,
+                }
+            }
+        }
+        // RouterOS exits with 0 and prints its error instead.
+        None => CheckResult::SshRemoteFailed {
+            code: 0,
+            detail: shorten(text),
+        },
     }
 }
 
@@ -371,12 +506,61 @@ mod tests {
     }
 
     #[test]
+    fn the_neighbor_command_is_the_one_checked_on_routeros() {
+        assert_eq!(
+            routeros_neighbor_command(std::net::Ipv4Addr::new(10, 10, 10, 155)),
+            ":local a \"10.10.10.155\"; :local i [/ip arp find where address=$a]; :if ([:len $i]>0) do={:put ([/ip arp get ($i->0) mac-address].\" \".[/ip arp get ($i->0) interface])} else={:local l [/ip dhcp-server lease find where address=$a]; :if ([:len $l]>0) do={:local s [/ip dhcp-server lease get ($l->0) server]; :put ([/ip dhcp-server lease get ($l->0) mac-address].\" \".[/ip dhcp-server get [find where name=$s] interface])} else={:put \"none\"}}"
+        );
+    }
+
+    #[test]
+    fn the_neighbor_answer_is_compared_with_the_settings() {
+        let mac = MacAddr::parse("24:4B:FE:5C:E2:4B").unwrap();
+        let vlan = InterfaceName::parse("TrustVlan10").unwrap();
+        let bridge = InterfaceName::parse("bridge").unwrap();
+        let seen = "24:4B:FE:5C:E2:4B TrustVlan10\r\n";
+        assert!(matches!(
+            neighbor_result(seen, &mac, Some(&vlan)),
+            CheckResult::NeighborMatches { .. }
+        ));
+        assert_eq!(
+            neighbor_result(seen, &mac, Some(&bridge)),
+            CheckResult::NeighborDiffers {
+                mac,
+                interface: "TrustVlan10".into()
+            }
+        );
+        let other = MacAddr::parse("AA:BB:CC:DD:EE:FF").unwrap();
+        assert!(matches!(
+            neighbor_result(seen, &other, Some(&vlan)),
+            CheckResult::NeighborDiffers { .. }
+        ));
+        assert_eq!(
+            neighbor_result("none\r\n", &mac, Some(&vlan)),
+            CheckResult::NeighborNotSeen
+        );
+        assert!(matches!(
+            neighbor_result("not enough permissions (9)", &mac, Some(&vlan)),
+            CheckResult::SshRemoteFailed { code: 0, .. }
+        ));
+        assert_eq!(
+            CheckResult::NeighborNotSeen.display(),
+            DisplayState::Unknown
+        );
+    }
+
+    #[test]
     fn the_plan_follows_the_wake_and_power_methods() {
         // desktop: relay wake, SSH power, behind a tunnel.
         let (_, p) = plan_of("desktop");
         assert_eq!(
             p.pending(),
-            [CheckKind::Ports, CheckKind::RelaySsh, CheckKind::PowerSsh]
+            [
+                CheckKind::Ports,
+                CheckKind::RelaySsh,
+                CheckKind::PowerSsh,
+                CheckKind::RelayNeighbor
+            ]
         );
         assert!(p.needs_tunnel);
         // laptop: magic packet, power by command: only the ports.
@@ -478,7 +662,7 @@ mod tests {
     fn a_down_tunnel_is_a_clear_result_and_nothing_is_run() {
         let (net, runner) = (FakeNetwork::default(), FakeCommandRunner::default());
         let rows = run("desktop", false, &net, &runner);
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 4, "ports, relay, PC, neighbor");
         for row in &rows {
             assert_eq!(row.result, CheckResult::TunnelDown);
             assert_eq!(row.display, DisplayState::Unknown);
@@ -498,7 +682,7 @@ mod tests {
         assert_eq!(rows[0].display, DisplayState::Fail);
         assert_eq!(rows[1].result, CheckResult::SshOk);
         assert_eq!(rows[1].display, DisplayState::Ok);
-        assert_eq!(runner.calls().len(), 2);
+        assert_eq!(runner.calls().len(), 3, "relay, PC, neighbor");
         net.set("192.168.88.10", true);
         assert_eq!(
             run("desktop", true, &net, &runner)[0].result,

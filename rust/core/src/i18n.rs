@@ -275,6 +275,15 @@ impl Translator {
                 &[("code", &code.to_string()), ("detail", detail.as_str())],
             ),
             R::TunnelDown => self.t("check.result.tunnel_down", &[]),
+            R::NeighborMatches { mac, interface } => self.t(
+                "check.result.neighbor_matches",
+                &[("mac", &mac.to_string()), ("interface", interface.as_str())],
+            ),
+            R::NeighborDiffers { mac, interface } => self.t(
+                "check.result.neighbor_differs",
+                &[("mac", &mac.to_string()), ("interface", interface.as_str())],
+            ),
+            R::NeighborNotSeen => self.t("check.result.neighbor_not_seen", &[]),
         }
     }
 

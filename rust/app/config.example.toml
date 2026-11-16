@@ -55,7 +55,8 @@ ports = [3389]               # the PC counts as online when all of these ports a
   method = "relay"           # relay | magic_packet | command
   relay = "gateway"
   mac = "AA:BB:CC:DD:EE:FF"
-  interface = "bridge"       # the relay's interface that faces the PC
+  interface = "bridge"       # the router's interface in the PC's network: the VLAN's own
+                             # interface if the PC is in a VLAN (e.g. TrustVlan10), else bridge
 
   [pcs.power]                # sleep and shutdown over SSH; leave out if not wanted
   method = "ssh"

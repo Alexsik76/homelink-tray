@@ -18,6 +18,7 @@ component CheckItem inherits VerticalLayout {
     in property <CheckLine> line;
     in property <bool> trust-available: true;
     callback trust();
+    callback fix();
     Rectangle {
         height: 40px;
         HorizontalLayout {
@@ -58,6 +59,18 @@ component CheckItem inherits VerticalLayout {
             tone: Theme.link;
             available: root.trust-available;
             clicked => { root.trust(); }
+        }
+    }
+    if root.line.fix : HorizontalLayout {
+        padding-left: 12px;
+        padding-bottom: 8px;
+        alignment: start;
+        Btn {
+            label: Words.use-values;
+            kind: BtnKind.text;
+            tone: Theme.link;
+            available: root.trust-available;
+            clicked => { root.fix(); }
         }
     }
 }
@@ -161,6 +174,8 @@ export component WizardWindow inherits Window {
     callback trust-host(int);
     callback trust-confirm();
     callback trust-cancel();
+    // "Застосувати ці значення": the MAC and interface the router sees go to step 3.
+    callback use-found-values();
 
     changed step => { root.refresh-help(); }
     changed wake-index => { root.refresh-help(); }
@@ -377,6 +392,7 @@ export component WizardWindow inherits Window {
                                 }
                                 Field {
                                     label: Words.field-identity;
+                                    hint: Words.hint-identity;
                                     value <=> root.new-identity;
                                     error: root.errors[11];
                                 }
@@ -445,6 +461,7 @@ export component WizardWindow inherits Window {
                             }
                             if root.kind-now == 0 || root.kind-now == 1 : Field {
                                 label: Words.field-interface;
+                                hint: Words.hint-interface;
                                 value <=> root.interface;
                                 error: root.errors[14];
                             }
@@ -581,6 +598,7 @@ export component WizardWindow inherits Window {
                                 }
                                 Field {
                                     label: Words.field-identity;
+                                    hint: Words.hint-identity;
                                     value <=> root.ssh-identity;
                                     error: root.errors[22];
                                 }
@@ -653,6 +671,7 @@ export component WizardWindow inherits Window {
                                         line: item;
                                         trust-available: !root.trust-busy && !root.checks-running;
                                         trust => { root.trust-host(i); }
+                                        fix => { root.use-found-values(); }
                                     }
                                 }
                             }
@@ -666,15 +685,12 @@ export component WizardWindow inherits Window {
                         // A host key that is not known yet: nothing is trusted until the user
                         // has compared the fingerprints and pressed "Довіряти".
                         if root.trust-prompt != "" : Rectangle {
-                            height: trust-box.preferred-height + 24px;
                             background: Theme.surface;
                             border-width: 1px;
                             border-color: Theme.line-strong;
-                            trust-box := VerticalLayout {
-                                x: 12px;
-                                y: 12px;
-                                width: parent.width - 24px;
-                                height: parent.height - 24px;
+                            // A layout with padding, so that its height is the real one.
+                            VerticalLayout {
+                                padding: 12px;
                                 spacing: 8px;
                                 Text {
                                     text: root.trust-prompt;

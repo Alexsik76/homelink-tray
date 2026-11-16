@@ -65,6 +65,8 @@ export global Words {
     in-out property <string> field-port;
     in-out property <string> field-user;
     in-out property <string> field-identity;
+    in-out property <string> hint-identity;
+    in-out property <string> hint-interface;
     in-out property <string> field-timeout;
     in-out property <string> field-command;
     in-out property <string> hint-command;
@@ -90,6 +92,7 @@ export global Words {
     in-out property <string> copy;
     in-out property <string> public-key-label;
     in-out property <string> trust-host;
+    in-out property <string> use-values;
     in-out property <string> trust;
     in-out property <string> openssh-missing;
 }
@@ -358,6 +361,8 @@ export struct CheckLine {
     mark: Mark,
     // The host key of this line is not known yet: the line offers "Довірити вузлу".
     trust: bool,
+    // The router sees the PC with other values than the settings: the line offers to use them.
+    fix: bool,
 }
 
 // A small heading above a group of controls (12/600, like a field label).
@@ -380,21 +385,34 @@ export component CopyBlock inherits VerticalLayout {
         text: root.label;
     }
 
+    // The text is shown by a wrapped Text inside a layout, so that the layout knows its real
+    // height (a TextInput placed by x/y reported the height of one line, and a step with long
+    // commands could not be scrolled to its end). A tiny transparent TextInput holds the same
+    // text for the copy button.
     Rectangle {
-        height: shown.preferred-height + 16px;
         background: Theme.surface;
         border-width: 1px;
         border-color: Theme.line-strong;
-
+        VerticalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            Text {
+                text: root.text;
+                font-size: 11px;
+                color: Theme.ink;
+                wrap: word-wrap;
+            }
+        }
         shown := TextInput {
-            x: 10px;
-            y: 8px;
-            width: parent.width - 20px;
+            x: 0px;
+            y: 0px;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
             read-only: true;
             single-line: false;
-            wrap: word-wrap;
-            font-size: 11px;
-            color: Theme.ink;
             text: root.text;
         }
     }
