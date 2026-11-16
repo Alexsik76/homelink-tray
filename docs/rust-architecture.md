@@ -1041,10 +1041,10 @@ tests prove only the thin adapters.
   branch's run is the executable for manual testing on Windows; no tag is needed for it.
 - Both jobs cache `~/.cargo` and `rust/target` under a key of `Cargo.lock` and the toolchain;
   `restore-keys` falls back to the job's newest cache when the key changes.
-- `release.yml`: a tag `v*` must equal the version in `rust/app/Cargo.toml`; it restores (and
-  never saves) the cache of the `rust-app` job saved on `main`; the same gates as the `rust-app`
-  job plus the licence check; the release build; the smoke
-  run; a release with `HomeLink.exe` (name unchanged), `HomeLink.exe.sha256` and
+- `release.yml`: a tag `v*` must equal the version in `rust/app/Cargo.toml`; the licence check;
+  nothing is built: the executable is the `HomeLink` artifact of the successful CI run of the
+  tagged commit (the file tested by hand), so the commit's CI must have passed and the tag must
+  come within the 14 days the artifact is kept; the smoke run; a release with `HomeLink.exe` (name unchanged), `HomeLink.exe.sha256` and
   `THIRD-PARTY-NOTICES.txt`. A tag with a suffix (`v1.0.0-rc.N`) is a pre-release. Tags are made
   only for real release candidates and releases.
 

@@ -1,8 +1,12 @@
 name: Release
 
 # A tag such as v1.0.0 or v1.0.0-rc.1 whose number equals the version in rust/app/Cargo.toml
-# builds HomeLink.exe and publishes a release with the executable, its SHA-256 sum and the
-# third-party notices. A tag with a suffix (-rc.1) makes a pre-release.
+# publishes a release with the executable, its SHA-256 sum and the third-party notices. A tag
+# with a suffix (-rc.1) makes a pre-release.
+#
+# Nothing is built here: the executable is the HomeLink artifact of the successful CI run of the
+# tagged commit, the same file that was tested by hand. Tag a commit whose CI has passed, within
+# the 14 days the artifact is kept.
 
 on:
   push:
@@ -10,13 +14,11 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   release:
     runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: rust
     env:
       SIZE_BUDGET: 16777216
     steps:
@@ -26,53 +28,38 @@ jobs:
         shell: pwsh
         run: |
           $tag = $env:GITHUB_REF_NAME -replace '^v', ''
-          $version = (Select-String -Path app/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' |
+          $version = (Select-String -Path rust/app/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' |
               Select-Object -First 1).Matches[0].Groups[1].Value
           if ($tag -ne $version) {
             Write-Error "Tag '$env:GITHUB_REF_NAME' does not match the version '$version' in rust/app/Cargo.toml."
           }
 
-      - name: Install Rust (rust/rust-toolchain.toml)
-        run: rustup install
-
-      # Restore only: the cache saved by the rust-app job of CI on main. A tag run saves none.
-      - uses: actions/cache/restore@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: rust-app-${{ hashFiles('rust/Cargo.lock', 'rust/rust-toolchain.toml') }}
-          restore-keys: rust-app-
-
       - name: Licence policy and third-party notices
-        working-directory: ${{ github.workspace }}
         run: python tools/third_party_notices.py --check
 
-      # The same gates as the rust-app job of CI; homelink-core is tested on Linux there (its
-      # process tests use Unix tools), and a release is tagged on a commit whose CI passed.
-      - name: Format check
-        run: cargo fmt --all --check
-
-      - name: Lint
-        run: cargo clippy -p homelink --all-targets --all-features --locked -- -D warnings
-
-      - name: Test
-        run: cargo test -p homelink --all-features --locked
-
-      - name: Build
-        run: cargo build -p homelink --release --locked
+      - name: Take the HomeLink artifact of the CI run of this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $run = gh run list --workflow ci.yml --commit $env:GITHUB_SHA --status success --limit 1 --json databaseId --jq '.[0].databaseId'
+          if (-not $run) {
+            Write-Error "No successful CI run for $env:GITHUB_SHA. Wait until CI of this commit passes, then re-run this job."
+          }
+          "CI run $run"
+          gh run download $run --name HomeLink --dir dist
+          if (-not (Test-Path dist/HomeLink.exe)) {
+            Write-Error "The CI run $run has no HomeLink artifact (it is kept 14 days)."
+          }
 
       - name: Size budget and smoke run
         shell: pwsh
-        run: ../tools/smoke.ps1 -Exe target/release/HomeLink.exe -Config app/config.example.toml -Budget $env:SIZE_BUDGET
+        run: tools/smoke.ps1 -Exe dist/HomeLink.exe -Config rust/app/config.example.toml -Budget $env:SIZE_BUDGET
 
       - name: Collect the files
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/HomeLink.exe dist/
-          Copy-Item ../THIRD-PARTY-NOTICES.txt dist/
+          Copy-Item THIRD-PARTY-NOTICES.txt dist/
           $hash = (Get-FileHash -Algorithm SHA256 dist/HomeLink.exe).Hash.ToLower()
           "$hash *HomeLink.exe" | Out-File -Encoding ascii dist/HomeLink.exe.sha256
 
