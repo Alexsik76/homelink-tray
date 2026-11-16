@@ -311,7 +311,7 @@
   "tunnel.form.taken": "{name} — уже додано",
   "check.name.relay_neighbor": "ПК у мережі роутера",
   "check.result.neighbor_matches": "{interface}, {mac}",
-  "check.result.neighbor_differs": "роутер бачить {mac} на {interface}",
+  "check.result.neighbor_differs": "роутер: {interface}, {mac}",
   "check.result.neighbor_not_seen": "роутер зараз не бачить цієї адреси",
   "wizard.check.use_values": "Застосувати ці значення",
   "wizard.hint.identity": "Ключ, яким HomeLink входить через SSH без пароля. Натисніть «Створити ключ» або вкажіть повний шлях до наявного ключа.",

@@ -947,6 +947,20 @@ Owner's decisions of 15.11.2026, after the first check on Windows 11.
 - Labels: "SSH-ключ (файл приватного ключа)" with a hint, the interface field with a hint about
   VLANs.
 
+## 11d. Layout heights and the ui-shots tool (rc.7, 16.11.2026)
+
+The rc.5 change did not fix the wizard. Rendered without a display (`rust/tools/ui-shots`,
+Slint's software renderer), Slint 1.18 turned out to compute the preferred height of a layout
+that holds a wrapped `Text` in a nested layout (`if … : VerticalLayout { Text { wrap … } }`) as if
+the text were one line; an explicit `width` on the text makes it measure at that width. Every
+wrapped text in a vertical layout of the wizard, the settings, the tunnel form and the controls
+now has `width: parent.width` (minus the horizontal padding of its layout). Texts whose layout
+width depends on them (the panel's submenus, the details rows, the capability tiles) keep their
+old form: an explicit width there is a binding loop. The list rows of the settings have bordered
+"Змінити"/"Видалити" buttons (`BtnKind.compact`). `ui-shots/run.sh` renders the wizard steps
+3–5 at the top and scrolled to their end, the settings list in both themes, the help page and the
+panel with reason lines.
+
 ## 12. Open questions (not decided here)
 
 1. **Does the custom panel work well on screen?** Window focus on show and hide, hide-on-blur
