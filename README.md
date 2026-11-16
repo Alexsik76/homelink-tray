@@ -154,6 +154,8 @@ its [dark theme](docs/design/ui-handoff-dark.md), and the
 A tag such as `v1.0.0` or `v1.0.0-rc.1` equal to the version in `rust/app/Cargo.toml` builds the
 program and publishes a release with `HomeLink.exe`, its SHA-256 sum and the third-party notices;
 a tag with a suffix is a pre-release. Releases 0.3.0 and earlier are the Python version.
+Tags are made only for release candidates and releases: for testing a branch, take the `HomeLink`
+artifact of its CI run (Actions, the run, Artifacts).
 
 | Version | Download |
 | --- | --- |
