@@ -76,8 +76,6 @@ Command-line options:
 | `--theme auto\|light\|dark` | The panel's colours (default: the Windows app theme) |
 | `--check-config` | Check the settings file, print every problem and exit |
 | `--version` | Print the version and exit |
-| `--demo` | Simulated PCs and tunnels (only in the CI build with the `demo` feature) |
-| `--missing <programs>` | With `--demo`: pretend these programs are not installed, e.g. `wireguard,ssh` |
 
 ### Autostart without the UAC prompt
 
@@ -141,7 +139,6 @@ Windows; the core (`rust/core`) and its tests also run on Linux.
 cd rust
 cargo test --workspace --all-features
 cargo build -p homelink --release              # the release build
-cargo build -p homelink --release --features demo
 ```
 
 From Linux the app can be checked for Windows with

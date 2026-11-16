@@ -10,7 +10,7 @@
 use homelink_core::config::{self, Config};
 use homelink_core::problem::{Code, Problem};
 use homelink_core::settings;
-use homelink_core::testing::{demo_config, multi_config, pc_id, relay_config, single_config};
+use homelink_core::testing::{full_config, multi_config, pc_id, relay_config, single_config};
 use homelink_core::wizard::{PcDraft, PowerChoice, RelayChoice, Step, WakeChoice, field};
 
 const FULL: &str = include_str!("fixtures/valid/full.toml");
@@ -22,7 +22,7 @@ fn configs() -> Vec<(&'static str, Config)> {
         ("single", single_config()),
         ("multi", multi_config()),
         ("relays", relay_config()),
-        ("demo", demo_config()),
+        ("full", full_config()),
         ("full.toml", config::parse(FULL).unwrap().config),
         ("commented.toml", config::parse(COMMENTED).unwrap().config),
         ("minimal.toml", config::parse(MINIMAL).unwrap().config),

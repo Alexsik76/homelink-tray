@@ -375,7 +375,7 @@ pub fn detect(env: &Env, exists: &dyn Fn(&Path) -> bool) -> Capabilities {
 }
 
 impl Capabilities {
-    /// Every tool found where `found` says (for tests and demo mode).
+    /// Every tool found where `found` says.
     pub fn from_statuses(statuses: impl IntoIterator<Item = (Tool, ToolStatus)>) -> Self {
         let mut tools: BTreeMap<Tool, ToolStatus> = Tool::ALL
             .into_iter()
@@ -394,7 +394,7 @@ impl Capabilities {
         self
     }
 
-    /// Every tool found, at `/<program>` (for tests and demo mode).
+    /// Every tool found, at `/<program>`.
     pub fn all_found() -> Self {
         Self::from_statuses(Tool::ALL.map(|t| {
             (

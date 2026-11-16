@@ -295,18 +295,26 @@ mod tests {
 
     #[test]
     fn a_restart_gets_an_absolute_settings_path_and_keeps_the_other_arguments() {
-        let args: Vec<String> = ["--lang", "uk", "--config", "rel/config.toml", "--demo"]
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect();
+        let args: Vec<String> = [
+            "--lang",
+            "uk",
+            "--config",
+            "rel/config.toml",
+            "--theme",
+            "dark",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
         let out = absolute_args(&args);
-        assert_eq!(out.len(), 5);
+        assert_eq!(out.len(), 6);
         assert_eq!(out.first().map(String::as_str), Some("--lang"));
         assert_eq!(out.get(1).map(String::as_str), Some("uk"));
         assert_eq!(out.get(2).map(String::as_str), Some("--config"));
         assert!(Path::new(out.get(3).unwrap()).is_absolute(), "{out:?}");
         assert!(out.get(3).unwrap().ends_with("config.toml"));
-        assert_eq!(out.get(4).map(String::as_str), Some("--demo"));
+        assert_eq!(out.get(4).map(String::as_str), Some("--theme"));
+        assert_eq!(out.get(5).map(String::as_str), Some("dark"));
         // Only the value after --config is touched.
         assert_eq!(absolute_args(&["rel".to_owned()]), ["rel"]);
         assert!(absolute_args(&[]).is_empty());

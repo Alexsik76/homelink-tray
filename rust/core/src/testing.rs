@@ -632,7 +632,7 @@ host = "10.0.0.9"
 ports = [445]
 "#;
 
-/// [`multi_config`] plus what the demo needs to show every display state:
+/// [`multi_config`] plus a second tunnel and a PC with nothing configured:
 ///
 /// - tunnel `lab` with `build` (`172.16.0.20`) behind it; make `lab` fail to start with
 ///   [`FakeTunnel::fail_up_for`] and `build` fail to wake with [`FakeWake::fail_for`];
@@ -642,7 +642,7 @@ ports = [445]
 ///
 /// A power command fails with [`FakePower::fail_for`]. Tunnels start unknown, a stopped
 /// tunnel is off, a started one is ok, a connecting tunnel or a waking PC is busy.
-pub fn demo_config() -> Config {
+pub fn full_config() -> Config {
     let text = format!("{BASE}{MORE}{LAB}");
     config::parse(&text)
         .expect("the built-in test configuration is valid")
@@ -845,48 +845,6 @@ mod tests {
             CommandOutcome::Exited(3)
         );
         assert_eq!(runner.calls().len(), 2);
-    }
-
-    #[test]
-    fn the_demo_config_can_show_every_display_state_including_fail() {
-        use crate::snapshot::DisplayState as D;
-        let mut h = Harness::new(demo_config());
-        h.refresh();
-        h.reachable("192.168.88.1", true);
-        h.reachable("192.168.88.10", true);
-        h.refresh();
-        // Busy: a wake request that was taken up but is not answered yet.
-        h.wake_pc("laptop");
-        // Fail: a tunnel that cannot start, a PC that cannot be woken, a power command that
-        // fails.
-        h.tunnel
-            .fail_up_for(&tunnel_id("lab"), Some("no such tunnel"));
-        h.toggle_tunnel("lab");
-        h.wake.fail_for(&pc_id("nas"), Some("unreachable"));
-        h.wake_pc("nas");
-        h.power.fail_for(&pc_id("desktop"), Some("refused"));
-        h.power_pc("desktop", PowerAction::Sleep);
-
-        let (mut tunnels, mut pcs) = (HashSet::new(), Vec::new());
-        for snapshot in h.sink.snapshots() {
-            for group in &snapshot.groups {
-                tunnels.extend(group.tunnel.iter().map(|t| t.display.as_str()));
-                pcs.extend(group.pcs.iter().map(|p| p.display.as_str()));
-            }
-        }
-        for d in [D::Ok, D::Busy, D::Off, D::Unknown, D::Fail] {
-            assert!(tunnels.contains(d.as_str()), "no tunnel was {d:?}");
-            assert!(pcs.contains(&d.as_str()), "no PC was {d:?}");
-        }
-        let last = h.sink.snapshots().pop().unwrap();
-        let printer = last
-            .groups
-            .iter()
-            .flat_map(|g| &g.pcs)
-            .find(|p| p.id == pc_id("printer"))
-            .unwrap();
-        assert_eq!(printer.configured(), crate::snapshot::Actions::default());
-        assert_eq!(demo_config().pcs.len(), 6);
     }
 
     #[test]

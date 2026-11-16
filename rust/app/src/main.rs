@@ -1,15 +1,8 @@
 //! HomeLink: a tray utility that wakes, sleeps and reaches remote PCs.
 //!
 //! The application shell: the Slint panel and tray icon, driven only by the engine snapshot
-//! of `homelink-core`. Two ways to start it:
-//!
-//! - **Real mode** (no flag): administrator check, `config.toml`, the real adapters
-//!   ([`real`], [`windows`]) and the portable ones of the core.
-//! - **`--demo`** (only in a build with the `demo` feature): the engine on the core test
-//!   fakes with simulated delays ([`demo`]).
-//!
-//! In the demo, `--missing wireguard,ssh` (codes of `core::capabilities::Tool`) pretends that
-//! those programs are not installed, to show the unavailable states.
+//! of `homelink-core`: administrator check, `config.toml`, the real adapters ([`real`],
+//! [`windows`]) and the portable ones of the core.
 //!
 //! Two console options do their work and exit without a window and without administrator
 //! rights: `--version` prints the version, `--check-config` validates the settings file (the
@@ -21,8 +14,6 @@
 mod appearance;
 mod balloon;
 mod capability;
-#[cfg(feature = "demo")]
-mod demo;
 mod icon;
 mod instance;
 mod links;
@@ -43,7 +34,6 @@ use std::sync::Arc;
 
 use homelink_core::adapters::command::StdCommandRunner;
 use homelink_core::adapters::tcp::TcpPortProbe;
-use homelink_core::capabilities::Tool;
 use homelink_core::config::Config;
 use homelink_core::domain::PcId;
 use homelink_core::engine::{Deps, Engine, Handle};
@@ -54,8 +44,6 @@ use crate::appearance::ThemeSetting;
 
 /// Command-line options.
 struct Options {
-    /// `--demo`: run on simulated PCs.
-    demo: bool,
     /// `--lang`: overrides the `language` of the settings.
     language: Option<LanguageSetting>,
     /// `--config`: the settings file, instead of `config.toml` next to the program.
@@ -66,38 +54,21 @@ struct Options {
     version: bool,
     /// `--check-config`: validate the settings file and exit.
     check_config: bool,
-    /// `--missing`: programs the demo pretends are not installed.
-    missing: Vec<Tool>,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     let mut options = Options {
-        demo: false,
         language: None,
         config: None,
         theme: ThemeSetting::Auto,
         version: false,
         check_config: false,
-        missing: Vec::new(),
     };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--demo" => options.demo = true,
             "--version" => options.version = true,
             "--check-config" => options.check_config = true,
-            "--missing" => {
-                let value = args
-                    .next()
-                    .ok_or("--missing needs a list of programs, such as wireguard,ssh")?;
-                for code in value.split(',').map(str::trim).filter(|c| !c.is_empty()) {
-                    let tool = Tool::ALL
-                        .into_iter()
-                        .find(|t| t.code() == code)
-                        .ok_or_else(|| format!("unknown program '{code}' for --missing"))?;
-                    options.missing.push(tool);
-                }
-            }
             "--lang" => {
                 let value = args.next().ok_or("--lang needs a value: auto, en or uk")?;
                 options.language =
@@ -144,19 +115,15 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         };
     }
-    if options.demo {
-        return run_demo(options.language, options.theme, options.missing);
-    }
     match real::prepare(options.config.as_deref(), options.language, &args) {
         Ok(real) => {
             let translator = real.translator.clone();
             let rdp = Arc::clone(&real.rdp);
             let persist = manage::Persist {
-                path: Some(real.config_path.clone()),
-                rdp: Some(Arc::clone(&real.rdp)),
+                path: real.config_path.clone(),
+                rdp: Arc::clone(&real.rdp),
                 ports: Arc::new(TcpPortProbe),
                 runner: Arc::clone(&real.runner),
-                opener: Arc::clone(&real.runner),
             };
             let std_runner = Arc::clone(&real.std_runner);
             let result = run_ui(
@@ -169,7 +136,6 @@ fn main() -> ExitCode {
                 },
                 Box::new(move |pc: &PcId| rdp.open(pc)),
                 persist,
-                |_| {},
             );
             finish(result, &translator)
         }
@@ -224,58 +190,7 @@ fn finish(result: Result<(), Box<dyn Error>>, translator: &Translator) -> ExitCo
     }
 }
 
-/// `--demo`: the panel on simulated PCs and tunnels, cycling through every display state.
-#[cfg(feature = "demo")]
-fn run_demo(
-    language: Option<LanguageSetting>,
-    theme: ThemeSetting,
-    missing: Vec<Tool>,
-) -> ExitCode {
-    let config = homelink_core::testing::demo_config();
-    let translator = Translator::new(language.unwrap_or(config.language).resolve(None));
-    let for_deps = config.clone();
-    let fakes = demo::Fakes::default();
-    let for_cycle = fakes.clone();
-    // The settings work on an in-memory copy: no file is written (`path` is None).
-    let persist = manage::Persist {
-        path: None,
-        rdp: None,
-        ports: fakes.ports(),
-        runner: demo::runner(),
-        // The link opens the real browser even in demo mode.
-        opener: Arc::new(StdCommandRunner::new()),
-    };
-    let result = run_ui(
-        config,
-        translator.clone(),
-        theme,
-        Adapters {
-            deps: move |sink| demo::deps(&for_deps, sink, &fakes),
-            checker: move |handle| capability::Checker::demo(handle, missing),
-        },
-        Box::new(|pc: &PcId| {
-            log::info!("demo: Remote Desktop for {pc} would open here");
-            Ok(())
-        }),
-        persist,
-        move |handle| demo::cycle(handle, for_cycle),
-    );
-    finish(result, &translator)
-}
-
-/// `--demo` in a build without the `demo` feature.
-#[cfg(not(feature = "demo"))]
-fn run_demo(
-    language: Option<LanguageSetting>,
-    _theme: ThemeSetting,
-    _missing: Vec<Tool>,
-) -> ExitCode {
-    let translator = Translator::new(language.unwrap_or(LanguageSetting::Auto).resolve(None));
-    platform::message(&translator.t("error.demo_unavailable", &[]));
-    ExitCode::FAILURE
-}
-
-/// What the engine runs on in a mode: its dependencies (made once the UI sink exists) and the
+/// What the engine runs on: its dependencies (made once the UI sink exists) and the
 /// lookup of the programs (made once the engine's handle exists).
 struct Adapters<D, C> {
     deps: D,
@@ -283,8 +198,7 @@ struct Adapters<D, C> {
 }
 
 /// Starts the panel and the tray icon on an engine built from `config` and the dependencies
-/// that `deps` makes, and runs the Slint event loop until the user quits. `start` runs once the
-/// engine has started, with a handle to it (the demo drives the engine through it).
+/// that `deps` makes, and runs the Slint event loop until the user quits.
 fn run_ui(
     config: Config,
     translator: Translator,
@@ -295,7 +209,6 @@ fn run_ui(
     >,
     rdp: ui::RdpAction,
     persist: manage::Persist,
-    start: impl FnOnce(Handle),
 ) -> Result<(), Box<dyn Error>> {
     platform::select_backend()?;
     let panel = view::Panel::new()?;
@@ -336,7 +249,6 @@ fn run_ui(
     )?;
     tray.show()?;
     let engine_thread = engine.spawn()?;
-    start(handle.clone());
     slint::run_event_loop_until_quit()?;
     platform::remove_balloons();
     handle.stop();
@@ -371,17 +283,9 @@ mod tests {
     }
 
     #[test]
-    fn missing_programs_are_parsed_by_code() {
-        let o = parse_args(args(&["--demo", "--missing", "wireguard,ssh"])).unwrap();
-        assert_eq!(o.missing, [Tool::WireGuard, Tool::Ssh]);
-        assert!(parse_args(args(&["--missing", "nope"])).is_err());
-        assert!(parse_args(args(&["--missing"])).is_err());
-    }
-
-    #[test]
     fn the_console_options_are_parsed() {
         let o = parse_args(args(&["--version"])).unwrap();
-        assert!(o.version && !o.check_config && !o.demo);
+        assert!(o.version && !o.check_config);
         let o = parse_args(args(&["--check-config", "--config", "x.toml"])).unwrap();
         assert!(o.check_config && !o.version);
         assert_eq!(o.config, Some(PathBuf::from("x.toml")));
@@ -412,14 +316,12 @@ mod tests {
 
     #[test]
     fn options() {
-        let o = parse_args(args(&["--demo", "--lang", "uk"])).unwrap();
-        assert!(o.demo);
+        let o = parse_args(args(&["--lang", "uk"])).unwrap();
         assert_eq!(
             o.language,
             Some(LanguageSetting::Fixed(homelink_core::i18n::Lang::Uk))
         );
         let o = parse_args(args(&[])).unwrap();
-        assert!(!o.demo);
         assert_eq!(o.language, None);
         assert_eq!(o.config, None);
         assert_eq!(o.theme, ThemeSetting::Auto);

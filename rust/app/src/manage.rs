@@ -1,6 +1,6 @@
 //! The settings window (section 7 of the handoff), the tunnel form and the About page, and the
 //! one path every change takes: the core builds a [`Change`] (`homelink_core::settings`), the app
-//! writes it with [`Change::save`] (never in demo mode, where there is no file), reloads the
+//! writes it with [`Change::save`], reloads the
 //! engine with it and refreshes the `.rdp` files, and only then keeps it as the configuration on
 //! screen. A failed write changes nothing.
 //!
@@ -44,17 +44,14 @@ const THIRD_PARTY_NOTICES: &str = include_str!("../../../THIRD-PARTY-NOTICES.txt
 
 /// What the settings need from the app that the engine does not give them.
 pub(crate) struct Persist {
-    /// The settings file. `None` in demo mode: nothing is written there.
-    pub(crate) path: Option<PathBuf>,
-    /// Rewrites the `.rdp` files after a change. `None` in demo mode.
-    pub(crate) rdp: Option<Arc<RdpLauncher>>,
+    /// The settings file.
+    pub(crate) path: PathBuf,
+    /// Rewrites the `.rdp` files after a change.
+    pub(crate) rdp: Arc<RdpLauncher>,
     /// The TCP probe of the wizard's checks.
     pub(crate) ports: Arc<dyn PortProbe>,
-    /// Runs `ssh` for the checks.
+    /// Runs `ssh` for the checks and opens the links of the About page.
     pub(crate) runner: Arc<dyn CommandRunner>,
-    /// Opens the links of the About page. A real runner in every mode: a demo never starts it
-    /// for a check, but the link still opens.
-    pub(crate) opener: Arc<dyn CommandRunner>,
 }
 
 /// What [`install`] needs.
@@ -191,7 +188,7 @@ pub(crate) fn install(panel: &Panel, setup: Setup) -> Result<(), slint::Platform
     form_window.on_tunnel_chosen(|index| with_manage(|m| m.tunnel_chosen(index)));
     form_window.on_open_capabilities(|| with_manage(Manage::form_to_capabilities));
     form_window.on_open_link(|url| {
-        with_manage(|m| links::open(Arc::clone(&m.persist.opener), url.to_string()));
+        with_manage(|m| links::open(Arc::clone(&m.persist.runner), url.to_string()));
     });
     wire_wizard(&wizard);
     on_escape(settings.window(), escape_settings);
@@ -240,7 +237,7 @@ fn wire_settings(settings: &SettingsWindow) {
     settings.on_disarm(|| with_manage(Manage::disarm));
     settings.on_recheck(|| with_manage(Manage::recheck));
     settings.on_open_link(|url| {
-        with_manage(|m| links::open(Arc::clone(&m.persist.opener), url.to_string()));
+        with_manage(|m| links::open(Arc::clone(&m.persist.runner), url.to_string()));
     });
 }
 
@@ -421,22 +418,18 @@ fn tunnel_slot(field: &str) -> Option<usize> {
 }
 
 impl Manage {
-    /// Writes a change (unless demo), reloads the engine with it, refreshes the `.rdp` files
+    /// Writes a change, reloads the engine with it, refreshes the `.rdp` files
     /// and keeps it as the configuration on screen. On a failed write nothing changes, and the
     /// text says why.
     pub(crate) fn commit(&self, change: Change) -> Result<(), String> {
-        if let Some(path) = &self.persist.path {
-            change.save(path).map_err(|err| {
-                self.tr
-                    .t("wizard.save_failed", &[("detail", &err.to_string())])
-            })?;
-        }
+        change.save(&self.persist.path).map_err(|err| {
+            self.tr
+                .t("wizard.save_failed", &[("detail", &err.to_string())])
+        })?;
         self.handle.reload(change.config.clone());
         // Paths in the settings (`wireguard_exe`, command programs) may have changed.
         self.checker.check(&change.config);
-        if let Some(rdp) = &self.persist.rdp {
-            rdp.update(&change.config);
-        }
+        self.persist.rdp.update(&change.config);
         *self.config.borrow_mut() = change.config;
         Ok(())
     }
@@ -749,11 +742,8 @@ impl Manage {
         };
         form.name = self.form_window.get_name().to_string();
         // `conf` was set by the choice in the list; `probe_host` keeps what the file had.
-        // The tunnel file must exist (the capability spec, section 8); the demo has no files.
-        if self.persist.path.is_some()
-            && !form.conf.trim().is_empty()
-            && !std::path::Path::new(form.conf.trim()).is_file()
-        {
+        // The tunnel file must exist (the capability spec, section 8).
+        if !form.conf.trim().is_empty() && !std::path::Path::new(form.conf.trim()).is_file() {
             let mut errors = vec![SharedString::default(); 3];
             if let Some(slot) = errors.get_mut(1) {
                 *slot = self.tr.t("tunnel.form.conf_missing", &[]).into();

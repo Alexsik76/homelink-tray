@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use homelink_core::adapters::command::StdCommandRunner;
-use homelink_core::capabilities::{self, Capabilities, Env, Tool, ToolStatus};
+use homelink_core::capabilities::{self, Capabilities, Env, Tool};
 use homelink_core::config::Config;
 use homelink_core::domain::{PowerMethod, TunnelKind, WakeMethod};
 use homelink_core::engine::Handle;
@@ -87,10 +87,7 @@ pub(crate) fn config_paths(config: &Config) -> (Vec<PathBuf>, Vec<String>) {
 
 /// Runs the lookup and hands its result on.
 pub(crate) struct Checker {
-    /// The real runner; `None` in demo mode, where every program counts as found.
-    runner: Option<Arc<StdCommandRunner>>,
-    /// Demo mode: the programs it pretends are missing.
-    demo_missing: Vec<Tool>,
+    runner: Arc<StdCommandRunner>,
     handle: Handle,
     last: Mutex<Option<Capabilities>>,
     /// The local time of the last lookup, `HH:MM`.
@@ -101,20 +98,7 @@ impl Checker {
     /// A checker for the real mode.
     pub(crate) fn real(runner: Arc<StdCommandRunner>, handle: Handle) -> Self {
         Self {
-            runner: Some(runner),
-            demo_missing: Vec::new(),
-            handle,
-            last: Mutex::new(None),
-            checked_at: Mutex::new(None),
-        }
-    }
-
-    /// A checker for the demo mode: every program is found except `missing` (`--missing`).
-    #[cfg(feature = "demo")]
-    pub(crate) fn demo(handle: Handle, missing: Vec<Tool>) -> Self {
-        Self {
-            runner: None,
-            demo_missing: missing,
+            runner,
             handle,
             last: Mutex::new(None),
             checked_at: Mutex::new(None),
@@ -124,26 +108,10 @@ impl Checker {
     /// Looks the programs of `config` up, tells the runner and the engine, and returns the
     /// result.
     pub(crate) fn check(&self, config: &Config) -> Capabilities {
-        let caps = match &self.runner {
-            Some(runner) => {
-                let (wireguard, programs) = config_paths(config);
-                let env = Env::from_process(wireguard, programs);
-                let caps = capabilities::detect(&env, &|p: &Path| p.is_file());
-                runner.set_programs(caps.program_paths());
-                caps
-            }
-            None => Capabilities::from_statuses(
-                Tool::ALL
-                    .into_iter()
-                    .filter(|t| !self.demo_missing.contains(t))
-                    .map(|t| {
-                        (
-                            t,
-                            ToolStatus::Found(PathBuf::from(format!("demo/{}", t.program()))),
-                        )
-                    }),
-            ),
-        };
+        let (wireguard, programs) = config_paths(config);
+        let env = Env::from_process(wireguard, programs);
+        let caps = capabilities::detect(&env, &|p: &Path| p.is_file());
+        self.runner.set_programs(caps.program_paths());
         if let Ok(mut last) = self.last.lock() {
             log_changes(last.as_ref(), &caps);
             *last = Some(caps.clone());
