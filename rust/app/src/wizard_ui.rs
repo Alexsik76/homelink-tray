@@ -972,7 +972,7 @@ mod tests {
     #[test]
     fn every_field_of_the_wizard_has_one_error_slot() {
         assert_eq!(slot(field::NAME), Some(0));
-        assert_eq!(slot(field::RDP_USER), Some(25));
+        assert_eq!(slot(field::RDP_USER), Some(24));
         assert_eq!(slot("unknown"), None);
         let all = [
             field::NAME,
