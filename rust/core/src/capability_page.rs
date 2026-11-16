@@ -29,8 +29,9 @@ pub struct Tile {
     pub found: bool,
     /// The programs, or "Не знайдено …".
     pub line: String,
-    /// The path where they were found, or a note; empty when missing.
-    pub detail: String,
+    /// Where they were found (one folder, or a path per program in different folders), or a
+    /// note; empty when missing.
+    pub details: Vec<String>,
     /// How to get what is missing; `None` when nothing is missing or there is no page for it.
     pub link: Option<Link>,
 }
@@ -67,7 +68,7 @@ fn tile(tr: &Translator, caps: &Capabilities, feature: Feature) -> Tile {
             title,
             found: true,
             line: tr.t("capability.built_in", &[]),
-            detail: tr.t("capability.no_tool", &[]),
+            details: vec![tr.t("capability.no_tool", &[])],
             link: None,
         };
     }
@@ -92,8 +93,8 @@ fn tile(tr: &Translator, caps: &Capabilities, feature: Feature) -> Tile {
         return Tile {
             title,
             found: false,
-            line: capitalise(&tr.t("capability.not_found", &[("what", &names(tr, &missing))])),
-            detail: String::new(),
+            line: not_found_line(tr, &missing),
+            details: Vec::new(),
             link,
         };
     }
@@ -102,23 +103,19 @@ fn tile(tr: &Translator, caps: &Capabilities, feature: Feature) -> Tile {
         .iter()
         .filter_map(|t| caps.status(*t).path())
         .collect();
-    let detail = match paths.as_slice() {
-        [one] => one.display().to_string(),
+    let details = match paths.as_slice() {
+        [one] => vec![one.display().to_string()],
         [first, rest @ ..] => {
-            // Several programs: their folder when they share one.
+            // Several programs: their folder when they share one, else a path each.
             let dir = first.parent();
             if rest.iter().all(|p| p.parent() == dir) {
-                dir.map(|d| format!("{}{}", d.display(), std::path::MAIN_SEPARATOR))
+                dir.map(|d| vec![format!("{}{}", d.display(), std::path::MAIN_SEPARATOR)])
                     .unwrap_or_default()
             } else {
-                paths
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                paths.iter().map(|p| p.display().to_string()).collect()
             }
         }
-        [] => String::new(),
+        [] => Vec::new(),
     };
     // A client is named in words ("Клієнт WireGuard") and starts a line with a capital; a
     // program is named as it is spelt (`ping`, `ssh-keygen`).
@@ -132,8 +129,22 @@ fn tile(tr: &Translator, caps: &Capabilities, feature: Feature) -> Tile {
         title,
         found: true,
         line,
-        detail,
+        details,
         link: None,
+    }
+}
+
+/// "Не знайдено …" / "… not found": a capital where the sentence starts with a word of the
+/// template or with a client's name, never on a program name (`wg`, `mstsc`).
+fn not_found_line(tr: &Translator, missing: &[Tool]) -> String {
+    let line = tr.t("capability.not_found", &[("what", &names(tr, missing))]);
+    let template_first = !tr
+        .t("capability.not_found", &[("what", "")])
+        .starts_with(|c: char| c.is_whitespace());
+    if template_first || matches!(missing.first(), Some(Tool::WireGuard | Tool::Ssh)) {
+        capitalise(&line)
+    } else {
+        line
     }
 }
 
@@ -171,11 +182,11 @@ mod tests {
         assert_eq!(tunnels.title, "Тунелі");
         assert!(tunnels.found);
         assert_eq!(tunnels.line, "Клієнт WireGuard");
-        assert_eq!(tunnels.detail, "/wg/wireguard.exe");
+        assert_eq!(tunnels.details, ["/wg/wireguard.exe"]);
         let keys = &tiles[3];
         assert!(keys.found);
         assert_eq!(keys.line, "ssh-keygen, ssh-keyscan");
-        assert_eq!(keys.detail, format!("/ssh{}", std::path::MAIN_SEPARATOR));
+        assert_eq!(keys.details, [format!("/ssh{}", std::path::MAIN_SEPARATOR)]);
         let magic = &tiles[5];
         assert!(magic.found && magic.link.is_none());
     }
@@ -193,6 +204,13 @@ mod tests {
         assert_eq!(ssh.line, "Не знайдено клієнт OpenSSH");
         assert_eq!(ssh.link.as_ref().map(|l| l.url), Some(OPENSSH_URL));
         assert!(tiles[4].link.is_none(), "mstsc is part of Windows: no link");
+        let en = Translator::new(Lang::En);
+        let en_tiles = super::tiles(&en, &caps);
+        assert_eq!(
+            en_tiles[4].line, "mstsc not found",
+            "a program keeps its spelling"
+        );
+        assert_eq!(en_tiles[0].line, "WireGuard client, sc not found");
     }
 
     #[test]
@@ -204,7 +222,11 @@ mod tests {
                 assert!(!tile.line.contains("capability."), "{}", tile.line);
             }
             for tile in tiles(&tr, &Capabilities::all_found()) {
-                assert!(!tile.detail.contains("capability."), "{}", tile.detail);
+                assert!(
+                    tile.details.iter().all(|d| !d.contains("capability.")),
+                    "{:?}",
+                    tile.details
+                );
             }
         }
     }

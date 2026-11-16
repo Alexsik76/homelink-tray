@@ -19,7 +19,8 @@ export struct CapabilityTile {
     title: string,
     found: bool,
     line: string,
-    detail: string,
+    // The folder or the paths where the programs were found, a line each; empty when missing.
+    details: [string],
     link-label: string,
     link-url: string,
 }
@@ -378,8 +379,10 @@ export component SettingsWindow inherits Window {
 
                         for pair in [0, 2, 4, 6] : HorizontalLayout {
                             spacing: 8px;
+                            // Each tile is half the row (with stretch, a tile with a longer path took
+                            // more of it).
                             for i in [pair, pair + 1] : Rectangle {
-                                horizontal-stretch: 1;
+                                width: (parent.width - 8px) / 2;
                                 min-height: tile.preferred-height;
                                 background: Theme.surface;
                                 border-width: 1px;
@@ -389,6 +392,8 @@ export component SettingsWindow inherits Window {
                                 tile := VerticalLayout {
                                     padding: 12px;
                                     spacing: 6px;
+                                    // A shorter tile keeps its content at the top of the row.
+                                    alignment: start;
                                     Text {
                                         text: item.title;
                                         color: item.found ? Theme.ink : Theme.muted;
@@ -413,8 +418,10 @@ export component SettingsWindow inherits Window {
                                             horizontal-stretch: 1;
                                         }
                                     }
-                                    if item.detail != "" : Text {
-                                        text: item.detail;
+                                    // One path per line (programs of one tile may be in different folders),
+                                    // each shortened at the end when it is too long.
+                                    for path in item.details : Text {
+                                        text: path;
                                         color: Theme.muted;
                                         font-size: 11px;
                                         overflow: elide;
