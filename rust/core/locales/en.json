@@ -20,7 +20,7 @@
   "details.age_seconds": "{count} s ago",
   "details.age_minutes": "{count} min ago",
   "details.age_hours": "{count} h ago",
-  "details.wake_relay": "Relay {relay} ({kind})",
+  "details.wake_relay": "Relay {host}",
   "details.wake_magic_packet": "Magic packet to {address}:{port}",
   "details.wake_command": "Command: {program}",
   "panel.no_tunnel": "No tunnel",

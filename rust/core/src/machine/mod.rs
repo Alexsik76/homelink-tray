@@ -769,8 +769,7 @@ impl PcRt {
 fn wake_summary(config: &Config, wake: &WakeMethod) -> Option<WakeSummary> {
     Some(match wake {
         WakeMethod::Relay { relay, .. } => WakeSummary::Relay {
-            relay: relay.to_string(),
-            kind: config.relay(relay)?.kind,
+            host: config.relay(relay)?.host.to_string(),
         },
         WakeMethod::MagicPacket { address, port, .. } => WakeSummary::MagicPacket {
             address: *address,

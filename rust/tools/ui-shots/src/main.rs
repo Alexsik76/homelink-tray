@@ -402,10 +402,22 @@ fn main() {
         plain("State", "off"),
         plain("Address", "10.10.70.110"),
         plain("Tunnel", "Home"),
-        plain("Wake", "none"),
-        ports,
+        plain("Wake-up", "Relay 10.10.1.1"),
+        ports.clone(),
         plain("Last check", "just now"),
         plain("Last error", "none"),
     ])));
     shot(&dw, 300, 260, &format!("{out}/details-ports.png"));
+    let mut ports_uk = ports;
+    ports_uk.label = "Порти готовності".into();
+    details.set_rows(ModelRc::new(VecModel::from(vec![
+        plain("Стан", "вимкнено"),
+        plain("Адреса", "10.10.70.110"),
+        plain("Тунель", "Home"),
+        plain("Пробудження", "Ретранслятор 10.10.1.1"),
+        ports_uk,
+        plain("Остання перевірка", "щойно"),
+        plain("Остання помилка", "немає"),
+    ])));
+    shot(&dw, 300, 260, &format!("{out}/details-ports-uk.png"));
 }
