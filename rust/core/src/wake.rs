@@ -122,6 +122,18 @@ impl WakeSender for RelayWake {
         log::info!("waking {} through relay {}", request.pc.id, relay.id);
         let output = self.runner.run(&argv, command_timeout(relay.timeout));
         if let Some(reason) = explain_ssh(&output) {
+            // RouterOS refuses a key it accepted when the user's group lacks the `ssh` policy
+            // (seen on 7.24.5 with a user made for the REST API): say what to look at.
+            let reason = if relay.kind == RelayKind::RouterOs
+                && reason.contains("Permission denied")
+            {
+                format!(
+                    "{reason} (RouterOS: the key must be added for user {} and the user's group must have the ssh policy)",
+                    relay.user
+                )
+            } else {
+                reason
+            };
             return Err(WakeError::Failed(reason));
         }
         if relay.kind == RelayKind::RouterOs
@@ -453,7 +465,8 @@ mod tests {
         let cases = [
             (
                 CommandOutput::exited(255, "Permission denied\n"),
-                "ssh could not connect or authenticate: Permission denied",
+                "ssh could not connect or authenticate: Permission denied (RouterOS: the key must \
+                 be added for user homelink and the user's group must have the ssh policy)",
             ),
             (
                 CommandOutput::exited(1, "no such interface"),
@@ -478,6 +491,22 @@ mod tests {
             let err = RelayWake::new(runner).wake(&request).unwrap_err();
             assert_eq!(err, WakeError::Failed(expected.into()));
         }
+    }
+
+    #[test]
+    fn a_routeros_refusal_says_what_to_check() {
+        let config = relay_config();
+        let request = request_for(&config, "desktop");
+        let runner = Arc::new(FakeCommandRunner::default());
+        runner.set_result(CommandOutput::exited(
+            255,
+            "wol-bot@10.10.1.1: Permission denied (publickey).",
+        ));
+        let Err(WakeError::Failed(text)) = RelayWake::new(runner).wake(&request) else {
+            panic!("expected a failure");
+        };
+        assert!(text.contains("Permission denied"), "{text}");
+        assert!(text.contains("ssh policy"), "{text}");
     }
 
     #[test]

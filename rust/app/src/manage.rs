@@ -256,6 +256,7 @@ fn wire_wizard(wizard: &WizardWindow) {
     wizard.on_trust_host(|index| with_manage(|m| m.trust_host(index)));
     wizard.on_trust_confirm(|| with_manage(Manage::trust_confirm));
     wizard.on_trust_cancel(|| with_manage(Manage::trust_cancel));
+    wizard.on_use_found_values(|| with_manage(Manage::use_found_values));
 }
 
 /// Esc closes the window (or, in the settings, cancels a waiting delete first). The action runs
@@ -346,6 +347,8 @@ fn fill_words(w: &Words, tr: &Translator) {
     w.set_field_port(t("wizard.field.port"));
     w.set_field_user(t("wizard.field.user"));
     w.set_field_identity(t("wizard.field.identity_file"));
+    w.set_hint_identity(t("wizard.hint.identity"));
+    w.set_hint_interface(t("wizard.hint.interface"));
     w.set_field_timeout(t("wizard.field.timeout"));
     w.set_field_command(t("wizard.field.wake_command"));
     w.set_hint_command(t("wizard.hint.command"));
@@ -371,6 +374,7 @@ fn fill_words(w: &Words, tr: &Translator) {
     w.set_copy(t("wizard.ssh.copy"));
     w.set_public_key_label(t("wizard.ssh.public_key"));
     w.set_trust_host(t("wizard.ssh.trust_host"));
+    w.set_use_values(t("wizard.check.use_values"));
     w.set_trust(t("wizard.ssh.trust"));
     w.set_openssh_missing(t("wizard.ssh.openssh_missing"));
 }

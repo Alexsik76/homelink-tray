@@ -43,6 +43,8 @@ pub(crate) struct Session {
     plan: Option<CheckPlan>,
     /// The host key the user was asked to trust and has not confirmed yet.
     trust: Option<HostKeyOffer>,
+    /// The MAC and interface a RouterOS relay sees the PC with, when they differ from step 3.
+    found: Option<(String, String)>,
 }
 
 /// The index of a field in the window's errors (see `wizard.slint`).
@@ -186,6 +188,7 @@ impl Manage {
                 relays: wizard::relay_options(&config),
                 plan: None,
                 trust: None,
+                found: None,
             }
         };
         *self.session.borrow_mut() = Some(session);
@@ -551,8 +554,10 @@ impl Manage {
             .and_then(|s| s.plan.as_ref())
             .and_then(|plan| plan.ssh_endpoint(position(index)));
         let Some((host, port)) = endpoint else {
+            log::warn!("wizard: row {index} has no host to trust");
             return;
         };
+        log::info!("wizard: fetching the host key of {host}:{port}");
         self.clear_trust();
         self.wizard.set_trust_busy(true);
         let run = self.trust_run.get();
@@ -568,9 +573,17 @@ impl Manage {
 
     fn host_key_fetched(&self, run: u64, label: &str, result: Result<HostKeyOffer, String>) {
         if run != self.trust_run.get() || self.session.borrow().is_none() {
+            log::info!("wizard: a host key of {label} arrived after its offer was withdrawn");
             return;
         }
         self.wizard.set_trust_busy(false);
+        match &result {
+            Ok(offer) => log::info!(
+                "wizard: host key of {label} offered, {} fingerprint(s)",
+                offer.fingerprints.len()
+            ),
+            Err(detail) => log::warn!("wizard: host key of {label} not fetched: {detail}"),
+        }
         match result {
             Ok(offer) => {
                 let prompt = self.tr.t(
@@ -626,6 +639,10 @@ impl Manage {
         if run != self.trust_run.get() || self.session.borrow().is_none() {
             return;
         }
+        match &result {
+            Ok(()) => log::info!("wizard: host key of {pattern} added to known_hosts"),
+            Err(err) => log::warn!("wizard: host key of {pattern} not added: {err:?}"),
+        }
         match result {
             Ok(()) => {
                 self.wizard_retest();
@@ -648,6 +665,19 @@ impl Manage {
                 self.wizard.set_ssh_note(text.into());
             }
         }
+    }
+
+    /// "Застосувати ці значення": the MAC and interface the relay sees go to the fields of step 3,
+    /// and the checks run again.
+    pub(crate) fn use_found_values(&self) {
+        let found = self.session.borrow().as_ref().and_then(|s| s.found.clone());
+        let Some((mac, interface)) = found else {
+            return;
+        };
+        log::info!("wizard: using {mac} on {interface} from the relay");
+        self.wizard.set_mac(mac.into());
+        self.wizard.set_interface(interface.into());
+        self.wizard_retest();
     }
 
     /// "Скасувати" on the host key prompt: nothing is trusted.
@@ -764,6 +794,7 @@ impl Manage {
                 result: SharedString::default(),
                 mark: Mark::Busy,
                 trust: false,
+                fix: false,
             })
             .collect();
         let run = self.check_run.get() + 1;
@@ -798,8 +829,21 @@ impl Manage {
                 result: self.tr.check_result(&row.result).into(),
                 mark: ui::mark(row.display),
                 trust: offers_trust(&row.result),
+                fix: matches!(row.result, CheckResult::NeighborDiffers { .. }),
             })
             .collect();
+        let found = results.iter().find_map(|row| match &row.result {
+            CheckResult::NeighborDiffers { mac, interface } => {
+                Some((mac.to_string(), interface.clone()))
+            }
+            _ => None,
+        });
+        if let Some((mac, interface)) = &found {
+            log::info!("wizard: the relay sees the PC as {mac} on {interface}");
+        }
+        if let Some(s) = self.session.borrow_mut().as_mut() {
+            s.found = found;
+        }
         self.wizard.set_checks(model(rows));
         self.wizard.set_checks_running(false);
         // A key that changed is an error and is never replaced: the row has no button, and the
@@ -921,6 +965,7 @@ mod tests {
             }],
             plan: None,
             trust: None,
+            found: None,
         };
         clear_hidden(&mut draft, &session);
         // Wakeonlan takes an address but no interface; an existing relay has no sudo question.
