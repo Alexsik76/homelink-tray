@@ -120,8 +120,7 @@ export component WizardWindow inherits Window {
     property <bool> is-new-relay: root.relay-index >= root.relay-kinds.length;
 
     // Step 4.
-    in-out property <bool> allow-sleep;
-    in-out property <bool> allow-shutdown;
+    in-out property <bool> allow-power;
     in-out property <bool> allow-rdp;
     // 0 over SSH, 1 commands.
     in-out property <int> power-index;
@@ -198,13 +197,7 @@ export component WizardWindow inherits Window {
     changed ssh-user => { root.refresh-help(); }
     changed os-index => { root.refresh-help(); }
     changed power-index => { root.refresh-help(); }
-    changed allow-sleep => { root.refresh-help(); root.power-edited = true; }
-    changed allow-shutdown => { root.refresh-help(); root.power-edited = true; }
-    // The sleep-and-shutdown problem belongs to the boxes as they were; it shows again after
-    // the next check when it still applies.
-    property <bool> power-edited;
-    property <int> error-generation: Flow.error-generation;
-    changed error-generation => { root.power-edited = false; }
+    changed allow-power => { root.refresh-help(); }
 
     title: Words.about-name + " — " + root.heading;
     icon: @image-url("icons/app.png");
@@ -561,28 +554,15 @@ export component WizardWindow inherits Window {
                         VerticalLayout {
                             spacing: 4px;
                             CheckRow {
-                                label: Words.power-sleep;
-                                checked <=> root.allow-sleep;
-                            }
-                            CheckRow {
-                                label: Words.power-shutdown;
-                                checked <=> root.allow-shutdown;
+                                label: Words.power-allow;
+                                checked <=> root.allow-power;
                             }
                             CheckRow {
                                 label: Words.power-rdp;
                                 checked <=> root.allow-rdp;
                             }
                         }
-                        // Over SSH sleep and shutdown come together: the problem is shown here.
-                        if (root.errors[18] != "" || root.errors[19] != "") && !root.power-edited : Text {
-                            width: parent.width;
-                            text: root.errors[18] != "" ? root.errors[18] : root.errors[19];
-                            color: Theme.state-fail;
-                            font-size: 11px;
-                            wrap: word-wrap;
-                        }
-
-                        if root.allow-sleep || root.allow-shutdown : VerticalLayout {
+                        if root.allow-power : VerticalLayout {
                             spacing: 12px;
                             VerticalLayout {
                                 spacing: 4px;
@@ -664,16 +644,16 @@ export component WizardWindow inherits Window {
 
                             if root.power-index == 1 : VerticalLayout {
                                 spacing: 16px;
-                                if root.allow-sleep : Field {
+                                Field {
                                     label: Words.field-sleep-command;
                                     value <=> root.sleep-command;
-                                    hint: Words.hint-command;
+                                    hint: Words.hint-power-command;
                                     error: root.errors[23];
                                 }
-                                if root.allow-shutdown : Field {
+                                Field {
                                     label: Words.field-shutdown-command;
                                     value <=> root.shutdown-command;
-                                    hint: Words.hint-command;
+                                    hint: Words.hint-power-command;
                                     error: root.errors[24];
                                 }
                             }

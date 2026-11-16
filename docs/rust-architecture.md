@@ -756,11 +756,12 @@ the operating system is a parameter of the SSH power method; there is no summary
      behind a tunnel or in another VLAN the step shows the routed-setup help (unicast to the
      PC's IP and a static ARP entry on the last router, `wizard.magic.routed_help`).
    - *Command:* a command line (`{host}`, and `{mac}` when a MAC is given), optional MAC, timeout.
-4. Sleep and shutdown: the boxes "Дозволити сон", "Дозволити вимкнення", "Дозволити RDP", then
+4. Sleep and shutdown: the boxes "Дозволити сон і вимкнення", "Дозволити RDP", then
    the control parameters: SSH (user, port, key file, operating system preset) or commands
    (one per allowed action), and the RDP user name. The step says that HomeLink never handles
-   the RDP password (`wizard.rdp.note`). Over SSH sleep and shutdown always come together
-   (`PowerMethod::Ssh`), so both boxes must be ticked; with commands each stands alone.
+   the RDP password (`wizard.rdp.note`). Sleep and shutdown share one box: over SSH they always
+   come together (`PowerMethod::Ssh`); with commands either command may be left empty (that
+   action is then not offered), but not both. The panel keeps separate sleep and shutdown buttons.
 5. Checks (`core::checks`): readiness ports, SSH to the relay, SSH to the PC, each with a marker
    and a short result; "Перевірити знову"; the PC can be saved without a successful check. The
    checks need the tunnel up: with it down every row says so and nothing is run.

@@ -359,12 +359,12 @@ fn fill_words(w: &Words, tr: &Translator) {
     w.set_field_timeout(t("wizard.field.timeout"));
     w.set_field_command(t("wizard.field.wake_command"));
     w.set_hint_command(t("wizard.hint.command"));
+    w.set_hint_power_command(t("wizard.hint.power_command"));
     w.set_field_sudo(t("wizard.field.sudo"));
     w.set_hint_sudo(t("wizard.hint.sudo"));
     w.set_yes(t("confirm.yes"));
     w.set_no(t("confirm.no"));
-    w.set_power_sleep(t("wizard.power.allow_sleep"));
-    w.set_power_shutdown(t("wizard.power.allow_shutdown"));
+    w.set_power_allow(t("wizard.power.allow_power"));
     w.set_power_rdp(t("wizard.power.allow_rdp"));
     w.set_power_ssh(t("wizard.power.ssh"));
     w.set_power_command(t("wizard.power.command"));

@@ -9,7 +9,7 @@
 //! | 1 [`Step::Address`] | `name`, `host`, `ports` |
 //! | 2 [`Step::Tunnel`] | `tunnel` (an existing tunnel or none) |
 //! | 3 [`Step::Wake`] | `wake`, then by method: `mac`, `magic_address`, `magic_port`; or `relay`, the new relay (`relay.*`), `interface`, `relay_address`; or `wake_command`, `wake_timeout` |
-//! | 4 [`Step::Power`] | `allow_sleep`, `allow_shutdown`, `allow_rdp`, then `power`, `os`, `ssh_*`, `sleep_command`, `shutdown_command`, `rdp_user` |
+//! | 4 [`Step::Power`] | `allow_power`, `allow_rdp`, then `power`, `os`, `ssh_*`, `sleep_command`, `shutdown_command`, `rdp_user` |
 //! | 5 [`Step::Checks`] | no fields; see [`crate::checks`] |
 //!
 //! Every field is validated with the rules of the configuration file (`crate::rules`, the
@@ -17,9 +17,9 @@
 //! asked for: a new PC gets a slug of its name, unique among PCs; an edited PC keeps its id
 //! unless its name changed.
 //!
-//! The wizard cannot express one thing the file can: over SSH sleep and shutdown always come
-//! together ([`PowerMethod::Ssh`]), so with SSH both boxes must be ticked
-//! ([`Code::PowerSshNeedsBoth`]); with commands each can be on its own.
+//! Sleep and shutdown share one box: over SSH they always come together ([`PowerMethod::Ssh`]);
+//! with commands either command may be left empty (that action is then not offered), but not
+//! both ([`Code::PowerCommandNeeded`]).
 
 use crate::config::Config;
 use crate::domain::{
@@ -68,10 +68,8 @@ pub mod field {
     pub const WAKE_COMMAND: &str = "wake_command";
     /// Step 3, command: timeout in seconds.
     pub const WAKE_TIMEOUT: &str = "wake_timeout";
-    /// Step 4: "Дозволити сон".
-    pub const ALLOW_SLEEP: &str = "allow_sleep";
-    /// Step 4: "Дозволити вимкнення".
-    pub const ALLOW_SHUTDOWN: &str = "allow_shutdown";
+    /// Step 4: "Дозволити сон і вимкнення".
+    pub const ALLOW_POWER: &str = "allow_power";
     /// Step 4, SSH: user.
     pub const SSH_USER: &str = "ssh_user";
     /// Step 4, SSH: port.
@@ -168,8 +166,7 @@ impl Step {
             | field::RELAY_ADDRESS
             | field::WAKE_COMMAND
             | field::WAKE_TIMEOUT => Self::Wake,
-            field::ALLOW_SLEEP
-            | field::ALLOW_SHUTDOWN
+            field::ALLOW_POWER
             | field::SSH_USER
             | field::SSH_PORT
             | field::SSH_KEY
@@ -278,10 +275,8 @@ pub struct PcDraft {
     pub wake_command: String,
     /// Step 3, command: timeout in seconds.
     pub wake_timeout: String,
-    /// Step 4: sleep is allowed.
-    pub allow_sleep: bool,
-    /// Step 4: shutdown is allowed.
-    pub allow_shutdown: bool,
+    /// Step 4: sleep and shutdown are allowed.
+    pub allow_power: bool,
     /// Step 4: Remote Desktop is allowed.
     pub allow_rdp: bool,
     /// Step 4: how sleep and shutdown reach the PC.
@@ -403,8 +398,7 @@ impl PcDraft {
             relay_address: String::new(),
             wake_command: String::new(),
             wake_timeout: timeout,
-            allow_sleep: false,
-            allow_shutdown: false,
+            allow_power: false,
             allow_rdp: false,
             power: PowerChoice::Ssh,
             os: Os::Windows,
@@ -484,16 +478,14 @@ impl PcDraft {
                 port,
                 identity_file,
             }) => {
-                draft.allow_sleep = true;
-                draft.allow_shutdown = true;
+                draft.allow_power = true;
                 draft.power = PowerChoice::Ssh;
                 draft.ssh_user = user.clone();
                 draft.ssh_port = port.to_string();
                 draft.ssh_identity_file = identity_file.clone();
             }
             Some(PowerMethod::Command { sleep, shutdown }) => {
-                draft.allow_sleep = sleep.is_some();
-                draft.allow_shutdown = shutdown.is_some();
+                draft.allow_power = true;
                 draft.power = PowerChoice::Command;
                 if let Some(argv) = sleep {
                     draft.sleep_command = forms::join_command(argv.items());
@@ -802,20 +794,14 @@ impl PcDraft {
     // ---- step 4 ----
 
     fn power_part(&self, out: &mut Vec<Problem>) -> Option<(Option<PowerMethod>, Option<Rdp>)> {
-        let power = if self.allow_sleep || self.allow_shutdown {
+        let power = if self.allow_power {
             match self.power {
                 PowerChoice::Ssh => {
-                    if !self.allow_sleep {
-                        out.push(Problem::new(field::ALLOW_SLEEP, Code::PowerSshNeedsBoth));
-                    } else if !self.allow_shutdown {
-                        out.push(Problem::new(field::ALLOW_SHUTDOWN, Code::PowerSshNeedsBoth));
-                    }
                     let user = forms::user(field::SSH_USER, &self.ssh_user, out);
                     let port = forms::port(field::SSH_PORT, &self.ssh_port, out);
                     let key = forms::key_file(field::SSH_KEY, &self.ssh_identity_file, out);
-                    let both = self.allow_sleep && self.allow_shutdown;
-                    match (both, user, port, key) {
-                        (true, Some(user), Some(port), Some(identity_file)) => {
+                    match (user, port, key) {
+                        (Some(user), Some(port), Some(identity_file)) => {
                             Some(Some(PowerMethod::Ssh {
                                 user,
                                 port,
@@ -827,7 +813,13 @@ impl PcDraft {
                 }
                 PowerChoice::Command => {
                     let base = self.base.as_ref();
-                    let sleep = if self.allow_sleep {
+                    let sleep_empty = self.sleep_command.trim().is_empty();
+                    let shutdown_empty = self.shutdown_command.trim().is_empty();
+                    let neither = sleep_empty && shutdown_empty;
+                    if neither {
+                        out.push(Problem::new(field::SLEEP_COMMAND, Code::PowerCommandNeeded));
+                    }
+                    let sleep = if !sleep_empty {
                         forms::command(
                             field::SLEEP_COMMAND,
                             &self.sleep_command,
@@ -839,7 +831,7 @@ impl PcDraft {
                     } else {
                         Some(None)
                     };
-                    let shutdown = if self.allow_shutdown {
+                    let shutdown = if !shutdown_empty {
                         forms::command(
                             field::SHUTDOWN_COMMAND,
                             &self.shutdown_command,
@@ -851,10 +843,12 @@ impl PcDraft {
                     } else {
                         Some(None)
                     };
-                    Some(Some(PowerMethod::Command {
-                        sleep: sleep?,
-                        shutdown: shutdown?,
-                    }))
+                    match (neither, sleep, shutdown) {
+                        (false, Some(sleep), Some(shutdown)) => {
+                            Some(Some(PowerMethod::Command { sleep, shutdown }))
+                        }
+                        _ => None,
+                    }
                 }
             }
         } else {

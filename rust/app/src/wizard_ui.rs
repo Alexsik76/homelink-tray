@@ -68,8 +68,7 @@ fn slot(name: &str) -> Option<usize> {
         field::RELAY_ADDRESS => 15,
         field::WAKE_COMMAND => 16,
         field::WAKE_TIMEOUT => 17,
-        field::ALLOW_SLEEP => 18,
-        field::ALLOW_SHUTDOWN => 19,
+        field::ALLOW_POWER => 18,
         field::SSH_USER => 20,
         field::SSH_PORT => 21,
         field::SSH_KEY => 22,
@@ -281,8 +280,7 @@ impl Manage {
         w.set_wake_command(draft.wake_command.clone().into());
         w.set_wake_timeout(draft.wake_timeout.clone().into());
 
-        w.set_allow_sleep(draft.allow_sleep);
-        w.set_allow_shutdown(draft.allow_shutdown);
+        w.set_allow_power(draft.allow_power);
         w.set_allow_rdp(draft.allow_rdp);
         w.set_power_index(match draft.power {
             wizard::PowerChoice::Ssh => 0,
@@ -348,8 +346,7 @@ impl Manage {
         draft.relay_address = w.get_relay_address().to_string();
         draft.wake_command = w.get_wake_command().to_string();
         draft.wake_timeout = w.get_wake_timeout().to_string();
-        draft.allow_sleep = w.get_allow_sleep();
-        draft.allow_shutdown = w.get_allow_shutdown();
+        draft.allow_power = w.get_allow_power();
         draft.allow_rdp = w.get_allow_rdp();
         draft.power = if w.get_power_index() == 1 {
             wizard::PowerChoice::Command
@@ -476,9 +473,7 @@ impl Manage {
         };
         w.set_relay_setup_intro(intro.into());
         w.set_relay_setup(commands.into());
-        let (intro, commands) = if draft.power == wizard::PowerChoice::Ssh
-            && (draft.allow_sleep || draft.allow_shutdown)
-        {
+        let (intro, commands) = if draft.power == wizard::PowerChoice::Ssh && draft.allow_power {
             let os = match draft.os {
                 Os::Linux => "linux",
                 Os::Windows => "windows",
@@ -998,8 +993,7 @@ mod tests {
             field::RELAY_ADDRESS,
             field::WAKE_COMMAND,
             field::WAKE_TIMEOUT,
-            field::ALLOW_SLEEP,
-            field::ALLOW_SHUTDOWN,
+            field::ALLOW_POWER,
             field::SSH_USER,
             field::SSH_PORT,
             field::SSH_KEY,

@@ -56,8 +56,8 @@ pub enum Code {
     CommandPlaceholder,
     /// Unbalanced braces. No parameters.
     CommandBraces,
-    /// Over SSH, sleep and shutdown are both available: both must be allowed. No parameters.
-    PowerSshNeedsBoth,
+    /// Sleep and shutdown by commands are allowed, but neither command is given. No parameters.
+    PowerCommandNeeded,
     /// No relay is chosen, or the chosen one does not exist. No parameters.
     RelayUnknown,
     /// The chosen tunnel does not exist. No parameters.
@@ -94,7 +94,7 @@ impl Code {
         Self::CommandQuote,
         Self::CommandPlaceholder,
         Self::CommandBraces,
-        Self::PowerSshNeedsBoth,
+        Self::PowerCommandNeeded,
         Self::RelayUnknown,
         Self::TunnelUnknown,
         Self::TunnelInUse,
@@ -127,7 +127,7 @@ impl Code {
             Self::CommandQuote => "command_quote",
             Self::CommandPlaceholder => "command_placeholder",
             Self::CommandBraces => "command_braces",
-            Self::PowerSshNeedsBoth => "power_ssh_needs_both",
+            Self::PowerCommandNeeded => "power_command_needed",
             Self::RelayUnknown => "relay_unknown",
             Self::TunnelUnknown => "tunnel_unknown",
             Self::TunnelInUse => "tunnel_in_use",
@@ -142,7 +142,7 @@ impl Code {
             | Self::PortsEmpty
             | Self::CommandQuote
             | Self::CommandBraces
-            | Self::PowerSshNeedsBoth
+            | Self::PowerCommandNeeded
             | Self::RelayUnknown
             | Self::TunnelUnknown => &[],
             Self::NameTaken | Self::ConfName | Self::TunnelTaken => &["name"],
