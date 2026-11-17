@@ -221,21 +221,14 @@ impl Translator {
         self.t(&format!("problem.{}", problem.code.as_str()), &params)
     }
 
-    /// The secondary text of a row of the settings lists.
-    pub fn secondary(&self, secondary: &crate::settings::Secondary) -> String {
-        use crate::settings::Secondary;
-        match secondary {
-            Secondary::PcCount(n) => {
-                let key = match n {
-                    0 => "settings.pc_count_zero",
-                    1 => "settings.pc_count_one",
-                    _ => "settings.pc_count_other",
-                };
-                self.t(key, &[("count", &n.to_string())])
-            }
-            Secondary::Tunnel(name) => name.clone(),
-            Secondary::NoTunnel => self.t("settings.no_tunnel", &[]),
-        }
+    /// "N ПК" beside a block of the settings page (none, one, more).
+    pub fn pc_count(&self, n: usize) -> String {
+        let key = match n {
+            0 => "settings.pc_count_zero",
+            1 => "settings.pc_count_one",
+            _ => "settings.pc_count_other",
+        };
+        self.t(key, &[("count", &n.to_string())])
     }
 
     /// The name of a check in the wizard's list.
@@ -601,16 +594,15 @@ mod tests {
     }
 
     #[test]
-    fn secondary_texts_follow_the_handoff() {
-        use crate::settings::Secondary;
+    fn the_pc_counts_and_the_loose_block_follow_the_handoff() {
         let uk = Translator::new(Lang::Uk);
-        assert_eq!(uk.secondary(&Secondary::NoTunnel), "без тунелю");
-        assert_eq!(uk.secondary(&Secondary::Tunnel("Home".into())), "Home");
-        assert_eq!(uk.secondary(&Secondary::PcCount(2)), "2 ПК");
+        assert_eq!(uk.t("settings.no_tunnel", &[]), "Без тунелю");
+        assert_eq!(uk.pc_count(2), "2 ПК");
         let en = Translator::new(Lang::En);
-        assert_eq!(en.secondary(&Secondary::PcCount(0)), "no PCs");
-        assert_eq!(en.secondary(&Secondary::PcCount(1)), "1 PC");
-        assert_eq!(en.secondary(&Secondary::PcCount(3)), "3 PCs");
+        assert_eq!(en.t("settings.no_tunnel", &[]), "No tunnel");
+        assert_eq!(en.pc_count(0), "no PCs");
+        assert_eq!(en.pc_count(1), "1 PC");
+        assert_eq!(en.pc_count(3), "3 PCs");
     }
 
     #[test]

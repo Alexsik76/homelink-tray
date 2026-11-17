@@ -7,13 +7,21 @@
 import { Theme, StateMark, Mark } from "main.slint";
 import { Words, Btn, BtnKind, Divider, VScroll } from "controls.slint";
 
-// One row of a list: the id is sent back with the actions.
+// One row of the page, a tunnel or a PC: the id is sent back with the actions.
 export struct SettingsRow {
     id: string,
     name: string,
-    secondary: string,
     // The delete button of this row waits for its confirmation.
     armed: bool,
+}
+
+// One block of the page: a tunnel (or, without `has-tunnel`, the label of the PCs without a
+// tunnel in `tunnel.name`), the count of its PCs, and the PCs.
+export struct SettingsGroup {
+    has-tunnel: bool,
+    tunnel: SettingsRow,
+    count: string,
+    pcs: [SettingsRow],
 }
 
 // One tile of the capabilities page (artboard `Capabilities`).
@@ -61,12 +69,15 @@ component NavItem inherits Rectangle {
     }
 }
 
-// A row of a list: 36 high, the name (13/600), the secondary text (12/400 muted), and the text
-// buttons "Змінити" (edit) and "Видалити" (delete, which asks again when armed).
+// A row: 44 high, the name (13/600; muted for a label), the secondary text (12/400 muted), and,
+// with `actions`, the buttons "Змінити" (edit) and "Видалити" (delete, which asks again when
+// armed).
 component ListRow inherits Rectangle {
     in property <string> name;
     in property <string> secondary;
     in property <bool> armed;
+    in property <bool> actions: true;
+    in property <bool> muted: false;
     callback edit();
     callback remove();
 
@@ -82,7 +93,7 @@ component ListRow inherits Rectangle {
         spacing: 8px;
         Text {
             text: root.name;
-            color: Theme.ink;
+            color: root.muted ? Theme.muted : Theme.ink;
             font-size: 13px;
             font-weight: 600;
             vertical-alignment: center;
@@ -96,7 +107,7 @@ component ListRow inherits Rectangle {
             overflow: elide;
             horizontal-stretch: 1;
         }
-        VerticalLayout {
+        if root.actions : VerticalLayout {
             alignment: center;
             Btn {
                 kind: BtnKind.compact;
@@ -106,7 +117,7 @@ component ListRow inherits Rectangle {
                 }
             }
         }
-        VerticalLayout {
+        if root.actions : VerticalLayout {
             alignment: center;
             Btn {
                 kind: BtnKind.compact;
@@ -115,6 +126,62 @@ component ListRow inherits Rectangle {
                 clicked => {
                     root.remove();
                 }
+            }
+        }
+    }
+}
+
+// The width of the tunnel column of the page: the header and the left cell of every block.
+global Columns {
+    out property <length> tunnel: 300px;
+}
+
+// A block of the page: the tunnel (or the label of the PCs without a tunnel) in the left cell,
+// aligned to the top, and its PCs in the right cell, a row each; an empty right cell is one row
+// high.
+component GroupBlock inherits Rectangle {
+    in property <SettingsGroup> group;
+    callback edit-tunnel(string);
+    callback delete-tunnel(string);
+    callback edit-pc(string);
+    callback delete-pc(string);
+
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.line;
+
+    HorizontalLayout {
+        padding: 1px;
+        VerticalLayout {
+            width: Columns.tunnel - 1px;
+            alignment: start;
+            ListRow {
+                name: root.group.tunnel.name;
+                secondary: root.group.count;
+                armed: root.group.tunnel.armed;
+                actions: root.group.has-tunnel;
+                muted: !root.group.has-tunnel;
+                edit => { root.edit-tunnel(root.group.tunnel.id); }
+                remove => { root.delete-tunnel(root.group.tunnel.id); }
+            }
+        }
+        Rectangle {
+            width: 1px;
+            background: Theme.line;
+        }
+        VerticalLayout {
+            alignment: start;
+            for pc[i] in root.group.pcs : VerticalLayout {
+                if i > 0 : Divider {}
+                ListRow {
+                    name: pc.name;
+                    armed: pc.armed;
+                    edit => { root.edit-pc(pc.id); }
+                    remove => { root.delete-pc(pc.id); }
+                }
+            }
+            if root.group.pcs.length == 0 : Rectangle {
+                height: 44px;
             }
         }
     }
@@ -144,8 +211,8 @@ component SectionHead inherits HorizontalLayout {
 }
 
 export component SettingsWindow inherits Window {
-    in property <[SettingsRow]> tunnels;
-    in property <[SettingsRow]> pcs;
+    // The blocks of "Тунелі й ПК": a tunnel each, then the PCs without a tunnel.
+    in property <[SettingsGroup]> groups;
     // Shown under the lists while a delete waits for its confirmation.
     in property <string> armed-hint;
     // The refusal or the failure of the last change, in state-fail.
@@ -280,63 +347,31 @@ export component SettingsWindow inherits Window {
                         spacing: 20px;
                         width: parent.width;
 
-                        // Tunnels on the left, PCs on the right, each column half the width.
-                        HorizontalLayout {
-                            spacing: 16px;
-                            alignment: stretch;
-                            VerticalLayout {
-                                width: (parent.width - 16px) / 2;
-                                spacing: 8px;
-                                alignment: start;
+                        // The header (tunnels over the left cells, PCs over the right ones) and a
+                        // block per tunnel with its PCs, as the panel groups them.
+                        VerticalLayout {
+                            spacing: 8px;
+                            HorizontalLayout {
                                 SectionHead {
+                                    width: Columns.tunnel;
+                                    padding-right: 12px;
                                     title: Words.section-tunnels;
                                     button: Words.add-tunnel;
                                     add => { root.disarm(); root.add-tunnel(); }
                                 }
-                                if root.tunnels.length > 0 : Rectangle {
-                                    background: Theme.surface;
-                                    border-width: 1px;
-                                    border-color: Theme.line;
-                                    VerticalLayout {
-                                        for row[i] in root.tunnels : VerticalLayout {
-                                            if i > 0 : Divider {}
-                                            ListRow {
-                                                name: row.name;
-                                                secondary: row.secondary;
-                                                armed: row.armed;
-                                                edit => { root.disarm(); root.edit-tunnel(row.id); }
-                                                remove => { root.delete-tunnel(row.id); }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            VerticalLayout {
-                                width: (parent.width - 16px) / 2;
-                                spacing: 8px;
-                                alignment: start;
                                 SectionHead {
+                                    padding-left: 12px;
                                     title: Words.section-pcs;
                                     button: Words.add-pc;
                                     add => { root.disarm(); root.add-pc(); }
                                 }
-                                if root.pcs.length > 0 : Rectangle {
-                                    background: Theme.surface;
-                                    border-width: 1px;
-                                    border-color: Theme.line;
-                                    VerticalLayout {
-                                        for row[i] in root.pcs : VerticalLayout {
-                                            if i > 0 : Divider {}
-                                            ListRow {
-                                                name: row.name;
-                                                secondary: row.secondary;
-                                                armed: row.armed;
-                                                edit => { root.disarm(); root.edit-pc(row.id); }
-                                                remove => { root.delete-pc(row.id); }
-                                            }
-                                        }
-                                    }
-                                }
+                            }
+                            for group in root.groups : GroupBlock {
+                                group: group;
+                                edit-tunnel(id) => { root.disarm(); root.edit-tunnel(id); }
+                                delete-tunnel(id) => { root.delete-tunnel(id); }
+                                edit-pc(id) => { root.disarm(); root.edit-pc(id); }
+                                delete-pc(id) => { root.delete-pc(id); }
                             }
                         }
 

@@ -96,7 +96,7 @@
   "settings.section.pcs": "PCs",
   "settings.add_tunnel": "Add tunnel",
   "settings.add_pc": "Add PC",
-  "settings.no_tunnel": "no tunnel",
+  "settings.no_tunnel": "No tunnel",
   "settings.pc_count_zero": "no PCs",
   "settings.pc_count_one": "{count} PC",
   "settings.pc_count_other": "{count} PCs",

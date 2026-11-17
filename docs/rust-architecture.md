@@ -653,9 +653,12 @@ would. Ids are derived from names (slug, transliterated, unique per kind), stabl
 unless the name changes.
 
 **Settings window.** The navigation column has two items and the language buttons at its foot
-(section 10): "Тунелі й ПК" (tunnels in the left column, PCs in the right, each row with
-"Змінити" and "Видалити"; under them, in the middle, the button "Можливості системи" that opens
-that page, with "Назад" to return) and "Довідка" (about the program first, then the help texts;
+(section 10): "Тунелі й ПК" (a header with "Додати тунель" over the left column and "Додати ПК"
+over the right one, then a block per tunnel as the panel groups them: the tunnel with its PC
+count, "Змінити" and "Видалити" in the left cell, its PCs a row each with the same buttons in the
+right cell, a tunnel without PCs with an empty right cell, and last a block "Без тунелю" for the
+PCs without a tunnel, shown only when there are any (`settings::groups`); under them, in the
+middle, the button "Можливості системи" that opens that page, with "Назад" to return) and "Довідка" (about the program first, then the help texts;
 the third-party notices open from there). This deviates from section 7 of the handoff (separate
 items for the capabilities, the help and About) by the owner's decision of 17.11.2026.
 

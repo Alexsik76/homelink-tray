@@ -32,8 +32,8 @@ use slint::{CloseRequestResponse, ComponentHandle, ModelRc, SharedString, VecMod
 use crate::icon;
 use crate::links;
 use crate::view::{
-    CapabilityTile, Flow, HelpSection, Motion, Nav, Panel, SettingsRow, SettingsWindow, Theme,
-    TunnelFormWindow, WizardWindow, Words,
+    CapabilityTile, Flow, HelpSection, Motion, Nav, Panel, SettingsGroup, SettingsRow,
+    SettingsWindow, Theme, TunnelFormWindow, WizardWindow, Words,
 };
 use crate::windows::rdp::RdpLauncher;
 use crate::wizard_ui;
@@ -567,15 +567,36 @@ impl Manage {
     /// Fills the lists of the settings from the configuration on screen.
     pub(crate) fn refresh(&self) {
         let armed = self.armed.borrow().clone();
-        let (tunnels, pcs, hint) = {
+        let (groups, hint) = {
             let config = self.config.borrow();
-            let tunnels: Vec<SettingsRow> = settings::tunnel_rows(&config)
+            let tr = self.tr.borrow();
+            let row = |row: &settings::Row, armed: bool| SettingsRow {
+                id: row.id.clone().into(),
+                name: row.name.clone().into(),
+                armed,
+            };
+            let groups: Vec<SettingsGroup> = settings::groups(&config)
                 .iter()
-                .map(|row| self.settings_row(row, armed == Some(Armed::Tunnel(row.id.clone()))))
-                .collect();
-            let pcs: Vec<SettingsRow> = settings::pc_rows(&config)
-                .iter()
-                .map(|row| self.settings_row(row, armed == Some(Armed::Pc(row.id.clone()))))
+                .map(|group| SettingsGroup {
+                    has_tunnel: group.tunnel.is_some(),
+                    tunnel: match &group.tunnel {
+                        Some(tunnel) => {
+                            row(tunnel, armed == Some(Armed::Tunnel(tunnel.id.clone())))
+                        }
+                        None => SettingsRow {
+                            name: tr.t("settings.no_tunnel", &[]).into(),
+                            ..SettingsRow::default()
+                        },
+                    },
+                    count: tr.pc_count(group.pcs.len()).into(),
+                    pcs: model(
+                        group
+                            .pcs
+                            .iter()
+                            .map(|pc| row(pc, armed == Some(Armed::Pc(pc.id.clone()))))
+                            .collect(),
+                    ),
+                })
                 .collect();
             let hint = match &armed {
                 Some(Armed::Tunnel(id)) => config
@@ -600,20 +621,10 @@ impl Manage {
                 }
                 None => None,
             };
-            (tunnels, pcs, hint.unwrap_or_default())
+            (groups, hint.unwrap_or_default())
         };
-        self.settings.set_tunnels(model(tunnels));
-        self.settings.set_pcs(model(pcs));
+        self.settings.set_groups(model(groups));
         self.settings.set_armed_hint(hint.into());
-    }
-
-    fn settings_row(&self, row: &settings::Row, armed: bool) -> SettingsRow {
-        SettingsRow {
-            id: row.id.clone().into(),
-            name: row.name.clone().into(),
-            secondary: self.tr.borrow().secondary(&row.secondary).into(),
-            armed,
-        }
     }
 
     /// Makes `armed` the waiting delete (replacing any other), or none.
@@ -914,8 +925,9 @@ mod tests {
     fn the_ids_of_the_rows_are_the_ids_the_actions_parse() {
         use homelink_core::testing::multi_config;
         let config = multi_config();
-        let tunnels = settings::tunnel_rows(&config);
-        let pcs = settings::pc_rows(&config);
+        let groups = settings::groups(&config);
+        let tunnels: Vec<_> = groups.iter().filter_map(|g| g.tunnel.clone()).collect();
+        let pcs: Vec<_> = groups.iter().flat_map(|g| g.pcs.clone()).collect();
         assert!(!tunnels.is_empty() && !pcs.is_empty());
         for row in &tunnels {
             let id = TunnelId::parse(&row.id).unwrap();
