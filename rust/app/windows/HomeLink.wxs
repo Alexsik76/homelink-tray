@@ -1,0 +1,44 @@
+<!--
+  The Windows installer of HomeLink (WiX Toolset 5). Built by CI next to HomeLink.exe:
+
+    wix build app/windows/HomeLink.wxs -arch x64 -d Version=1.0.0.11
+      -d Exe=target/release/HomeLink.exe -d Notices=../THIRD-PARTY-NOTICES.txt
+      -d Icon=app/windows/app.ico -o target/release/HomeLink.msi
+
+  It puts HomeLink.exe and the third-party notices in Program Files\HomeLink and a shortcut in
+  the Start menu. The settings are not its files: the program keeps them in
+  %ProgramData%\HomeLink, so an upgrade or an uninstall never touches them. A newer package
+  replaces the installed one (the same version too, so release candidates replace each other).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="HomeLink" Manufacturer="HomeLink" Version="$(var.Version)"
+           UpgradeCode="d266f480-e0fd-4a5b-915c-cde5c1755c93" Scope="perMachine">
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of HomeLink is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="HomeLinkIcon" SourceFile="$(var.Icon)" />
+    <Property Id="ARPPRODUCTICON" Value="HomeLinkIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Alexsik76/homelink-tray" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="HomeLink">
+        <Component Id="Program">
+          <File Id="HomeLinkExe" Name="HomeLink.exe" Source="$(var.Exe)" KeyPath="yes" />
+        </Component>
+        <Component Id="Notices">
+          <File Id="NoticesTxt" Name="THIRD-PARTY-NOTICES.txt" Source="$(var.Notices)" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut">
+        <Shortcut Id="HomeLinkShortcut" Name="HomeLink" Target="[#HomeLinkExe]"
+                  WorkingDirectory="INSTALLFOLDER" Icon="HomeLinkIcon" />
+        <RegistryValue Root="HKLM" Key="Software\HomeLink" Name="StartMenuShortcut"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+  </Package>
+</Wix>

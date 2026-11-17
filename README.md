@@ -55,9 +55,11 @@ to the hosts in its settings. CI fails if an HTTP or TLS client library enters t
 
 ## Getting started
 
-1. Download `HomeLink.exe` from the [releases](https://github.com/Alexsik76/homelink-tray/releases)
-   and put it in its own folder. The executable is not code-signed, so Windows SmartScreen
-   may warn on the first start.
+1. Download `HomeLink.msi` from the [releases](https://github.com/Alexsik76/homelink-tray/releases)
+   and run it: it installs `HomeLink.exe` into `C:\Program Files\HomeLink` with a Start menu
+   shortcut; a newer installer replaces it and keeps the settings. Close HomeLink before an
+   upgrade. `HomeLink.exe` of the release also runs from any folder without installing. Neither
+   is code-signed, so Windows SmartScreen may warn.
 2. Start it. On the first start it writes `config.toml` from a commented
    template ([`rust/app/config.example.toml`](rust/app/config.example.toml)) and exits.
 3. Start it again. The tunnel, relay and PC of the template are examples: in the settings
@@ -157,7 +159,8 @@ its [dark theme](docs/design/ui-handoff-dark.md), and the
 ## Releases
 
 A tag such as `v1.0.0` or `v1.0.0-rc.1` equal to the version in `rust/app/Cargo.toml` publishes
-a release of the `HomeLink` artifact of the tagged commit's CI run (no new build) with `HomeLink.exe`, its SHA-256 sum and the third-party notices;
+a release of the `HomeLink` artifact of the tagged commit's CI run (no new build): `HomeLink.msi`,
+`HomeLink.exe`, their SHA-256 sums (`SHA256SUMS.txt`) and the third-party notices;
 a tag with a suffix is a pre-release. Releases 0.3.0 and earlier are the Python version.
 Tags are made only for release candidates and releases: for testing a branch, take the `HomeLink`
 artifact of its CI run (Actions, the run, Artifacts).
