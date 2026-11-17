@@ -16,7 +16,7 @@
 //!   follow, and the old id is recorded in the [`Renames`].
 //! - `rdp/<id>.rdp` files are named by PC id and are not renamed or deleted here.
 //!
-//! The "Загальне" page: [`language_choices`] lists the languages offered and [`set_language`]
+//! The language buttons: [`language_choices`] lists the languages offered and [`set_language`]
 //! returns the [`Change`] of a choice (saved like the others; the engine does not need it).
 
 use std::path::Path;
@@ -229,7 +229,7 @@ pub fn save_pc(config: &Config, outcome: &PcOutcome) -> Result<Change, Vec<Probl
     Ok(change)
 }
 
-/// The languages the "Загальне" page offers, in their order: the system's, then each shipped
+/// The languages the settings offer, in their order: the system's, then each shipped
 /// language. Render one with `Translator::language_name`.
 pub fn language_choices() -> [LanguageSetting; 3] {
     [

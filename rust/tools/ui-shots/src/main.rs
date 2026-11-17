@@ -270,25 +270,33 @@ fn main() {
             row("nas", "NAS", "no tunnel", true),
         ])));
         let suffix = if dark { "dark" } else { "light" };
-        set.set_page(0);
-        shot(&sw, 720, 480, &format!("{out}/settings-list-{suffix}.png"));
-        if dark {
-            // The general page in both languages, the system language chosen.
-            for lang in [Lang::En, Lang::Uk] {
-                let tr = Translator::new(lang);
-                fill_words(&set.global::<Words>(), &tr);
-                let names: Vec<SharedString> = homelink_core::settings::language_choices()
+        let languages = |tr: &Translator| -> ModelRc<SharedString> {
+            model(
+                homelink_core::settings::language_choices()
                     .iter()
                     .map(|c| tr.language_name(*c).into())
-                    .collect();
-                set.set_language_choices(model(names));
-                set.set_language_index(0);
-                set.set_page(5);
-                shot(&sw, 720, 480, &format!("{out}/settings-general-{}.png", lang.code()));
-            }
+                    .collect(),
+            )
+        };
+        set.set_language_choices(languages(&tr));
+        set.set_language_index(0);
+        set.set_page(0);
+        shot(&sw, 900, 480, &format!("{out}/settings-list-{suffix}.png"));
+        if dark {
+            // The list in Ukrainian, with "УКР" chosen.
+            let uk = Translator::new(Lang::Uk);
+            fill_words(&set.global::<Words>(), &uk);
+            set.set_language_choices(languages(&uk));
+            set.set_language_index(1);
+            shot(&sw, 900, 480, &format!("{out}/settings-list-uk.png"));
             fill_words(&set.global::<Words>(), &tr);
+            set.set_language_choices(languages(&tr));
+            set.set_language_index(0);
+            set.set_version_text("Version 1.0.0-rc.10".into());
+            set.set_slint_version("Slint 1.18.1".into());
+            set.set_slint_url("https://slint.dev".into());
             set.set_page(1);
-            shot(&sw, 720, 480, &format!("{out}/settings-help.png"));
+            shot(&sw, 900, 480, &format!("{out}/settings-help.png"));
             // The capabilities page with the paths of a Windows machine (from the check of 16.11).
             let mut caps = homelink_core::capabilities::Capabilities::from_statuses(
                 homelink_core::capabilities::Tool::ALL.map(|tool| {
@@ -343,7 +351,7 @@ fn main() {
                 set.set_capability_tiles(ModelRc::new(VecModel::from(tiles)));
                 set.set_capabilities_checked("Checked 12:37".into());
                 set.set_page(4);
-                shot(&sw, 720, 480, &format!("{out}/{name}.png"));
+                shot(&sw, 900, 480, &format!("{out}/{name}.png"));
             }
         }
     }

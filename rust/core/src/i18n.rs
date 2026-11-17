@@ -293,7 +293,8 @@ impl Translator {
         )
     }
 
-    /// The name of a choice of the "Загальне" page: "Системна", or the language in itself.
+    /// The label of a language button of the settings: "Авто", or the language's short name in
+    /// itself.
     pub fn language_name(&self, setting: LanguageSetting) -> String {
         match setting {
             LanguageSetting::Auto => self.t("settings.language.auto", &[]),
@@ -445,8 +446,8 @@ mod tests {
     fn every_language_choice_has_a_name_and_a_language_names_itself() {
         let en = Translator::new(Lang::En);
         let uk = Translator::new(Lang::Uk);
-        assert_eq!(en.language_name(LanguageSetting::Auto), "System");
-        assert_eq!(uk.language_name(LanguageSetting::Auto), "Системна");
+        assert_eq!(en.language_name(LanguageSetting::Auto), "Auto");
+        assert_eq!(uk.language_name(LanguageSetting::Auto), "Авто");
         for lang in Lang::ALL {
             let name = en.language_name(LanguageSetting::Fixed(lang));
             assert!(!name.starts_with("language."), "{name}");
@@ -682,7 +683,6 @@ mod tests {
         let keys = [
             "settings.nav.tunnels_pcs",
             "settings.nav.help",
-            "settings.nav.about",
             "settings.section.tunnels",
             "settings.section.pcs",
             "settings.add_tunnel",

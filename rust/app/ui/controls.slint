@@ -15,13 +15,10 @@ export struct HelpSection {
 export global Words {
     in-out property <string> settings-title;
     in-out property <string> nav-tunnels;
-    in-out property <string> nav-general;
     in-out property <string> language;
-    in-out property <string> language-hint;
     in-out property <string> nav-help;
     in-out property <string> nav-capabilities;
     in-out property <string> recheck;
-    in-out property <string> nav-about;
     in-out property <string> section-tunnels;
     in-out property <string> section-pcs;
     in-out property <string> add-tunnel;
@@ -108,10 +105,11 @@ export global Flow {
 
 // `compact`: a secondary button for list rows, 28 high and as wide as its label, whose label
 // takes `tone` (the delete button is red).
-export enum BtnKind { primary, secondary, text, compact }
+export enum BtnKind { primary, secondary, text, compact, chosen }
 
-// A button: primary (ink fill, on-ink label), secondary (surface with a line-strong border) or a
-// text button. Enter and Space press it while it has the keyboard focus.
+// A button: primary (ink fill, on-ink label), secondary (surface with a line-strong border), a
+// text button, compact (secondary, 28 high) or chosen (compact with a state-off fill: the active
+// one of a group). Enter and Space press it while it has the keyboard focus.
 export component Btn inherits Rectangle {
     in property <string> label;
     in property <BtnKind> kind: BtnKind.secondary;
@@ -119,16 +117,19 @@ export component Btn inherits Rectangle {
     in property <color> tone: Theme.ink;
     callback clicked();
 
-    property <bool> small: root.kind == BtnKind.text || root.kind == BtnKind.compact;
+    property <bool> small: root.kind == BtnKind.text || root.kind == BtnKind.compact
+        || root.kind == BtnKind.chosen;
     height: root.small ? 28px : 32px;
     min-width: root.small ? 0px : 96px;
     background: root.kind == BtnKind.primary ? (root.available ? Theme.ink : Theme.line)
+        : root.kind == BtnKind.chosen ? Theme.state-off
         : root.kind == BtnKind.secondary || root.kind == BtnKind.compact
             ? (ta.pressed ? Theme.pressed : ta.has-hover ? Theme.hover : Theme.surface)
         : transparent;
     border-width: fs.has-focus ? 2px : (root.kind == BtnKind.text ? 0px : 1px);
     border-color: fs.has-focus ? Theme.state-off
         : root.kind == BtnKind.primary ? Theme.ink
+        : root.kind == BtnKind.chosen ? Theme.state-off
         : Theme.line-strong;
 
     fs := FocusScope {
@@ -150,12 +151,13 @@ export component Btn inherits Rectangle {
     // children were sized from the parent), which made the text buttons of the list rows
     // zero wide: packed at the left, and with no area to click.
     HorizontalLayout {
-        padding-left: root.kind == BtnKind.text ? 6px : root.kind == BtnKind.compact ? 12px : 16px;
-        padding-right: root.kind == BtnKind.text ? 6px : root.kind == BtnKind.compact ? 12px : 16px;
+        padding-left: root.kind == BtnKind.text ? 6px : root.small ? 12px : 16px;
+        padding-right: root.kind == BtnKind.text ? 6px : root.small ? 12px : 16px;
         Text {
             text: root.label;
             color: !root.available ? Theme.disabled
                 : root.kind == BtnKind.primary ? Theme.on-ink
+                : root.kind == BtnKind.chosen ? Theme.on-state
                 : root.kind == BtnKind.text || root.kind == BtnKind.compact ? root.tone
                 : Theme.ink;
             font-size: 12px;

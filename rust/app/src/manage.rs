@@ -302,13 +302,10 @@ fn fill_words(w: &Words, tr: &Translator) {
     let t = |key: &str| SharedString::from(tr.t(key, &[]));
     w.set_settings_title(t("settings.title"));
     w.set_nav_tunnels(t("settings.nav.tunnels_pcs"));
-    w.set_nav_general(t("settings.nav.general"));
     w.set_language(t("settings.language"));
-    w.set_language_hint(t("settings.language.hint"));
     w.set_nav_help(t("settings.nav.help"));
     w.set_nav_capabilities(t("settings.nav.capabilities"));
     w.set_recheck(t("capability.recheck"));
-    w.set_nav_about(t("settings.nav.about"));
     w.set_section_tunnels(t("settings.section.tunnels"));
     w.set_section_pcs(t("settings.section.pcs"));
     w.set_add_tunnel(t("settings.add_tunnel"));
@@ -465,7 +462,7 @@ impl Manage {
         show_in_front(&self.settings);
     }
 
-    /// The language choices of the "Загальне" page and the one in the settings.
+    /// The labels of the language buttons and the one in the settings.
     fn fill_language(&self) {
         let choices = settings::language_choices();
         let names: Vec<SharedString> = {
@@ -483,7 +480,7 @@ impl Manage {
             .set_language_index(i32::try_from(index).unwrap_or(0));
     }
 
-    /// A language chosen on the "Загальне" page: saved to the settings file at once (not sent to
+    /// A language button pressed: the choice is saved to the settings file at once (not sent to
     /// the engine, which does not use it), then every window is worded in it.
     fn choose_language(&self, index: i32) {
         let Some(setting) = usize::try_from(index)

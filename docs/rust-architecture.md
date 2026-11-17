@@ -650,6 +650,13 @@ keys `problem.<code>`; the tests assert that a form accepts a value exactly when
 would. Ids are derived from names (slug, transliterated, unique per kind), stable on edit
 unless the name changes.
 
+**Settings window.** The navigation column has two items and the language buttons at its foot
+(section 10): "Тунелі й ПК" (tunnels in the left column, PCs in the right, each row with
+"Змінити" and "Видалити"; under them, in the middle, the button "Можливості системи" that opens
+that page, with "Назад" to return) and "Довідка" (about the program first, then the help texts;
+the third-party notices open from there). This deviates from section 7 of the handoff (separate
+items for the capabilities, the help and About) by the owner's decision of 17.11.2026.
+
 ## 9. Errors and notifications
 
 - Each boundary has its own `thiserror` enum: `ConfigError` (a list of issues), `TunnelError`,
@@ -726,15 +733,16 @@ filled from the catalog; notices, dialogs and wizard texts come from the same ca
 own `@tr`/gettext is not used: it would be a second mechanism and cannot cover notices and
 message boxes.
 
-**Choosing the language.** The settings page "Загальне" offers "Системна" (`language =
-"auto"`, the default of a new file), "Українська" and "English" (`settings::language_choices`;
-the names of the languages are written in themselves). A choice is saved to `config.toml` at
-once (`settings::set_language`, in place like every save) without reloading the engine, which
-does not use the language, and every window is worded again in the new language without a
-restart: the `Strings` and `Words` globals are refilled, the lists, pages and the panel are
-rebuilt, and later notices use it (the engine's notices are worded on the event loop thread).
-Texts a step of an open wizard has already shown change with its next step. `--lang` overrides
-the file only until a language is chosen in the settings.
+**Choosing the language.** Three buttons at the foot of the settings' navigation column offer
+"Авто" (`language = "auto"`, the system language, the default of a new file), "УКР" and "ENG"
+(`settings::language_choices`; the names of the languages are written in themselves); the
+chosen one is filled blue. A choice is saved to `config.toml` at once (`settings::set_language`,
+in place like every save) without reloading the engine, which does not use the language, and
+every window is worded again in the new language without a restart: the `Strings` and `Words`
+globals are refilled, the lists, pages and the panel are rebuilt, and later notices use it (the
+engine's notices are worded on the event loop thread). Texts a step of an open wizard has
+already shown change with its next step. `--lang` overrides the file only until a language is
+chosen in the settings.
 
 Tests (run on Linux): both locales have identical key sets and identical placeholder sets per
 key; every `Notice` variant and every `Words` field has a key.
