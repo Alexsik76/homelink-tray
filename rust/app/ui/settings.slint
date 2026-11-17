@@ -3,7 +3,7 @@
 // confirmation are driven by the app; the page only shows what it is given.
 
 import { Theme, StateMark, Mark } from "main.slint";
-import { Words, Btn, BtnKind, Divider, VScroll } from "controls.slint";
+import { Words, Btn, BtnKind, Divider, VScroll, RadioRow } from "controls.slint";
 
 // One row of a list: the id is sent back with the actions.
 export struct SettingsRow {
@@ -158,8 +158,13 @@ export component SettingsWindow inherits Window {
     in property <[CapabilityTile]> capability-tiles;
     in property <string> capabilities-checked;
     // The page: 0 tunnels and PCs, 1 help, 2 about, 3 third-party notices (opened from about),
-    // 4 system capabilities.
+    // 4 system capabilities, 5 general.
     in-out property <int> page: 0;
+    // The general page: the names of the language choices, the chosen one, and why a choice
+    // was not saved.
+    in property <[string]> language-choices;
+    in property <int> language-index;
+    in property <string> language-error;
 
     callback add-tunnel();
     callback add-pc();
@@ -172,6 +177,8 @@ export component SettingsWindow inherits Window {
     callback open-link(string);
     // "Перевірити знову" on the capabilities page.
     callback recheck();
+    // A language chosen on the general page (its index in `language-choices`).
+    callback language-chosen(int);
 
     title: Words.about-name + " — " + Words.settings-title;
     icon: @image-url("icons/app.png");
@@ -192,6 +199,11 @@ export component SettingsWindow inherits Window {
                     label: Words.nav-tunnels;
                     selected: root.page == 0;
                     clicked => { root.page = 0; root.disarm(); }
+                }
+                NavItem {
+                    label: Words.nav-general;
+                    selected: root.page == 5;
+                    clicked => { root.page = 5; root.disarm(); }
                 }
                 NavItem {
                     label: Words.nav-capabilities;
@@ -511,6 +523,47 @@ export component SettingsWindow inherits Window {
                     content-height: help-flick.content-height;
                     offset: -help-flick.content-y;
                     scroll-to(amount) => { help-flick.content-y = -amount; }
+                }
+            }
+
+            // General: the language of the program.
+            if root.page == 5 : VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+                alignment: start;
+                Text {
+                    text: Words.nav-general;
+                    color: Theme.ink;
+                    font-size: 13px;
+                    font-weight: 600;
+                }
+                VerticalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: Words.language;
+                        color: Theme.ink-2;
+                        font-size: 12px;
+                    }
+                    for choice[index] in root.language-choices : RadioRow {
+                        width: 280px;
+                        label: choice;
+                        selected: index == root.language-index;
+                        clicked => { root.language-chosen(index); }
+                    }
+                    Text {
+                        width: parent.width;
+                        text: Words.language-hint;
+                        color: Theme.muted;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+                }
+                if root.language-error != "" : Text {
+                    width: parent.width - 32px;
+                    text: root.language-error;
+                    color: Theme.state-fail;
+                    font-size: 12px;
+                    wrap: word-wrap;
                 }
             }
 

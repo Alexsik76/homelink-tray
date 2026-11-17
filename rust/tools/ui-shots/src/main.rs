@@ -273,6 +273,20 @@ fn main() {
         set.set_page(0);
         shot(&sw, 720, 480, &format!("{out}/settings-list-{suffix}.png"));
         if dark {
+            // The general page in both languages, the system language chosen.
+            for lang in [Lang::En, Lang::Uk] {
+                let tr = Translator::new(lang);
+                fill_words(&set.global::<Words>(), &tr);
+                let names: Vec<SharedString> = homelink_core::settings::language_choices()
+                    .iter()
+                    .map(|c| tr.language_name(*c).into())
+                    .collect();
+                set.set_language_choices(model(names));
+                set.set_language_index(0);
+                set.set_page(5);
+                shot(&sw, 720, 480, &format!("{out}/settings-general-{}.png", lang.code()));
+            }
+            fill_words(&set.global::<Words>(), &tr);
             set.set_page(1);
             shot(&sw, 720, 480, &format!("{out}/settings-help.png"));
             // The capabilities page with the paths of a Windows machine (from the check of 16.11).

@@ -15,11 +15,15 @@
 //! - Renaming a tunnel or PC re-derives its id from the new name; references (`pcs[].tunnel`)
 //!   follow, and the old id is recorded in the [`Renames`].
 //! - `rdp/<id>.rdp` files are named by PC id and are not renamed or deleted here.
+//!
+//! The "Загальне" page: [`language_choices`] lists the languages offered and [`set_language`]
+//! returns the [`Change`] of a choice (saved like the others; the engine does not need it).
 
 use std::path::Path;
 
 use crate::config::{Config, ConfigError, Renames};
 use crate::domain::{PcId, RelayId, TunnelId, WakeMethod};
+use crate::i18n::{Lang, LanguageSetting};
 use crate::problem::{Code, Problem};
 use crate::tunnel_form::{self, TunnelForm};
 use crate::wizard::PcOutcome;
@@ -225,6 +229,23 @@ pub fn save_pc(config: &Config, outcome: &PcOutcome) -> Result<Change, Vec<Probl
     Ok(change)
 }
 
+/// The languages the "Загальне" page offers, in their order: the system's, then each shipped
+/// language. Render one with `Translator::language_name`.
+pub fn language_choices() -> [LanguageSetting; 3] {
+    [
+        LanguageSetting::Auto,
+        LanguageSetting::Fixed(Lang::Uk),
+        LanguageSetting::Fixed(Lang::En),
+    ]
+}
+
+/// Chooses the language of the program.
+pub fn set_language(config: &Config, language: LanguageSetting) -> Change {
+    let mut change = unchanged(config);
+    change.config.language = language;
+    change
+}
+
 /// Deletes a PC, and the relay it used if no other PC uses it. `None` if there is no such PC.
 pub fn delete_pc(config: &Config, id: &PcId) -> Option<Change> {
     config.pc(id)?;
@@ -245,6 +266,45 @@ mod tests {
     fn assert_valid(change: &Change) {
         // Rendering parses the text back and checks it against the configuration.
         config::render(&change.config).unwrap();
+    }
+
+    #[test]
+    fn every_language_is_offered_once_after_the_system_one() {
+        let choices = language_choices();
+        assert_eq!(choices.first(), Some(&LanguageSetting::Auto));
+        for lang in Lang::ALL {
+            let n = choices
+                .iter()
+                .filter(|c| **c == LanguageSetting::Fixed(lang))
+                .count();
+            assert_eq!(n, 1, "{lang:?}");
+        }
+    }
+
+    #[test]
+    fn a_language_choice_is_saved_in_place() {
+        let dir = std::env::temp_dir().join(format!("homelink-language-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        let text = config::render(&single_config()).unwrap();
+        let text = text.replacen("language", "# chosen in the settings\nlanguage", 1);
+        std::fs::write(&path, &text).unwrap();
+        let config = config::load(&path).unwrap().config;
+
+        let change = set_language(&config, LanguageSetting::Fixed(Lang::Uk));
+        assert_eq!(change.config.pcs, config.pcs);
+        assert!(change.renames.pcs.is_empty() && change.removed_relays.is_empty());
+        change.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            saved.contains("# chosen in the settings\nlanguage = \"uk\""),
+            "{saved}"
+        );
+        assert_eq!(
+            config::load(&path).unwrap().config.language,
+            LanguageSetting::Fixed(Lang::Uk)
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

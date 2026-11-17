@@ -53,6 +53,8 @@ pub(crate) struct Real {
     pub(crate) rdp: Arc<RdpLauncher>,
     /// The settings file, where the settings window saves changes.
     pub(crate) config_path: PathBuf,
+    /// The Windows display language (a tag such as `uk-UA`), when it could be read.
+    pub(crate) system_language: Option<String>,
     /// Runs the external programs (the checks of the settings, the links).
     pub(crate) runner: Arc<dyn CommandRunner>,
     /// The same runner, to tell it where the programs were found.
@@ -158,10 +160,8 @@ pub(crate) fn prepare(
 ) -> Result<Real, Stop> {
     // `reg`, `whoami` and `powershell` write ASCII that needs no code page.
     let probe = StdCommandRunner::new();
-    let tag = match language_arg {
-        Some(LanguageSetting::Fixed(_)) => None,
-        _ => system_language_tag(&probe),
-    };
+    // Read even when --lang fixes the language: "Системна" in the settings needs it.
+    let tag = system_language_tag(&probe);
     let early = Translator::new(
         language_arg
             .unwrap_or(LanguageSetting::Auto)
@@ -225,6 +225,7 @@ pub(crate) fn prepare(
         translator,
         rdp,
         config_path: path,
+        system_language: tag,
         runner,
         std_runner,
         _instance: instance,

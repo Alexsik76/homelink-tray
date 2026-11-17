@@ -124,6 +124,7 @@ fn main() -> ExitCode {
                 rdp: Arc::clone(&real.rdp),
                 ports: Arc::new(TcpPortProbe),
                 runner: Arc::clone(&real.runner),
+                system_language: real.system_language.clone(),
             };
             let std_runner = Arc::clone(&real.std_runner);
             let result = run_ui(
@@ -214,7 +215,7 @@ fn run_ui(
     let panel = view::Panel::new()?;
     let details = view::DetailsWindow::new()?;
     let tray = view::Tray::new()?;
-    let sink = Arc::new(ui::UiSink::new(translator.clone()));
+    let sink = Arc::new(ui::UiSink);
     let deps = (adapters.deps)(sink);
     let clock = Arc::clone(&deps.clock);
     let settings_config = config.clone();

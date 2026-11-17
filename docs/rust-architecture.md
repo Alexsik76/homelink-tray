@@ -721,9 +721,20 @@ unless the name changes.
 English and Ukrainian, same mechanism as `i18n.py`: flat `key -> template` JSON files with
 `{param}` placeholders, embedded with `include_str!`, language from config (`auto` reads
 the Windows UI language). One catalog serves everything: Slint receives its static texts
-through a `global Words` filled from the catalog (and refilled on a language change);
-notices, dialogs and wizard texts come from the same catalog. Slint's own `@tr`/gettext is not
-used: it would be a second mechanism and cannot cover notices and message boxes.
+through the globals `Strings` (panel, details) and `Words` (settings, wizard, tunnel form),
+filled from the catalog; notices, dialogs and wizard texts come from the same catalog. Slint's
+own `@tr`/gettext is not used: it would be a second mechanism and cannot cover notices and
+message boxes.
+
+**Choosing the language.** The settings page "Загальне" offers "Системна" (`language =
+"auto"`, the default of a new file), "Українська" and "English" (`settings::language_choices`;
+the names of the languages are written in themselves). A choice is saved to `config.toml` at
+once (`settings::set_language`, in place like every save) without reloading the engine, which
+does not use the language, and every window is worded again in the new language without a
+restart: the `Strings` and `Words` globals are refilled, the lists, pages and the panel are
+rebuilt, and later notices use it (the engine's notices are worded on the event loop thread).
+Texts a step of an open wizard has already shown change with its next step. `--lang` overrides
+the file only until a language is chosen in the settings.
 
 Tests (run on Linux): both locales have identical key sets and identical placeholder sets per
 key; every `Notice` variant and every `Words` field has a key.

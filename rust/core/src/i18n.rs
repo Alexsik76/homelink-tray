@@ -293,6 +293,14 @@ impl Translator {
         )
     }
 
+    /// The name of a choice of the "Загальне" page: "Системна", or the language in itself.
+    pub fn language_name(&self, setting: LanguageSetting) -> String {
+        match setting {
+            LanguageSetting::Auto => self.t("settings.language.auto", &[]),
+            LanguageSetting::Fixed(lang) => self.t(&format!("language.{}", lang.code()), &[]),
+        }
+    }
+
     /// "Крок N з 5 · name" for the wizard header.
     pub fn wizard_step(&self, step: crate::wizard::Step) -> String {
         let name = self.t(step.name_key(), &[]);
@@ -430,6 +438,19 @@ mod tests {
                     lang.code()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn every_language_choice_has_a_name_and_a_language_names_itself() {
+        let en = Translator::new(Lang::En);
+        let uk = Translator::new(Lang::Uk);
+        assert_eq!(en.language_name(LanguageSetting::Auto), "System");
+        assert_eq!(uk.language_name(LanguageSetting::Auto), "Системна");
+        for lang in Lang::ALL {
+            let name = en.language_name(LanguageSetting::Fixed(lang));
+            assert!(!name.starts_with("language."), "{name}");
+            assert_eq!(uk.language_name(LanguageSetting::Fixed(lang)), name);
         }
     }
 
