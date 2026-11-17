@@ -150,7 +150,7 @@ impl Manage {
             return;
         }
         let draft = PcDraft::new(&self.config.borrow());
-        let heading = self.tr.t("wizard.title_add", &[]);
+        let heading = self.tr.borrow().t("wizard.title_add", &[]);
         self.open_wizard(draft, heading);
     }
 
@@ -168,7 +168,9 @@ impl Manage {
             config.pc(&pc_id).map(|pc| {
                 (
                     PcDraft::from_pc(&config, pc),
-                    self.tr.t("wizard.title_edit", &[("pc", pc.name.as_str())]),
+                    self.tr
+                        .borrow()
+                        .t("wizard.title_edit", &[("pc", pc.name.as_str())]),
                 )
             })
         };
@@ -214,7 +216,7 @@ impl Manage {
         w.set_host(draft.host.clone().into());
         w.set_ports(draft.ports.clone().into());
 
-        let none = self.tr.t("wizard.tunnel.none", &[]);
+        let none = self.tr.borrow().t("wizard.tunnel.none", &[]);
         let tunnel_labels: Vec<SharedString> = s
             .tunnels
             .iter()
@@ -245,9 +247,9 @@ impl Manage {
         let mut relay_labels: Vec<SharedString> = s
             .relays
             .iter()
-            .map(|option| self.tr.relay_option(option).into())
+            .map(|option| self.tr.borrow().relay_option(option).into())
             .collect();
-        relay_labels.push(self.tr.t("wizard.relay.new", &[]).into());
+        relay_labels.push(self.tr.borrow().t("wizard.relay.new", &[]).into());
         w.set_relay_labels(model(relay_labels));
         w.set_relay_kinds(model(
             s.relays
@@ -377,7 +379,8 @@ impl Manage {
         if matches!(step, Step::Wake | Step::Power) {
             self.fill_default_keys();
         }
-        self.wizard.set_step_text(self.tr.wizard_step(step).into());
+        self.wizard
+            .set_step_text(self.tr.borrow().wizard_step(step).into());
         self.wizard
             .set_errors(model(vec![SharedString::default(); ERRORS]));
         self.wizard.set_general_error("".into());
@@ -437,6 +440,7 @@ impl Manage {
                 });
                 (
                     self.tr
+                        .borrow()
                         .t(&format!("wizard.relay.setup.{}", kind.code()), &[]),
                     commands,
                 )
@@ -457,6 +461,7 @@ impl Manage {
                         });
                         (
                             self.tr
+                                .borrow()
                                 .t(&format!("wizard.relay.setup.{}", relay.kind.code()), &[]),
                             commands,
                         )
@@ -474,7 +479,7 @@ impl Manage {
                 Os::Windows => "windows",
             };
             (
-                self.tr.t(&format!("wizard.pc.setup.{os}"), &[]),
+                self.tr.borrow().t(&format!("wizard.pc.setup.{os}"), &[]),
                 pc_setup::text(&PcSetup {
                     os: draft.os,
                     user: &draft.ssh_user,
@@ -566,6 +571,7 @@ impl Manage {
             Err(detail) => {
                 let text = self
                     .tr
+                    .borrow()
                     .t("wizard.ssh.key_failed", &[("detail", detail.as_str())]);
                 self.set_key_error(which, &text);
             }
@@ -614,7 +620,7 @@ impl Manage {
         }
         match result {
             Ok(offer) => {
-                let prompt = self.tr.t(
+                let prompt = self.tr.borrow().t(
                     "wizard.ssh.host_key_unknown",
                     &[("host", offer.pattern.as_str())],
                 );
@@ -623,6 +629,7 @@ impl Manage {
                     .iter()
                     .map(|f| {
                         self.tr
+                            .borrow()
                             .t("wizard.ssh.fingerprint", &[("fingerprint", f.as_str())])
                             .into()
                     })
@@ -634,7 +641,7 @@ impl Manage {
                 }
             }
             Err(detail) => {
-                let text = self.tr.t(
+                let text = self.tr.borrow().t(
                     "wizard.ssh.scan_failed",
                     &[("host", label), ("detail", detail.as_str())],
                 );
@@ -676,17 +683,20 @@ impl Manage {
                 self.wizard_retest();
                 self.wizard.set_ssh_note(
                     self.tr
+                        .borrow()
                         .t("wizard.ssh.trust_done", &[("host", pattern)])
                         .into(),
                 );
             }
             Err(error) => {
                 let text = match error {
-                    TrustError::AlreadyKnown => {
-                        self.tr.t("wizard.ssh.already_known", &[("host", pattern)])
-                    }
+                    TrustError::AlreadyKnown => self
+                        .tr
+                        .borrow()
+                        .t("wizard.ssh.already_known", &[("host", pattern)]),
                     TrustError::Failed(detail) => self
                         .tr
+                        .borrow()
                         .t("wizard.ssh.trust_failed", &[("detail", detail.as_str())]),
                 };
                 self.clear_trust();
@@ -714,7 +724,7 @@ impl Manage {
     }
 
     fn show_problems(&self, problems: &[Problem]) {
-        let (errors, general) = place_problems(&self.tr, problems, slot, ERRORS);
+        let (errors, general) = place_problems(&self.tr.borrow(), problems, slot, ERRORS);
         self.wizard.set_errors(model(errors));
         self.wizard.set_general_error(general.into());
         let flow = self.wizard.global::<Flow>();
@@ -871,7 +881,7 @@ impl Manage {
             .pending()
             .into_iter()
             .map(|kind| CheckLine {
-                name: self.tr.check_name(kind).into(),
+                name: self.tr.borrow().check_name(kind).into(),
                 result: SharedString::default(),
                 mark: Mark::Busy,
                 trust: false,
@@ -906,8 +916,8 @@ impl Manage {
         let rows: Vec<CheckLine> = results
             .iter()
             .map(|row| CheckLine {
-                name: self.tr.check_name(row.kind).into(),
-                result: self.tr.check_result(&row.result).into(),
+                name: self.tr.borrow().check_name(row.kind).into(),
+                result: self.tr.borrow().check_result(&row.result).into(),
                 mark: ui::mark(row.display),
                 trust: offers_trust(&row.result),
                 fix: matches!(row.result, CheckResult::NeighborDiffers { .. }),
@@ -941,6 +951,7 @@ impl Manage {
             let label = host_pattern(&host, port).unwrap_or(host);
             let text = self
                 .tr
+                .borrow()
                 .t("wizard.ssh.host_key_changed", &[("host", label.as_str())]);
             self.wizard.set_ssh_note(text.into());
         }

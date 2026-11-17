@@ -52,6 +52,8 @@ pub(crate) struct Persist {
     pub(crate) ports: Arc<dyn PortProbe>,
     /// Runs `ssh` for the checks and opens the links of the About page.
     pub(crate) runner: Arc<dyn CommandRunner>,
+    /// The Windows display language, for the choice "Системна".
+    pub(crate) system_language: Option<String>,
 }
 
 /// What [`install`] needs.
@@ -101,7 +103,8 @@ pub(crate) fn delete_step(armed: Option<&Armed>, clicked: Armed) -> DeleteStep {
 /// The settings, the tunnel form and the wizard, and the state behind them. Lives on the event
 /// loop thread (see [`with_manage`]).
 pub(crate) struct Manage {
-    pub(crate) tr: Translator,
+    /// The texts, in the language chosen; replaced when the user chooses another.
+    pub(crate) tr: RefCell<Translator>,
     pub(crate) handle: Handle,
     pub(crate) persist: Persist,
     /// Looks the programs up again after a change.
@@ -145,10 +148,6 @@ pub(crate) fn install(panel: &Panel, setup: Setup) -> Result<(), slint::Platform
     let settings = SettingsWindow::new()?;
     let form_window = TunnelFormWindow::new()?;
     let wizard = WizardWindow::new()?;
-    let about = About::new(
-        env!("CARGO_PKG_VERSION"),
-        Some(include_str!("../../Cargo.lock")),
-    );
     let tr = &setup.translator;
 
     settings.global::<Theme>().set_dark(setup.dark);
@@ -157,20 +156,7 @@ pub(crate) fn install(panel: &Panel, setup: Setup) -> Result<(), slint::Platform
     fill_words(&settings.global::<Words>(), tr);
     fill_words(&form_window.global::<Words>(), tr);
     fill_words(&wizard.global::<Words>(), tr);
-
-    settings.set_version_text(
-        tr.t("about.version", &[("version", about.version.as_str())])
-            .into(),
-    );
-    settings.set_slint_version(
-        about
-            .slint_version
-            .as_deref()
-            .map(|version| tr.t("about.slint_version", &[("version", version)]))
-            .unwrap_or_default()
-            .into(),
-    );
-    settings.set_slint_url(about.slint_url.into());
+    fill_about(&settings, tr);
     settings.set_notices(THIRD_PARTY_NOTICES.into());
     settings.set_glyph(icon::to_image(&icon::render(
         DisplayState::Unknown,
@@ -207,7 +193,7 @@ pub(crate) fn install(panel: &Panel, setup: Setup) -> Result<(), slint::Platform
         .on_settings_clicked(|| with_manage(Manage::open_settings));
 
     let manage = Rc::new(Manage {
-        tr: setup.translator,
+        tr: RefCell::new(setup.translator),
         handle: setup.handle,
         persist: setup.persist,
         checker: setup.checker,
@@ -236,6 +222,7 @@ fn wire_settings(settings: &SettingsWindow) {
     settings.on_delete_pc(|id| with_manage(|m| m.delete_pc(id.as_str())));
     settings.on_disarm(|| with_manage(Manage::disarm));
     settings.on_recheck(|| with_manage(Manage::recheck));
+    settings.on_language_chosen(|index| with_manage(|m| m.choose_language(index)));
     settings.on_open_link(|url| {
         with_manage(|m| links::open(Arc::clone(&m.persist.runner), url.to_string()));
     });
@@ -289,11 +276,35 @@ fn escape_wizard() {
     with_manage(Manage::cancel_wizard);
 }
 
+/// The About page: the version and the Slint credit.
+fn fill_about(settings: &SettingsWindow, tr: &Translator) {
+    let about = About::new(
+        env!("CARGO_PKG_VERSION"),
+        Some(include_str!("../../Cargo.lock")),
+    );
+    settings.set_version_text(
+        tr.t("about.version", &[("version", about.version.as_str())])
+            .into(),
+    );
+    settings.set_slint_version(
+        about
+            .slint_version
+            .as_deref()
+            .map(|version| tr.t("about.slint_version", &[("version", version)]))
+            .unwrap_or_default()
+            .into(),
+    );
+    settings.set_slint_url(about.slint_url.into());
+}
+
 /// The texts of one window (every property of [`Words`]).
 fn fill_words(w: &Words, tr: &Translator) {
     let t = |key: &str| SharedString::from(tr.t(key, &[]));
     w.set_settings_title(t("settings.title"));
     w.set_nav_tunnels(t("settings.nav.tunnels_pcs"));
+    w.set_nav_general(t("settings.nav.general"));
+    w.set_language(t("settings.language"));
+    w.set_language_hint(t("settings.language.hint"));
     w.set_nav_help(t("settings.nav.help"));
     w.set_nav_capabilities(t("settings.nav.capabilities"));
     w.set_recheck(t("capability.recheck"));
@@ -424,6 +435,7 @@ impl Manage {
     pub(crate) fn commit(&self, change: Change) -> Result<(), String> {
         change.save(&self.persist.path).map_err(|err| {
             self.tr
+                .borrow()
                 .t("wizard.save_failed", &[("detail", &err.to_string())])
         })?;
         self.handle.reload(change.config.clone());
@@ -445,16 +457,76 @@ impl Manage {
         // Anything that happened before the window was closed is forgotten, a waiting delete too.
         *self.armed.borrow_mut() = None;
         self.settings.set_page_error("".into());
+        self.settings.set_language_error("".into());
+        self.fill_language();
         self.refresh();
         // The capability spec: the programs are looked up again when the settings open.
         self.recheck();
         show_in_front(&self.settings);
     }
 
+    /// The language choices of the "Загальне" page and the one in the settings.
+    fn fill_language(&self) {
+        let choices = settings::language_choices();
+        let names: Vec<SharedString> = {
+            let tr = self.tr.borrow();
+            choices
+                .iter()
+                .map(|c| tr.language_name(*c).into())
+                .collect()
+        };
+        let current = self.config.borrow().language;
+        let index = choices.iter().position(|c| *c == current).unwrap_or(0);
+        self.settings
+            .set_language_choices(slint::ModelRc::new(slint::VecModel::from(names)));
+        self.settings
+            .set_language_index(i32::try_from(index).unwrap_or(0));
+    }
+
+    /// A language chosen on the "Загальне" page: saved to the settings file at once (not sent to
+    /// the engine, which does not use it), then every window is worded in it.
+    fn choose_language(&self, index: i32) {
+        let Some(setting) = usize::try_from(index)
+            .ok()
+            .and_then(|i| settings::language_choices().get(i).copied())
+        else {
+            return;
+        };
+        self.settings.set_language_error("".into());
+        let lang = setting.resolve(self.persist.system_language.as_deref());
+        if self.config.borrow().language == setting && self.tr.borrow().lang() == lang {
+            return;
+        }
+        let change = settings::set_language(&self.config.borrow(), setting);
+        if let Err(err) = change.save(&self.persist.path) {
+            let text = self.tr.borrow().t(
+                "settings.language.save_failed",
+                &[("detail", &err.to_string())],
+            );
+            self.settings.set_language_error(text.into());
+            return;
+        }
+        *self.config.borrow_mut() = change.config;
+        log::info!("language: {} ({})", setting.as_str(), lang.code());
+        let tr = Translator::new(lang);
+        *self.tr.borrow_mut() = tr.clone();
+        {
+            let tr = self.tr.borrow();
+            fill_words(&self.settings.global::<Words>(), &tr);
+            fill_words(&self.form_window.global::<Words>(), &tr);
+            fill_words(&self.wizard.global::<Words>(), &tr);
+            fill_about(&self.settings, &tr);
+        }
+        self.fill_language();
+        self.refresh();
+        self.recheck();
+        crate::ui::set_translator(tr);
+    }
+
     /// Looks the programs up again and fills the capabilities page with the result.
     pub(crate) fn recheck(&self) {
         let caps = self.checker.check(&self.config.borrow());
-        let tiles: Vec<CapabilityTile> = capability_page::tiles(&self.tr, &caps)
+        let tiles: Vec<CapabilityTile> = capability_page::tiles(&self.tr.borrow(), &caps)
             .into_iter()
             .map(|tile| CapabilityTile {
                 title: tile.title.into(),
@@ -480,6 +552,7 @@ impl Manage {
         let time = self.checker.checked_at().unwrap_or_default();
         self.settings.set_capabilities_checked(
             self.tr
+                .borrow()
                 .t("capability.checked", &[("time", time.as_str())])
                 .into(),
         );
@@ -514,13 +587,20 @@ impl Manage {
                     .find(|t| t.id.to_string() == *id)
                     .map(|t| {
                         self.tr
+                            .borrow()
                             .t("confirm.delete_tunnel", &[("tunnel", t.name.as_str())])
                     }),
-                Some(Armed::Pc(id)) => config
-                    .pcs
-                    .iter()
-                    .find(|p| p.id.to_string() == *id)
-                    .map(|p| self.tr.t("confirm.delete", &[("pc", p.name.as_str())])),
+                Some(Armed::Pc(id)) => {
+                    config
+                        .pcs
+                        .iter()
+                        .find(|p| p.id.to_string() == *id)
+                        .map(|p| {
+                            self.tr
+                                .borrow()
+                                .t("confirm.delete", &[("pc", p.name.as_str())])
+                        })
+                }
                 None => None,
             };
             (tunnels, pcs, hint.unwrap_or_default())
@@ -534,7 +614,7 @@ impl Manage {
         SettingsRow {
             id: row.id.clone().into(),
             name: row.name.clone().into(),
-            secondary: self.tr.secondary(&row.secondary).into(),
+            secondary: self.tr.borrow().secondary(&row.secondary).into(),
             armed,
         }
     }
@@ -598,7 +678,7 @@ impl Manage {
     fn show_page_error(&self, problems: &[Problem]) {
         let text = problems
             .iter()
-            .map(|problem| self.tr.problem(problem))
+            .map(|problem| self.tr.borrow().problem(problem))
             .collect::<Vec<_>>()
             .join("\n");
         self.settings.set_page_error(text.into());
@@ -615,33 +695,39 @@ impl Manage {
             {
                 Some(tunnel) => (
                     TunnelForm::from_tunnel(tunnel),
-                    self.tr.t(
+                    self.tr.borrow().t(
                         "tunnel.form.title_edit",
                         &[("tunnel", tunnel.name.as_str())],
                     ),
                 ),
                 None => (
                     TunnelForm::new(&config),
-                    self.tr.t("tunnel.form.title_add", &[]),
+                    self.tr.borrow().t("tunnel.form.title_add", &[]),
                 ),
             }
         };
         let window = &self.form_window;
         window.set_heading(heading.into());
         window.set_name(form.name.clone().into());
-        window.set_tunnels_empty(self.tr.t("tunnel.form.empty", &[]).into());
+        window.set_tunnels_empty(self.tr.borrow().t("tunnel.form.empty", &[]).into());
         window.set_errors(model(vec![SharedString::default(); 3]));
         window.set_general_error("".into());
-        let wireguard = self.tr.t("tool.wireguard", &[]);
+        let wireguard = self.tr.borrow().t("tool.wireguard", &[]);
         window.set_missing_title(
             self.tr
+                .borrow()
                 .t("reason.tunnel", &[("what", wireguard.as_str())])
                 .into(),
         );
-        window.set_missing_body(self.tr.t("tunnel.form.wireguard_missing", &[]).into());
-        window.set_install_label(self.tr.t("capability.how_install", &[]).into());
+        window.set_missing_body(
+            self.tr
+                .borrow()
+                .t("tunnel.form.wireguard_missing", &[])
+                .into(),
+        );
+        window.set_install_label(self.tr.borrow().t("capability.how_install", &[]).into());
         window.set_install_url(capability_page::WIREGUARD_URL.into());
-        window.set_capabilities_label(self.tr.t("settings.nav.capabilities", &[]).into());
+        window.set_capabilities_label(self.tr.borrow().t("settings.nav.capabilities", &[]).into());
         *self.form.borrow_mut() = Some(form);
         self.recheck_form();
         show_in_front(window);
@@ -680,6 +766,7 @@ impl Manage {
             .map(|t| {
                 if taken(&t.name) {
                     self.tr
+                        .borrow()
                         .t("tunnel.form.taken", &[("name", t.name.as_str())])
                         .into()
                 } else {
@@ -746,7 +833,7 @@ impl Manage {
         if !form.conf.trim().is_empty() && !std::path::Path::new(form.conf.trim()).is_file() {
             let mut errors = vec![SharedString::default(); 3];
             if let Some(slot) = errors.get_mut(1) {
-                *slot = self.tr.t("tunnel.form.conf_missing", &[]).into();
+                *slot = self.tr.borrow().t("tunnel.form.conf_missing", &[]).into();
             }
             self.form_window.set_errors(model(errors));
             self.form_window.set_general_error("".into());
@@ -755,7 +842,8 @@ impl Manage {
         let result = settings::save_tunnel(&self.config.borrow(), &form);
         match result {
             Err(problems) => {
-                let (errors, general) = place_problems(&self.tr, &problems, tunnel_slot, 3);
+                let (errors, general) =
+                    place_problems(&self.tr.borrow(), &problems, tunnel_slot, 3);
                 self.form_window.set_errors(model(errors));
                 let flow = self.form_window.global::<Flow>();
                 flow.set_error_generation(flow.get_error_generation().wrapping_add(1));

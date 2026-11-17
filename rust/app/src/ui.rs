@@ -63,35 +63,18 @@ thread_local! {
 /// What opens Remote Desktop for a PC. The error is a text ready to show.
 pub(crate) type RdpAction = Box<dyn Fn(&PcId) -> Result<(), String>>;
 
-/// Hands engine snapshots to the Slint event loop and writes the notices to the log.
-pub(crate) struct UiSink {
-    translator: Translator,
-}
-
-impl UiSink {
-    /// A sink that words the notices with `translator`.
-    pub(crate) fn new(translator: Translator) -> Self {
-        Self { translator }
-    }
-}
+/// Hands engine snapshots and notices to the Slint event loop.
+pub(crate) struct UiSink;
 
 impl Sink for UiSink {
     fn publish(&self, snapshot: Snapshot) {
         let _ = slint::invoke_from_event_loop(move || with_ui(|ui| ui.show(&snapshot)));
     }
 
-    /// A notice goes to the log file, worded as the user reads it, and to the screen as a tray
-    /// balloon. Slint 1.18's `SystemTrayIcon` has no notification call (its sources were read:
-    /// it only has icon, tooltip, title and menu), so the balloon comes from the icon of
-    /// `platform::show_balloon`. It is shown on the event loop thread: the engine calls this
-    /// from its own thread.
+    /// A notice is worded and shown on the event loop thread (the engine calls this from its
+    /// own thread), in the language the UI has at that moment: see [`Ui::notify`].
     fn notify(&self, notice: Notice) {
-        let (title, body) = self.translator.notice(&notice);
-        log::info!(target: "notice", "{title}: {body}");
-        let severity = notice.severity();
-        let _ = slint::invoke_from_event_loop(move || {
-            platform::show_balloon(&title, &body, severity);
-        });
+        let _ = slint::invoke_from_event_loop(move || with_ui(|ui| ui.notify(&notice)));
     }
 }
 
@@ -164,7 +147,8 @@ pub(crate) struct Ui {
     panel: Weak<Panel>,
     details: Weak<DetailsWindow>,
     tray: Weak<Tray>,
-    tr: Translator,
+    /// The texts; replaced when the user chooses another language ([`set_translator`]).
+    tr: RefCell<Translator>,
     handle: Handle,
     rdp: RdpAction,
     clock: Arc<dyn Clock>,
@@ -199,6 +183,12 @@ struct Models {
     pcs: Vec<Rc<VecModel<PcRow>>>,
 }
 
+/// Words the panel, the details window, the tray tip and later notices in `tr` (a language
+/// chosen in the settings).
+pub(crate) fn set_translator(tr: Translator) {
+    with_ui(|ui| ui.retranslate(tr));
+}
+
 /// Connects the views to the engine: fills the texts, sets the theme, wires the callbacks and
 /// makes the UI state reachable from [`UiSink`]. Call on the event loop thread, before the engine
 /// starts.
@@ -216,7 +206,7 @@ pub(crate) fn install(windows: &Windows<'_>, setup: Setup) {
         panel: windows.panel.as_weak(),
         details: windows.details.as_weak(),
         tray: windows.tray.as_weak(),
-        tr: setup.translator,
+        tr: RefCell::new(setup.translator),
         handle: setup.handle,
         rdp: setup.rdp,
         clock: setup.clock,
@@ -347,6 +337,40 @@ fn wire(windows: &Windows<'_>, ui: &Rc<Ui>) {
 
 impl Ui {
     /// Rebuilds the views from a snapshot and remembers it.
+    /// A notice goes to the log file, worded as the user reads it, and to the screen as a tray
+    /// balloon. Slint 1.18's `SystemTrayIcon` has no notification call (its sources were read:
+    /// it only has icon, tooltip, title and menu), so the balloon comes from the icon of
+    /// `platform::show_balloon`.
+    fn notify(&self, notice: &Notice) {
+        let (title, body) = self.tr.borrow().notice(notice);
+        log::info!(target: "notice", "{title}: {body}");
+        platform::show_balloon(&title, &body, notice.severity());
+    }
+
+    /// Words the panel, the details window and the tray tip in `tr` from now on.
+    fn retranslate(&self, tr: Translator) {
+        *self.tr.borrow_mut() = tr;
+        let (Some(panel), Some(details), Some(tray)) = (
+            self.panel.upgrade(),
+            self.details.upgrade(),
+            self.tray.upgrade(),
+        ) else {
+            return;
+        };
+        fill_strings(
+            &Windows {
+                panel: &panel,
+                details: &details,
+                tray: &tray,
+            },
+            &self.tr.borrow(),
+        );
+        let last = self.state.borrow().last.clone();
+        if let Some(snapshot) = last {
+            self.show(&snapshot);
+        }
+    }
+
     fn show(&self, snapshot: &Snapshot) {
         self.state.borrow_mut().last = Some(snapshot.clone());
         let (Some(panel), Some(tray)) = (self.panel.upgrade(), self.tray.upgrade()) else {
@@ -382,8 +406,11 @@ impl Ui {
                 .groups
                 .iter()
                 .map(|group| {
-                    let rows: Vec<PcRow> =
-                        group.pcs.iter().map(|pc| pc_row(pc, &self.tr)).collect();
+                    let rows: Vec<PcRow> = group
+                        .pcs
+                        .iter()
+                        .map(|pc| pc_row(pc, &self.tr.borrow()))
+                        .collect();
                     Rc::new(VecModel::from(rows))
                 })
                 .collect();
@@ -405,7 +432,7 @@ impl Ui {
         };
         for (index, (group, pc_model)) in snapshot.groups.iter().zip(&models.pcs).enumerate() {
             for (pc_index, pc) in group.pcs.iter().enumerate() {
-                pc_model.set_row_data(pc_index, pc_row(pc, &self.tr));
+                pc_model.set_row_data(pc_index, pc_row(pc, &self.tr.borrow()));
             }
             // Only a change of the group's own fields replaces its row; a publish that changes
             // only PC rows leaves the group row, and so the tunnel element, alone.
@@ -443,8 +470,8 @@ impl Ui {
             // A tunnel always has its toggle; it is never shown as inactive.
             inactive: false,
             toggle_on: tunnel.can_toggle(),
-            toggle_label: self.tr.t(key, &[]).into(),
-            reason: reasons::tunnel_reason(&self.tr, tunnel)
+            toggle_label: self.tr.borrow().t(key, &[]).into(),
+            reason: reasons::tunnel_reason(&self.tr.borrow(), tunnel)
                 .unwrap_or_default()
                 .into(),
         }
@@ -485,12 +512,12 @@ impl Ui {
         let (online, pcs) = (tray.pcs_online.to_string(), tray.pcs_total.to_string());
         let unknown = tray.pcs_unknown.to_string();
         let line2 = if tray.pcs_unknown == 0 {
-            self.tr.t(
+            self.tr.borrow().t(
                 "tooltip.pcs_online",
                 &[("online", online.as_str()), ("total", pcs.as_str())],
             )
         } else {
-            self.tr.t(
+            self.tr.borrow().t(
                 "tooltip.pcs_online_unknown",
                 &[
                     ("online", online.as_str()),
@@ -500,7 +527,7 @@ impl Ui {
             )
         };
         let lines = [
-            self.tr.t(
+            self.tr.borrow().t(
                 "tooltip.tunnels_up",
                 &[("up", up.as_str()), ("total", tunnels.as_str())],
             ),
@@ -558,7 +585,7 @@ impl Ui {
                 .flat_map(|group| group.pcs.iter())
                 .find(|view| view.id == pc)
                 .map_or_else(|| id.to_owned(), |view| view.name.clone());
-            platform::message(&self.tr.t(
+            platform::message(&self.tr.borrow().t(
                 "error.rdp",
                 &[("pc", name.as_str()), ("detail", detail.as_str())],
             ));
@@ -650,7 +677,12 @@ impl Ui {
                 };
                 let (error, fail) = self.error(tunnel.last_error.as_ref());
                 let mut rows = vec![
-                    self.row("details.state", self.tr.state(tunnel.display), true, false),
+                    self.row(
+                        "details.state",
+                        self.tr.borrow().state(tunnel.display),
+                        true,
+                        false,
+                    ),
                     self.row("details.kind", tunnel.kind.to_owned(), false, false),
                     self.row("details.pcs", pcs, false, false),
                     self.row(
@@ -662,7 +694,7 @@ impl Ui {
                     self.row("details.last_error", error, false, fail),
                 ];
                 // "Недоступно" (artboard `Unavailable`) before the check time.
-                if let Some(reason) = reasons::tunnel_reason(&self.tr, tunnel) {
+                if let Some(reason) = reasons::tunnel_reason(&self.tr.borrow(), tunnel) {
                     rows.insert(3, self.row("details.unavailable", reason, false, false));
                 }
                 Some((tunnel.name.clone(), mark(tunnel.display), rows))
@@ -673,10 +705,10 @@ impl Ui {
                     .iter()
                     .flat_map(|group| group.pcs.iter())
                     .find(|p| p.id == *id)?;
-                let wake = pc
-                    .wake
-                    .as_ref()
-                    .map_or_else(|| self.none(), |w: &WakeSummary| self.tr.wake_summary(w));
+                let wake = pc.wake.as_ref().map_or_else(
+                    || self.none(),
+                    |w: &WakeSummary| self.tr.borrow().wake_summary(w),
+                );
                 let ports = if pc.ports.is_empty() {
                     self.none()
                 } else {
@@ -688,7 +720,12 @@ impl Ui {
                 };
                 let (error, fail) = self.error(pc.last_error.as_ref());
                 let mut rows = vec![
-                    self.row("details.state", self.tr.state(pc.display), true, false),
+                    self.row(
+                        "details.state",
+                        self.tr.borrow().state(pc.display),
+                        true,
+                        false,
+                    ),
                     self.row("details.address", pc.address.clone(), false, false),
                     self.row(
                         "details.tunnel",
@@ -725,7 +762,7 @@ impl Ui {
                     self.row("details.last_error", error, false, fail),
                 ];
                 // "Недоступно" (artboard `Unavailable`) after the ports, before the check time.
-                if let Some(detail) = reasons::pc_detail(&self.tr, &pc.availability) {
+                if let Some(detail) = reasons::pc_detail(&self.tr.borrow(), &pc.availability) {
                     rows.insert(5, self.row("details.unavailable", detail, false, false));
                 }
                 Some((pc.name.clone(), mark(pc.display), rows))
@@ -735,7 +772,7 @@ impl Ui {
 
     fn row(&self, label_key: &str, value: String, strong: bool, fail: bool) -> DetailRow {
         DetailRow {
-            label: self.tr.t(label_key, &[]).into(),
+            label: self.tr.borrow().t(label_key, &[]).into(),
             value: value.into(),
             strong,
             fail,
@@ -745,14 +782,14 @@ impl Ui {
 
     /// The word for "none" (`details.none`).
     fn none(&self) -> String {
-        self.tr.t("details.none", &[])
+        self.tr.borrow().t("details.none", &[])
     }
 
     /// The text of the last error and whether it is one: its title and body, or "none".
     fn error(&self, notice: Option<&Notice>) -> (String, bool) {
         match notice {
             Some(notice) => {
-                let (title, body) = self.tr.notice(notice);
+                let (title, body) = self.tr.borrow().notice(notice);
                 (format!("{title}\n{body}"), true)
             }
             None => (self.none(), false),
@@ -765,7 +802,9 @@ impl Ui {
             None => self.none(),
             Some(at) => {
                 let (key, count) = age_parts(self.clock.now().since(at));
-                self.tr.t(key, &[("count", count.to_string().as_str())])
+                self.tr
+                    .borrow()
+                    .t(key, &[("count", count.to_string().as_str())])
             }
         }
     }
