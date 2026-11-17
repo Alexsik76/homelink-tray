@@ -1,7 +1,8 @@
 //! The "Тунелі й ПК" page of the settings window (section 7 of the handoff) as pure operations
 //! on a [`Config`].
 //!
-//! Lists: [`tunnel_rows`] and [`pc_rows`] give the name and the secondary text of each row.
+//! The page: [`groups`] gives one block per tunnel with its PCs, and one for the PCs without a
+//! tunnel.
 //! Changes: [`save_tunnel`] (add or edit), [`delete_tunnel`], [`save_pc`] (add or edit, from
 //! the wizard) and [`delete_pc`] each return a [`Change`] with the new configuration; nothing
 //! is touched until [`Change::save`] writes it in place (comments kept, renamed ids through
@@ -28,55 +29,56 @@ use crate::problem::{Code, Problem};
 use crate::tunnel_form::{self, TunnelForm};
 use crate::wizard::PcOutcome;
 
-/// The secondary text of a row, on the right of the name.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Secondary {
-    /// A tunnel row: how many PCs use it.
-    PcCount(usize),
-    /// A PC row: the name of its tunnel.
-    Tunnel(String),
-    /// A PC row without a tunnel ("без тунелю").
-    NoTunnel,
-}
-
-/// A row of a list: tunnel or PC.
+/// A row of the page: a tunnel or a PC.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     /// The id, for "Змінити" and "Видалити".
     pub id: String,
     /// The name.
     pub name: String,
-    /// The text on the right; render it with `Translator::secondary`.
-    pub secondary: Secondary,
 }
 
-/// The rows of the "Тунелі" list, in configuration order.
-pub fn tunnel_rows(config: &Config) -> Vec<Row> {
-    config
+/// One block of the page: a tunnel and the PCs behind it, or (`tunnel` is `None`) the PCs
+/// without a tunnel. The count beside the tunnel is `pcs.len()` (`Translator::pc_count`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Group {
+    /// The tunnel; `None` for the PCs without a tunnel ("Без тунелю").
+    pub tunnel: Option<Row>,
+    /// Its PCs, in configuration order.
+    pub pcs: Vec<Row>,
+}
+
+/// The blocks of the page, in configuration order: every tunnel (also one without PCs) with its
+/// PCs, then the PCs without a tunnel, a block that is left out when there are none.
+pub fn groups(config: &Config) -> Vec<Group> {
+    let pcs = |tunnel| -> Vec<Row> {
+        config
+            .pcs_of(tunnel)
+            .map(|p| Row {
+                id: p.id.to_string(),
+                name: p.name.clone(),
+            })
+            .collect()
+    };
+    let mut groups: Vec<Group> = config
         .tunnels
         .iter()
-        .map(|t| Row {
-            id: t.id.to_string(),
-            name: t.name.clone(),
-            secondary: Secondary::PcCount(config.pcs_of(Some(&t.id)).count()),
+        .map(|t| Group {
+            tunnel: Some(Row {
+                id: t.id.to_string(),
+                name: t.name.clone(),
+            }),
+            pcs: pcs(Some(&t.id)),
         })
-        .collect()
-}
-
-/// The rows of the "ПК" list, in configuration order.
-pub fn pc_rows(config: &Config) -> Vec<Row> {
-    config
-        .pcs
-        .iter()
-        .map(|p| Row {
-            id: p.id.to_string(),
-            name: p.name.clone(),
-            secondary: match p.tunnel.as_ref().and_then(|id| config.tunnel(id)) {
-                Some(t) => Secondary::Tunnel(t.name.clone()),
-                None => Secondary::NoTunnel,
-            },
-        })
-        .collect()
+        .collect();
+    let loose = pcs(None);
+    if !loose.is_empty() {
+        groups.push(Group {
+            tunnel: None,
+            pcs: loose,
+        });
+    }
+    groups
 }
 
 /// A new configuration produced by one operation, not yet written.
@@ -308,25 +310,46 @@ mod tests {
     }
 
     #[test]
-    fn rows_have_the_secondary_text_of_the_handoff() {
+    fn the_page_groups_the_pcs_by_tunnel_and_the_loose_ones_last() {
         let config = multi_config();
-        let tunnels = tunnel_rows(&config);
-        assert_eq!(
-            tunnels
-                .iter()
-                .map(|r| (r.name.as_str(), r.secondary.clone()))
-                .collect::<Vec<_>>(),
-            [
-                ("Home", Secondary::PcCount(2)),
-                ("Office", Secondary::PcCount(1))
-            ]
-        );
-        let pcs = pc_rows(&config);
-        assert_eq!(pcs.len(), 4);
-        assert_eq!(pcs[0].secondary, Secondary::Tunnel("Home".into()));
-        assert_eq!(pcs[3].name, "NAS");
-        assert_eq!(pcs[3].secondary, Secondary::NoTunnel);
-        assert_eq!(pcs[3].id, "nas");
+        let groups = groups(&config);
+        let shape: Vec<(Option<&str>, Vec<&str>)> = groups
+            .iter()
+            .map(|g| {
+                (
+                    g.tunnel.as_ref().map(|t| t.name.as_str()),
+                    g.pcs.iter().map(|p| p.name.as_str()).collect(),
+                )
+            })
+            .collect();
+        let tunnels: Vec<&str> = config.tunnels.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(shape.len(), tunnels.len() + 1, "{shape:?}");
+        for (group, name) in shape.iter().zip(&tunnels) {
+            assert_eq!(group.0, Some(*name));
+        }
+        let last = groups.last().unwrap();
+        assert!(last.tunnel.is_none());
+        assert_eq!(last.pcs.len(), config.pcs_of(None).count());
+        assert_eq!(last.pcs[0].id, "nas");
+        // Every PC is in exactly one block, in configuration order within it.
+        let all: usize = groups.iter().map(|g| g.pcs.len()).sum();
+        assert_eq!(all, config.pcs.len());
+    }
+
+    #[test]
+    fn a_tunnel_without_pcs_has_a_block_and_no_loose_pcs_no_last_block() {
+        let mut config = multi_config();
+        config.pcs.retain(|p| p.tunnel.is_some());
+        let home = tunnel_id("home");
+        config.pcs.retain(|p| p.tunnel.as_ref() != Some(&home));
+        let groups = groups(&config);
+        assert_eq!(groups.len(), config.tunnels.len());
+        let home = groups
+            .iter()
+            .find(|g| g.tunnel.as_ref().is_some_and(|t| t.id == "home"))
+            .unwrap();
+        assert!(home.pcs.is_empty());
+        assert!(groups.iter().all(|g| g.tunnel.is_some()));
     }
 
     #[test]

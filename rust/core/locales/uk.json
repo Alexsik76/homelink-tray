@@ -96,7 +96,7 @@
   "settings.section.pcs": "ПК",
   "settings.add_tunnel": "Додати тунель",
   "settings.add_pc": "Додати ПК",
-  "settings.no_tunnel": "без тунелю",
+  "settings.no_tunnel": "Без тунелю",
   "settings.pc_count_zero": "немає ПК",
   "settings.pc_count_one": "{count} ПК",
   "settings.pc_count_other": "{count} ПК",

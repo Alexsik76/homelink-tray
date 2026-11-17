@@ -255,20 +255,33 @@ fn main() {
         fill_words(&set.global::<Words>(), &tr);
         set.show().unwrap();
         let sw = list.0.borrow().last().unwrap().clone();
-        let row = |id: &str, name: &str, sec: &str, armed: bool| SettingsRow {
-            id: id.into(),
-            name: name.into(),
-            secondary: sec.into(),
-            armed,
+        // "Home" with two PCs, "Office" without PCs, and the PCs without a tunnel (a delete
+        // waiting for its confirmation).
+        let groups = |tr: &Translator| -> ModelRc<SettingsGroup> {
+            let row = |id: &str, name: &str, armed: bool| SettingsRow {
+                id: id.into(),
+                name: name.into(),
+                armed,
+            };
+            let group = |tunnel: Option<SettingsRow>, pcs: Vec<SettingsRow>| SettingsGroup {
+                has_tunnel: tunnel.is_some(),
+                tunnel: tunnel.unwrap_or_else(|| SettingsRow {
+                    name: tr.t("settings.no_tunnel", &[]).into(),
+                    ..SettingsRow::default()
+                }),
+                count: tr.pc_count(pcs.len()).into(),
+                pcs: ModelRc::new(VecModel::from(pcs)),
+            };
+            ModelRc::new(VecModel::from(vec![
+                group(
+                    Some(row("home", "Home", false)),
+                    vec![row("desktop", "Desktop", false), row("win10-vm", "win10.vm", false)],
+                ),
+                group(Some(row("office", "Office", false)), vec![]),
+                group(None, vec![row("nas", "NAS", true)]),
+            ]))
         };
-        set.set_tunnels(ModelRc::new(VecModel::from(vec![
-            row("home", "Home", "1 PC", false),
-            row("vic-wg", "vic-wg", "2 PCs", false),
-        ])));
-        set.set_pcs(ModelRc::new(VecModel::from(vec![
-            row("desktop", "Desktop", "Home", false),
-            row("nas", "NAS", "no tunnel", true),
-        ])));
+        set.set_groups(groups(&tr));
         let suffix = if dark { "dark" } else { "light" };
         let languages = |tr: &Translator| -> ModelRc<SharedString> {
             model(
@@ -286,6 +299,7 @@ fn main() {
             // The list in Ukrainian, with "УКР" chosen.
             let uk = Translator::new(Lang::Uk);
             fill_words(&set.global::<Words>(), &uk);
+            set.set_groups(groups(&uk));
             set.set_language_choices(languages(&uk));
             set.set_language_index(1);
             shot(&sw, 900, 480, &format!("{out}/settings-list-uk.png"));
