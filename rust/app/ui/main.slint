@@ -120,6 +120,9 @@ export global Nav {
     callback settings-clicked();
     callback hide-requested();
     callback layout-changed();
+    // Down and Up arrows: the keyboard focus to the next or the previous item, as Tab and
+    // Shift+Tab.
+    callback move-focus(bool);
 
     public function toggle(key: string) {
         armed = "";
@@ -527,6 +530,10 @@ export component Panel inherits Window {
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 Nav.escape();
+                return accept;
+            }
+            if (event.text == Key.DownArrow || event.text == Key.UpArrow) {
+                Nav.move-focus(event.text == Key.DownArrow);
                 return accept;
             }
             return reject;
