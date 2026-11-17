@@ -946,8 +946,8 @@ panel with reason lines.
 
 ## 11e. Wizard and details improvements (rc.9, 16.11.2026)
 
-- A refused "Далі" scrolls the step to its top and says by the buttons to fix the fields marked in
-  red; a field's problem hides as soon as the field is edited and shows again at the next check
+- A refused "Далі" scrolls the step to its top, where the fields marked in red are; a field's
+  problem hides as soon as the field is edited and shows again at the next check
   (`Flow.error-generation`, raised with each set of problems).
 - The step bar is clickable (each segment lit under the mouse, no labels): back to any step;
   forward checks every step on the way and stops at the first with a problem.
