@@ -127,9 +127,8 @@ type it in the Remote Desktop window, or store it with
 
 ## Where the settings are
 
-A program in a program folder (`C:\Program Files\HomeLink`) keeps its settings in
-`C:\ProgramData\HomeLink`; a copy in any other folder keeps them next to itself, so it can be
-carried with them. `--config <path>` names the file directly.
+In `C:\ProgramData\HomeLink`, wherever the program itself is. `--config <path>` names another
+file.
 
 ## Files next to `config.toml`
 

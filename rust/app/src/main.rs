@@ -161,7 +161,7 @@ fn version_line() -> String {
 /// The text is English: it is meant for a console and for CI, not for the panel's user.
 fn check_config(explicit: Option<&std::path::Path>) -> (bool, String) {
     let path = match std::env::current_exe() {
-        Ok(exe) => real::config_path(explicit, &exe, &real::SystemFolders::from_env()),
+        Ok(exe) => real::config_path(explicit, &exe, real::program_data().as_deref()),
         Err(err) => return (false, format!("cannot find the program's folder: {err}")),
     };
     match homelink_core::config::load(&path) {
