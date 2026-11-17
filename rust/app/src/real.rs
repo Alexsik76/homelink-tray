@@ -69,12 +69,29 @@ impl Real {
     }
 }
 
-/// Where the settings file is: `explicit` (from `--config`) or `config.toml` next to `exe`.
-pub(crate) fn config_path(explicit: Option<&Path>, exe: &Path) -> PathBuf {
-    match explicit {
-        Some(path) => std::path::absolute(path).unwrap_or_else(|_| path.to_owned()),
+/// The folder of HomeLink's data inside `%ProgramData%`.
+const DATA_FOLDER: &str = "HomeLink";
+
+/// Where the settings file is: `explicit` (from `--config`), else `config.toml` in
+/// `%ProgramData%\HomeLink` (`program_data`), wherever the program itself is. Without
+/// `%ProgramData%` (not Windows) it is next to `exe`.
+pub(crate) fn config_path(
+    explicit: Option<&Path>,
+    exe: &Path,
+    program_data: Option<&Path>,
+) -> PathBuf {
+    if let Some(path) = explicit {
+        return std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+    }
+    match program_data {
+        Some(data) => data.join(DATA_FOLDER).join(FILE_NAME),
         None => exe.parent().unwrap_or(Path::new(".")).join(FILE_NAME),
     }
+}
+
+/// `%ProgramData%` of this process's environment.
+pub(crate) fn program_data() -> Option<PathBuf> {
+    std::env::var_os("ProgramData").map(PathBuf::from)
 }
 
 /// `args` with the value of `--config` made absolute. The copy started by a restart with
@@ -180,7 +197,7 @@ pub(crate) fn prepare(
 
     let exe = std::env::current_exe()
         .map_err(|err| Stop::Error(early.t("error.startup", &[("detail", &err.to_string())])))?;
-    let path = config_path(config_arg, &exe);
+    let path = config_path(config_arg, &exe, program_data().as_deref());
     let loaded = load_settings(&path, &early)?;
     let config = loaded.config;
     let setting = language_arg.unwrap_or(config.language);
@@ -272,14 +289,20 @@ mod tests {
     }
 
     #[test]
-    fn the_settings_file_is_next_to_the_exe_unless_given() {
+    fn the_settings_file_is_in_program_data_unless_given() {
         let exe = Path::new("/opt/homelink/HomeLink.exe");
+        let data = Path::new("/ProgramData");
         assert_eq!(
-            config_path(None, exe),
+            config_path(None, exe, Some(data)),
+            Path::new("/ProgramData/HomeLink/config.toml")
+        );
+        // Without %ProgramData% (not Windows): next to the program.
+        assert_eq!(
+            config_path(None, exe, None),
             Path::new("/opt/homelink").join("config.toml")
         );
         // A relative path is made absolute against the working directory.
-        assert!(config_path(Some(Path::new("h.toml")), exe).is_absolute());
+        assert!(config_path(Some(Path::new("h.toml")), exe, Some(data)).is_absolute());
         assert_eq!(config_dir(Path::new("/etc/h.toml")), Path::new("/etc"));
         assert_eq!(config_dir(Path::new("h.toml")), Path::new("."));
     }
@@ -289,7 +312,11 @@ mod tests {
         // Absolute on every platform (a drive letter on Windows).
         let given = std::env::temp_dir().join("h.toml");
         assert_eq!(
-            config_path(Some(&given), Path::new("/opt/HomeLink.exe")),
+            config_path(
+                Some(&given),
+                Path::new("/opt/HomeLink.exe"),
+                Some(Path::new("/pd"))
+            ),
             given
         );
     }
