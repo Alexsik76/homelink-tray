@@ -137,7 +137,6 @@ export component WizardWindow inherits Window {
     in property <[string]> errors;
     in property <string> general-error;
     // Next to the buttons when "Далі" was refused: the fields to fix may be scrolled away.
-    in property <string> footer-note;
     // Scrolls the step to its top, where the first marked field is.
     public function scroll-to-top() {
         flick.content-y = 0;
@@ -802,14 +801,7 @@ export component WizardWindow inherits Window {
                 height: parent.height;
                 padding: 12px;
                 spacing: 8px;
-                Text {
-                    text: root.footer-note;
-                    color: Theme.state-fail;
-                    font-size: 11px;
-                    wrap: word-wrap;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
+                alignment: end;
                 Btn {
                     label: root.step == 1 ? Words.cancel : Words.back;
                     kind: BtnKind.secondary;

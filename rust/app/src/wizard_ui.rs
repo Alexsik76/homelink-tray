@@ -381,7 +381,6 @@ impl Manage {
         self.wizard
             .set_errors(model(vec![SharedString::default(); ERRORS]));
         self.wizard.set_general_error("".into());
-        self.wizard.set_footer_note("".into());
         if step != Step::Checks {
             // A run that is still going belongs to the step that was left.
             self.check_run.set(self.check_run.get() + 1);
@@ -720,14 +719,8 @@ impl Manage {
         self.wizard.set_general_error(general.into());
         let flow = self.wizard.global::<Flow>();
         flow.set_error_generation(flow.get_error_generation().wrapping_add(1));
-        // The marked fields may be scrolled away: say so by the buttons and go to the top.
-        let marked = problems.iter().any(|p| slot(p.field).is_some());
-        let note = if marked {
-            self.tr.t("wizard.fix_fields", &[])
-        } else {
-            String::new()
-        };
-        if marked {
+        // The marked fields may be scrolled away: go to the top.
+        if problems.iter().any(|p| slot(p.field).is_some()) {
             log::info!(
                 "wizard: refused, fields: {}",
                 problems
@@ -738,7 +731,6 @@ impl Manage {
             );
             self.wizard.invoke_scroll_to_top();
         }
-        self.wizard.set_footer_note(note.into());
     }
 
     /// Shows the problems, on the first step that has one of them.
