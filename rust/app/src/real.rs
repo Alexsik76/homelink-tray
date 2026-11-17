@@ -69,12 +69,59 @@ impl Real {
     }
 }
 
-/// Where the settings file is: `explicit` (from `--config`) or `config.toml` next to `exe`.
-pub(crate) fn config_path(explicit: Option<&Path>, exe: &Path) -> PathBuf {
-    match explicit {
-        Some(path) => std::path::absolute(path).unwrap_or_else(|_| path.to_owned()),
-        None => exe.parent().unwrap_or(Path::new(".")).join(FILE_NAME),
+/// The folders of the system that decide where the settings live.
+pub(crate) struct SystemFolders {
+    /// The program folders (`%ProgramFiles%`, `%ProgramFiles(x86)%`, `%ProgramW6432%`).
+    pub(crate) program_files: Vec<PathBuf>,
+    /// `%ProgramData%`.
+    pub(crate) program_data: Option<PathBuf>,
+}
+
+impl SystemFolders {
+    /// The folders of this process's environment.
+    pub(crate) fn from_env() -> Self {
+        let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
+        Self {
+            program_files: ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"]
+                .into_iter()
+                .filter_map(var)
+                .collect(),
+            program_data: var("ProgramData"),
+        }
     }
+}
+
+/// The folder of HomeLink's data inside `%ProgramData%`.
+const DATA_FOLDER: &str = "HomeLink";
+
+/// Where the settings file is: `explicit` (from `--config`); for a program installed in a
+/// program folder (the installer puts it in `Program Files\HomeLink`), `config.toml` in
+/// `%ProgramData%\HomeLink`; otherwise (a copy in any other folder) `config.toml` next to `exe`.
+pub(crate) fn config_path(explicit: Option<&Path>, exe: &Path, folders: &SystemFolders) -> PathBuf {
+    if let Some(path) = explicit {
+        return std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+    }
+    let beside = exe.parent().unwrap_or(Path::new("."));
+    let installed = folders
+        .program_files
+        .iter()
+        .any(|dir| is_inside(beside, dir));
+    match (&folders.program_data, installed) {
+        (Some(data), true) => data.join(DATA_FOLDER).join(FILE_NAME),
+        _ => beside.join(FILE_NAME),
+    }
+}
+
+/// Whether `path` is `dir` or inside it, comparing the parts without regard to case (Windows
+/// paths are not case-sensitive).
+fn is_inside(path: &Path, dir: &Path) -> bool {
+    let parts = |p: &Path| -> Vec<String> {
+        p.components()
+            .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    };
+    let (path, dir) = (parts(path), parts(dir));
+    !dir.is_empty() && path.starts_with(&dir)
 }
 
 /// `args` with the value of `--config` made absolute. The copy started by a restart with
@@ -180,7 +227,7 @@ pub(crate) fn prepare(
 
     let exe = std::env::current_exe()
         .map_err(|err| Stop::Error(early.t("error.startup", &[("detail", &err.to_string())])))?;
-    let path = config_path(config_arg, &exe);
+    let path = config_path(config_arg, &exe, &SystemFolders::from_env());
     let loaded = load_settings(&path, &early)?;
     let config = loaded.config;
     let setting = language_arg.unwrap_or(config.language);
@@ -274,12 +321,16 @@ mod tests {
     #[test]
     fn the_settings_file_is_next_to_the_exe_unless_given() {
         let exe = Path::new("/opt/homelink/HomeLink.exe");
+        let none = SystemFolders {
+            program_files: Vec::new(),
+            program_data: None,
+        };
         assert_eq!(
-            config_path(None, exe),
+            config_path(None, exe, &none),
             Path::new("/opt/homelink").join("config.toml")
         );
         // A relative path is made absolute against the working directory.
-        assert!(config_path(Some(Path::new("h.toml")), exe).is_absolute());
+        assert!(config_path(Some(Path::new("h.toml")), exe, &none).is_absolute());
         assert_eq!(config_dir(Path::new("/etc/h.toml")), Path::new("/etc"));
         assert_eq!(config_dir(Path::new("h.toml")), Path::new("."));
     }
@@ -289,8 +340,65 @@ mod tests {
         // Absolute on every platform (a drive letter on Windows).
         let given = std::env::temp_dir().join("h.toml");
         assert_eq!(
-            config_path(Some(&given), Path::new("/opt/HomeLink.exe")),
+            config_path(Some(&given), Path::new("/opt/HomeLink.exe"), &installed()),
             given
+        );
+    }
+
+    fn installed() -> SystemFolders {
+        SystemFolders {
+            program_files: vec![PathBuf::from("/Program Files"), PathBuf::from("/pf86")],
+            program_data: Some(PathBuf::from("/ProgramData")),
+        }
+    }
+
+    #[test]
+    fn an_installed_program_keeps_its_settings_in_program_data() {
+        let folders = installed();
+        let data = Path::new("/ProgramData/HomeLink/config.toml");
+        assert_eq!(
+            config_path(
+                None,
+                Path::new("/Program Files/HomeLink/HomeLink.exe"),
+                &folders
+            ),
+            data
+        );
+        // Case does not matter, and any of the program folders counts.
+        assert_eq!(
+            config_path(
+                None,
+                Path::new("/program files/HomeLink/HomeLink.exe"),
+                &folders
+            ),
+            data
+        );
+        assert_eq!(
+            config_path(None, Path::new("/pf86/x/HomeLink.exe"), &folders),
+            data
+        );
+        // A copy elsewhere is portable: its settings are next to it.
+        assert_eq!(
+            config_path(None, Path::new("/test/HomeLink.exe"), &folders),
+            Path::new("/test/config.toml")
+        );
+        // A folder whose name only starts like a program folder is not inside it.
+        assert_eq!(
+            config_path(None, Path::new("/Program Files2/HomeLink.exe"), &folders),
+            Path::new("/Program Files2/config.toml")
+        );
+        // Without %ProgramData% the settings stay next to the program.
+        let no_data = SystemFolders {
+            program_data: None,
+            ..installed()
+        };
+        assert_eq!(
+            config_path(
+                None,
+                Path::new("/Program Files/HomeLink/HomeLink.exe"),
+                &no_data
+            ),
+            Path::new("/Program Files/HomeLink/config.toml")
         );
     }
 

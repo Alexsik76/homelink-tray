@@ -29,7 +29,7 @@ development (release candidates are published as pre-releases). The released Pyt
   readiness ports accept a TCP connection.
 - **Notifications** in the tray: a PC that came up after waking, a tunnel or PC that was lost,
   and every failed action.
-- **Settings** in `config.toml` next to the program, with a settings window, a five-step wizard
+- **Settings** in `config.toml` (see [Where the settings are](#where-the-settings-are)), with a settings window, a five-step wizard
   for adding a PC, a help page and a "System capabilities" page that shows which programs
   HomeLink found (the WireGuard client, OpenSSH, `mstsc`, ...); an action whose program is missing
   is inactive and says why. Saving changes only the values that changed, so comments
@@ -58,7 +58,7 @@ to the hosts in its settings. CI fails if an HTTP or TLS client library enters t
 1. Download `HomeLink.exe` from the [releases](https://github.com/Alexsik76/homelink-tray/releases)
    and put it in its own folder. The executable is not code-signed, so Windows SmartScreen
    may warn on the first start.
-2. Start it. On the first start it writes `config.toml` next to itself from a commented
+2. Start it. On the first start it writes `config.toml` from a commented
    template ([`rust/app/config.example.toml`](rust/app/config.example.toml)) and exits.
 3. Start it again. The tunnel, relay and PC of the template are examples: in the settings
    window (the button at the bottom of the panel) edit or delete them, add tunnels with the
@@ -124,6 +124,12 @@ The RDP button writes `rdp\<PC id>.rdp` next to the settings on first use and op
 `mstsc`; the file is never rewritten, so it can be signed. HomeLink never handles the password:
 type it in the Remote Desktop window, or store it with
 `cmdkey /generic:TERMSRV/<pc address> /user:<user> /pass`.
+
+## Where the settings are
+
+A program in a program folder (`C:\Program Files\HomeLink`) keeps its settings in
+`C:\ProgramData\HomeLink`; a copy in any other folder keeps them next to itself, so it can be
+carried with them. `--config <path>` names the file directly.
 
 ## Files next to `config.toml`
 

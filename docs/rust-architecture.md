@@ -484,7 +484,11 @@ processes; `app` contains everything that needs the `windows` crate.
 
 ## 8. Configuration
 
-One file, `config.toml`, next to the executable (as in v0.3) or `--config <path>`. Written
+One file, `config.toml`: `--config <path>`; for a program installed in a program folder
+(`%ProgramFiles%`, `%ProgramFiles(x86)%`, `%ProgramW6432%`; the installer uses `Program
+Files\HomeLink`) `%ProgramData%\HomeLink\config.toml`; for a copy in any other folder, next to
+the executable (as in v0.3), so a portable copy carries its settings (`real::config_path`). The
+log, the lock, `keys\` and `rdp\` are in the folder of the file. Written
 by the wizard atomically (temp file + rename). `version = 1` is the schema version. Unlike
 v0.3 a required `[defaults]` table holds the shared timing, and a PC may override single keys
 in `[pcs.timing]`; there are no built-in values for user settings in code (only technical
