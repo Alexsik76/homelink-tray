@@ -191,7 +191,9 @@ the notice says what to fix: the OpenSSH client is missing or cannot start ("can
 the OpenSSH client installed?)"); `ssh` timed out; `ssh` itself failed with exit code 255
 (connection refused, host key or key authentication failure); or the command ran on the remote
 host and failed (any other non-zero code, with its output). Commands that are not `ssh` map to
-the same set without the `ssh` wording (`explain_command`).
+the same set without the `ssh` wording (`explain_command`). A RouterOS `Permission denied` adds
+the two usual causes: the key was not added for the user, or the user's group lacks the `ssh`
+policy.
 
 **Waking across a routed network or a VLAN (direct magic packet).** The direct method sends a
 UDP magic packet from this computer to a configurable destination `address` (any IPv4
@@ -449,7 +451,8 @@ processes; `app` contains everything that needs the `windows` crate.
   Each view carries the state, the display state (`ok | busy | off | unknown | fail`, section
   5.6), the enabled actions, the time of the last check, the last error (a `Notice`, worded by
   the UI's `Translator`) and the facts the details window shows (PC: address, tunnel name, wake
-  summary, ports, which actions are configured at all; tunnel: kind, names of its PCs, what the
+  summary, ports with those that answered the last check, shown green and the others red, plain
+  before the first check (`PcView::open_ports`), which actions are configured at all; tunnel: kind, names of its PCs, what the
   toggle would do). There is a derived aggregate for the tray. The UI holds no rules: it maps
   these values to colours, words and labels. The engine publishes only when the snapshot
   changed (check times are rounded to 30 s for this reason, section 5.6). The `Sink` adapter
@@ -471,7 +474,11 @@ processes; `app` contains everything that needs the `windows` crate.
 - Shutdown: `Command::Shutdown` stops the timer, drops the queue and joins workers with a
   timeout; the process then exits. A running tunnel is left as is (as in v0.3).
 - UI conventions: confirmation for Sleep/Shutdown is an inline two-step button in the PC
-  row, default "No".
+  row, default "No". Slint 1.18 measures a wrapped `Text` inside a nested layout as one line, so
+  every wrapped text in a vertical layout of the wizard, the settings, the tunnel form and the
+  controls has `width: parent.width` (minus the padding of its layout). Texts whose layout width
+  depends on them (the panel's submenus, the details rows, the capability tiles) do not: an
+  explicit width there is a binding loop.
 
 ## 8. Configuration
 
@@ -600,7 +607,8 @@ Validation (all problems are collected and reported together, each with its path
 - `[[tunnels]]`, `[[relays]]` and `[[pcs]]` entries are matched by `id`, never by position.
   A deleted entry is removed together with its sub-tables and the comments written above it. A
   new entry is appended after the last entry of its kind (or, if the file has none, before the
-  first entry of a later kind). Reordered entries move as a whole, with their comments.
+  first entry of a later kind), in the template's layout: its sub-tables and their keys indented
+  by two spaces. Reordered entries move as a whole, with their comments.
   A per-PC `[pcs.timing]` appears inside its PC when an override is needed and disappears
   when no value differs from `[defaults]` any more.
 - A changed `id` is a removal plus an addition (the old entry's comments are lost) unless the
@@ -755,12 +763,24 @@ the operating system is a parameter of the SSH power method; there is no summary
    action is then not offered), but not both. The panel keeps separate sleep and shutdown buttons.
 5. Checks (`core::checks`): readiness ports, SSH to the relay, SSH to the PC, each with a marker
    and a short result; "Перевірити знову"; the PC can be saved without a successful check. The
-   checks need the tunnel up: with it down every row says so and nothing is run.
+   checks need the tunnel up: with it down every row says so and nothing is run. For a RouterOS
+   relay and a PC with an IPv4 address the last row, "ПК у мережі роутера"
+   (`CheckKind::RelayNeighbor`), runs `checks::routeros_neighbor_command` over `ssh` on the
+   relay: it prints the MAC and interface of the address from the ARP table, else from the DHCP
+   leases, else `none` (read-only; checked on 7.24.5). The same values as step 3: ok; others:
+   "Застосувати ці значення" puts them into step 3 and runs the checks again; not seen: unknown,
+   not a failure.
+
+Moving between steps: the step bar at the top is clickable (each segment lit under the mouse, no
+labels): back to any step; forward checks every step on the way and stops at the first with a
+problem. A refused "Далі" scrolls the step to its top, where the fields marked in red are; a
+field's problem hides as soon as the field is edited and shows again at the next check
+(`Flow.error-generation`, raised with each set of problems).
 
 **SSH setup** (steps 3 and 4; shared by relay hosts and PCs). The wizard does not ask for or store
 any password.
 
-- *OpenSSH client check (built, `core::ssh_setup`, `app::ssh_ops`).* When the wizard opens and
+- *OpenSSH client check (`core::ssh_setup`, `app::ssh_ops`).* When the wizard opens and
   before the checks, it looks for `ssh`, `ssh-keygen` and `ssh-keyscan` in the folders of `PATH`
   and in `%SystemRoot%\System32\OpenSSH` (the `.exe` files on Windows). On Windows 10 LTSC the
   client is an optional feature that may be missing; the wizard then shows how to install it
@@ -770,7 +790,7 @@ any password.
   Saving the PC stays allowed. A client found only in `System32\OpenSSH` and not on `PATH` counts
   as installed, but the run-time commands start `ssh` through `PATH`, so they would still fail;
   the optional feature puts the folder on `PATH`.
-- *Key (built).* Next to each key-file field (new relay, PC) "Створити ключ" runs
+- *Key.* Next to each key-file field (new relay, PC) "Створити ключ" runs
   `ssh-keygen -q -t ed25519 -N "" -C homelink -f <path>` with an empty passphrase, so the
   elevated program can use the key unattended. The file goes to the `keys` folder of the
   configuration folder (`keys\homelink_ed25519`, then `_2`, `_3`...; a name whose private or
@@ -780,7 +800,11 @@ any password.
   was made by hand. The configuration stores only the absolute path. The folder inherits the
   permissions of the configuration folder (next to the program); `ssh-keygen` itself restricts
   the private file (on Windows it sets the access list of the file). The wizard does not offer
-  "let ssh choose".
+  "let ssh choose". "Огляд…" opens the standard Windows "Open" dialog (`platform::pick_file`,
+  `GetOpenFileNameW`, owned by the active window) in the profile's `.ssh`; an empty key field is
+  filled when that folder has exactly one private key with its `.pub` (only file names are
+  read). The Esc handlers of the windows ignore winit's synthetic key presses (sent to a window
+  that gets the focus while a key is held), so Esc in the dialog closes only the dialog.
 - *Relay side, by preset* (`wizard.relay.setup.*`; the wizard fills in the user name, key
   file name and the address of this computer):
   - `routeros`: the RouterOS commands to create a group that can only log in over SSH and run
@@ -821,7 +845,7 @@ any password.
   code 0 even when it fails** and prints the error on standard output, so `core::wake` treats
   any output of a `routeros` relay (except `ssh` client warnings) as a failed wake
   (`routeros_error`).
-- *PC side (built, `core::pc_setup`).* For an SSH power method with sleep or shutdown allowed,
+- *PC side (`core::pc_setup`).* For an SSH power method with sleep or shutdown allowed,
   step 4 shows the commands to run on the PC under its key field, with a copy button, refreshed
   when the operating system, user, key file or allowed actions change. Linux (as root): the
   user's `~/.ssh` with mode 700, the public key appended to `authorized_keys`, and
@@ -833,7 +857,7 @@ any password.
   that file to Administrators and SYSTEM by SID (`*S-1-5-32-544`, `*S-1-5-18`), so a localised
   Windows works; the user must be an administrator of the PC. **The Windows commands are
   unverified on a real PC** (release checklist, section F).
-- *Test connection and host key consent (step 5, built: `core::checks`, `core::ssh_setup`,
+- *Test connection and host key consent (step 5: `core::checks`, `core::ssh_setup`,
   `app::ssh_ops`).* The checks run `ssh` with the same options as at run time (`BatchMode=yes`,
   `IdentitiesOnly=yes`, `-i <key>`, `StrictHostKeyChecking=yes`) and report an unknown host key
   as `CheckResult::SshHostKeyUnknown`; nothing is ever accepted by `ssh` itself, so
@@ -850,13 +874,14 @@ any password.
   (`ssh-keygen -F`) is never replaced or doubled: the wizard says so and how to remove it by
   hand. A changed key (`SshHostKeyChanged`) is an error with no button; the note explains what
   it may mean and that HomeLink never replaces it. This replaces the manual first `ssh` from the
-  README and is the only place in the program that adds a host key. Not built: the `ssh` of
+  README and is the only place in the program that adds a host key. Each step of the trust (fetch,
+  offer, write) is logged. Not built: the `ssh` of
   the run-time commands uses the default `known_hosts`; an explicit `UserKnownHostsFile` in the
   config folder would remove the dependence on the profile (see the risks).
 
-## 11a. System capabilities (built 15.11.2026)
+## 11a. System capabilities
 
-Owner's decisions of 15.11.2026 (`VIC/HomeLink/homelink-capabilities-spec.md` in the vault and
+Owner's decisions (`VIC/HomeLink/homelink-capabilities-spec.md` in the vault and
 the designer's artboards `Capabilities`, `Unavailable`, `TunnelForm`). No silent failures: every
 external program is looked up before it is needed, and a missing one disables only what depends
 on it.
@@ -891,9 +916,7 @@ on it.
   what is missing changes. No notice for `mstsc` (owner's answer: the inactive RDP button is
   enough).
 
-## 11b. Tunnel check by handshake and the tunnel form (built 15.11.2026)
-
-Owner's decisions of 15.11.2026, after the first check on Windows 11.
+## 11b. Tunnel check by handshake and the tunnel form
 
 - **`probe_host` is optional.** With it, a tunnel is checked by ping as before. Without it, by
   its WireGuard handshake (`core::handshake`): `wg.exe show <tunnel> latest-handshakes` prints
@@ -908,65 +931,13 @@ Owner's decisions of 15.11.2026, after the first check on Windows 11.
   the datagram with a std UDP socket.
 - **Each tunnel has its own needs** (`capabilities::tunnel_needs`): the WireGuard client and `sc`,
   plus `ping` with a probe host or `wg` without one. A missing check program blocks only that
-  tunnel. `Tool::Wg` is a new tool; the "Перевірка тунелю" tile names `wg` and `ping`.
+  tunnel. The "Перевірка тунелю" tile names `wg` and `ping` (`Tool::Wg`, `Tool::Ping`).
 - **Tunnel form:** a list of the tunnels imported into the WireGuard client, read from the file
   names of `<WireGuard>\Data\Configurations` (the files themselves hold the private keys and are
   never opened); tunnels already in the settings are marked and refused (`Code::TunnelTaken`).
   Choosing one fills the name while the user has not typed another; the path of the file and of
-  `wireguard.exe` (the found one) are set by the program. The probe host is no longer in the form;
-  an existing one is kept on edit. The template no longer sets `probe_host`.
-
-## 11c. Fixes after the check on Windows 10 LTSC (rc.5, 16.11.2026)
-
-- **"ПК у мережі роутера"** (step 5, `CheckKind::RelayNeighbor`, RouterOS relay and a PC with an
-  IPv4 address): `ssh` to the relay runs `checks::routeros_neighbor_command`, which prints the
-  MAC and interface of the address from the ARP table, else from the DHCP leases, else `none`
-  (read-only; checked on 7.24.5). Same values as step 3: ok; others: "Застосувати ці значення"
-  puts them into step 3 and runs the checks again; not seen: unknown, not a failure.
-- A RouterOS `Permission denied` names the two causes (key not added for the user, group without
-  the `ssh` policy).
-- The trust of a host key logs each step (fetch, offer, write), to find why the offer did not
-  appear on that machine.
-- Labels: "SSH-ключ (файл приватного ключа)" with a hint, the interface field with a hint about
-  VLANs.
-
-## 11d. Layout heights and the ui-shots tool (rc.7, 16.11.2026)
-
-Rendered without a display (`rust/tools/ui-shots`,
-Slint's software renderer), Slint 1.18 turned out to compute the preferred height of a layout
-that holds a wrapped `Text` in a nested layout (`if … : VerticalLayout { Text { wrap … } }`) as if
-the text were one line; an explicit `width` on the text makes it measure at that width. Every
-wrapped text in a vertical layout of the wizard, the settings, the tunnel form and the controls
-now has `width: parent.width` (minus the horizontal padding of its layout). Texts whose layout
-width depends on them (the panel's submenus, the details rows, the capability tiles) keep their
-old form: an explicit width there is a binding loop. The list rows of the settings have bordered
-"Змінити"/"Видалити" buttons (`BtnKind.compact`). `ui-shots/run.sh` renders the wizard steps
-3–5 at the top and scrolled to their end, the settings list in both themes, the help page and the
-panel with reason lines.
-
-## 11e. Wizard and details improvements (rc.9, 16.11.2026)
-
-- A refused "Далі" scrolls the step to its top, where the fields marked in red are; a field's
-  problem hides as soon as the field is edited and shows again at the next check
-  (`Flow.error-generation`, raised with each set of problems).
-- The step bar is clickable (each segment lit under the mouse, no labels): back to any step;
-  forward checks every step on the way and stops at the first with a problem.
-- Key fields: "Огляд…" opens the standard Windows "Open" dialog (`platform::pick_file`,
-  `GetOpenFileNameW`) in the profile's `.ssh`; an empty key field is filled when that folder has
-  exactly one private key with its `.pub` (only file names are read).
-- The details window shows the PC's ports in colour: green answered, red did not, plain before
-  the first check (`PortProbe::open_ports`, `PcView::open_ports`).
-- A new entry is written in the template's layout: its sub-tables and their keys indented by two
-  spaces.
-
-## 11f. Sleep and shutdown box, file dialog (rc.10, 16.11.2026)
-
-- Step 4 has one box "Дозволити сон і вимкнення" instead of two; the "allow both over SSH" check
-  is gone. With commands either command may be left empty (`Code::PowerCommandNeeded` when both
-  are). The panel keeps separate sleep and shutdown buttons.
-- The "Open" dialog is owned by the active window, and Esc handlers ignore winit's synthetic key
-  presses (sent to a window that gets the focus while a key is held), so Esc in the dialog no
-  longer closes the settings.
+  `wireguard.exe` (the found one) are set by the program. The form has no probe host field; an
+  existing one is kept on edit. The template sets no `probe_host`.
 
 ## 12. Open questions (not decided here)
 
@@ -1018,6 +989,10 @@ tests prove only the thin adapters.
   scenarios (connect-and-wake to online, wake timeout, shared tunnel) asserting snapshots and
   notices in order.
 - **i18n and wizard:** parity tests (section 10), step-by-step wizard tests.
+- **Rendering:** `rust/tools/ui-shots` renders the windows with Slint's software renderer
+  without a display (the wizard steps 3–5 at the top and scrolled to their end, the settings
+  list in both themes, the help and capabilities pages, the panel with reason lines, the details
+  window), to look at every visual change before it is merged.
 - **Windows only (CI `windows-latest`):** SCM query of a non-existing service, ICMP to
   loopback, OEM decoding, OpenSSH client detection.
 - **Manual release checklist** (in the repo, run on Windows 10 LTSC and 11): tray, panel focus,
