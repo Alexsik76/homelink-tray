@@ -101,9 +101,16 @@ jobs:
         shell: pwsh
         run: ../tools/smoke.ps1 -Exe target/release/HomeLink.exe -Config app/config.example.toml -Budget $env:SIZE_BUDGET
 
+      # The installer of that executable, installed and uninstalled once to check it.
+      - name: Installer
+        shell: pwsh
+        run: ../tools/msi.ps1 -Exe target/release/HomeLink.exe -Out target/release/HomeLink.msi
+
       - uses: actions/upload-artifact@v7
         with:
           name: HomeLink
-          path: rust/target/release/HomeLink.exe
+          path: |
+            rust/target/release/HomeLink.exe
+            rust/target/release/HomeLink.msi
           retention-days: 14
           if-no-files-found: error

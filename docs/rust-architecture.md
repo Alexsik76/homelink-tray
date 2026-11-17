@@ -1035,15 +1035,21 @@ tests prove only the thin adapters.
 - Job `rust-app` (windows-latest): fmt, clippy `-D warnings`, tests of `homelink`, the release
   build (exactly the one of `release.yml`), `tools/smoke.ps1` (size budget 16 MiB, `--version`
   equal to the package version, `--check-config` passes on the example and fails on a missing
-  file without creating it), the `HomeLink` artifact (kept 14 days). That artifact of the
-  branch's run is the executable for manual testing on Windows; no tag is needed for it.
+  file without creating it), the installer (`tools/msi.ps1`: `HomeLink.msi` from
+  `rust/app/windows/HomeLink.wxs` with the WiX Toolset 5, installed quietly, checked and
+  uninstalled once), the `HomeLink` artifact with both files (kept 14 days). That artifact of
+  the branch's run is what is tested by hand on Windows; no tag is needed for it.
+- The installer puts `HomeLink.exe` and the notices in `Program Files\HomeLink` and a Start menu
+  shortcut; a newer package replaces the installed one (the same version too: MSI versions are
+  numbers, `1.0.0-rc.N` becomes `1.0.0.N`, a release `x.y.z` becomes `x.y.z.0`). The settings are
+  not its files (`%ProgramData%\HomeLink`, section 8), so an upgrade or an uninstall keeps them.
 - Both jobs cache `~/.cargo` and `rust/target` under a key of `Cargo.lock` and the toolchain;
   `restore-keys` falls back to the job's newest cache when the key changes.
 - `release.yml`: a tag `v*` must equal the version in `rust/app/Cargo.toml`; the licence check;
   nothing is built: the executable is the `HomeLink` artifact of the successful CI run of the
-  tagged commit (the file tested by hand), so the commit's CI must have passed and the tag must
-  come within the 14 days the artifact is kept; the smoke run; a release with `HomeLink.exe` (name unchanged), `HomeLink.exe.sha256` and
-  `THIRD-PARTY-NOTICES.txt`. A tag with a suffix (`v1.0.0-rc.N`) is a pre-release. Tags are made
+  tagged commit (the files tested by hand), so the commit's CI must have passed and the tag must
+  come within the 14 days the artifact is kept; the smoke run; a release with `HomeLink.msi`,
+  `HomeLink.exe`, `SHA256SUMS.txt` (both sums) and `THIRD-PARTY-NOTICES.txt`. A tag with a suffix (`v1.0.0-rc.N`) is a pre-release. Tags are made
   only for real release candidates and releases.
 
 Not done: a coverage threshold, a scheduled job on the newest stable, Dependabot (new CI

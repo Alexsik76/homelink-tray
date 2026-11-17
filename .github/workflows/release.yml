@@ -1,11 +1,12 @@
 name: Release
 
 # A tag such as v1.0.0 or v1.0.0-rc.1 whose number equals the version in rust/app/Cargo.toml
-# publishes a release with the executable, its SHA-256 sum and the third-party notices. A tag
+# publishes a release with the executable, its installer, their SHA-256 sums and the
+# third-party notices. A tag
 # with a suffix (-rc.1) makes a pre-release.
 #
-# Nothing is built here: the executable is the HomeLink artifact of the successful CI run of the
-# tagged commit, the same file that was tested by hand. Tag a commit whose CI has passed, within
+# Nothing is built here: the executable and the installer are the HomeLink artifact of the
+# successful CI run of the tagged commit, the same files that were tested by hand. Tag a commit whose CI has passed, within
 # the 14 days the artifact is kept.
 
 on:
@@ -48,8 +49,8 @@ jobs:
           }
           "CI run $run"
           gh run download $run --name HomeLink --dir dist
-          if (-not (Test-Path dist/HomeLink.exe)) {
-            Write-Error "The CI run $run has no HomeLink artifact (it is kept 14 days)."
+          if (-not (Test-Path dist/HomeLink.exe) -or -not (Test-Path dist/HomeLink.msi)) {
+            Write-Error "The CI run $run has no complete HomeLink artifact (it is kept 14 days)."
           }
 
       - name: Size budget and smoke run
@@ -60,8 +61,11 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item THIRD-PARTY-NOTICES.txt dist/
-          $hash = (Get-FileHash -Algorithm SHA256 dist/HomeLink.exe).Hash.ToLower()
-          "$hash *HomeLink.exe" | Out-File -Encoding ascii dist/HomeLink.exe.sha256
+          $lines = foreach ($name in 'HomeLink.exe', 'HomeLink.msi') {
+            $hash = (Get-FileHash -Algorithm SHA256 "dist/$name").Hash.ToLower()
+            "$hash *$name"
+          }
+          $lines | Out-File -Encoding ascii dist/SHA256SUMS.txt
 
       - name: Create the release
         env:
@@ -70,4 +74,4 @@ jobs:
         run: |
           $flags = @('--generate-notes', '--verify-tag', '--title', $env:GITHUB_REF_NAME)
           if ($env:GITHUB_REF_NAME -match '-') { $flags += '--prerelease' }
-          gh release create $env:GITHUB_REF_NAME dist/HomeLink.exe dist/HomeLink.exe.sha256 dist/THIRD-PARTY-NOTICES.txt @flags
+          gh release create $env:GITHUB_REF_NAME dist/HomeLink.msi dist/HomeLink.exe dist/SHA256SUMS.txt dist/THIRD-PARTY-NOTICES.txt @flags
