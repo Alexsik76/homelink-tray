@@ -474,7 +474,9 @@ processes; `app` contains everything that needs the `windows` crate.
 - Shutdown: `Command::Shutdown` stops the timer, drops the queue and joins workers with a
   timeout; the process then exits. A running tunnel is left as is (as in v0.3).
 - UI conventions: confirmation for Sleep/Shutdown is an inline two-step button in the PC
-  row, default "No". Slint 1.18 measures a wrapped `Text` inside a nested layout as one line, so
+  row, default "No". In the panel the Down and Up arrows move the keyboard focus to the next and
+  the previous item, as Tab and Shift+Tab (the app hands the panel that key, since Slint has no
+  call that moves the focus). Slint 1.18 measures a wrapped `Text` inside a nested layout as one line, so
   every wrapped text in a vertical layout of the wizard, the settings, the tunnel form and the
   controls has `width: parent.width` (minus the padding of its layout). Texts whose layout width
   depends on them (the panel's submenus, the details rows, the capability tiles) do not: an

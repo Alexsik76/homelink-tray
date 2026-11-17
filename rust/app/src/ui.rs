@@ -303,6 +303,12 @@ fn wire(windows: &Windows<'_>, ui: &Rc<Ui>) {
         nav.on_hide_requested(move || u.hide());
     }
     {
+        // Deferred: the key event that asked for it is still being delivered.
+        nav.on_move_focus(|forward| {
+            let _ = slint::invoke_from_event_loop(move || with_ui(|ui| ui.move_focus(forward)));
+        });
+    }
+    {
         // Deferred: the height changes while Slint is laying out the panel.
         nav.on_layout_changed(|| {
             let _ = slint::invoke_from_event_loop(|| with_ui(|ui| ui.place_panel()));
@@ -831,6 +837,22 @@ impl Ui {
             panel.global::<Nav>().invoke_reset();
             let _ = panel.hide();
         }
+    }
+
+    /// Moves the keyboard focus of the panel as Tab (`forward`) or Shift+Tab would, by giving
+    /// the panel that key: Slint has no call that moves the focus along its chain.
+    fn move_focus(&self, forward: bool) {
+        let Some(panel) = self.panel.upgrade() else {
+            return;
+        };
+        let key = if forward {
+            slint::platform::Key::Tab
+        } else {
+            slint::platform::Key::Backtab
+        };
+        let window = panel.window();
+        window.dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.into() });
+        window.dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key.into() });
     }
 }
 
