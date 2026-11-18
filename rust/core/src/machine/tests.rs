@@ -54,6 +54,7 @@ fn pc_probed(m: &mut Machine, id: &PcId, kind: PcProbe, ready: bool, now: Time) 
             kind,
             ready,
             open: None,
+            failure: None,
         },
         now,
     )
@@ -508,6 +509,95 @@ fn p2_online_survives_failures_below_the_limit() {
             pc: "Desktop".into()
         }]
     );
+}
+
+/// Collects the log lines written on the current thread (the machine logs from its caller's
+/// thread, so tests running in parallel do not see each other's lines).
+mod log_lines {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static LINES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    struct Capture;
+
+    impl log::Log for Capture {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            LINES.with(|lines| lines.borrow_mut().push(record.args().to_string()));
+        }
+
+        fn flush(&self) {}
+    }
+
+    static CAPTURE: Capture = Capture;
+
+    /// Starts collecting (the logger is set once per test binary).
+    pub(super) fn start() {
+        let _ = log::set_logger(&CAPTURE);
+        log::set_max_level(log::LevelFilter::Info);
+        LINES.with(|lines| lines.borrow_mut().clear());
+    }
+
+    /// The lines collected on this thread since [`start`].
+    pub(super) fn taken() -> Vec<String> {
+        LINES.with(|lines| std::mem::take(&mut *lines.borrow_mut()))
+    }
+}
+
+#[test]
+fn the_reason_of_a_failed_check_reaches_the_check_failed_and_stopped_responding_lines() {
+    let mut m = single();
+    let now = online(&mut m);
+    log_lines::start();
+    let failure = crate::ports::ProbeFailure::Connect {
+        address: "[fe80::5974:1f1c:540d:99b4%8]:3389".parse().unwrap(),
+        error: crate::ports::ConnectError::TimedOut,
+    };
+    let probe = |m: &mut Machine, secs: u64, failure: Option<crate::ports::ProbeFailure>| {
+        m.step(
+            Input::PcProbed {
+                pc: desktop(),
+                kind: PcProbe::Poll,
+                ready: false,
+                open: Some(Vec::new()),
+                failure,
+            },
+            now + Duration::from_secs(secs),
+        )
+    };
+    probe(&mut m, 1, Some(failure.clone()));
+    // A probe that does not know why adds nothing to the line.
+    probe(&mut m, 2, None);
+    let lines = log_lines::taken();
+    assert_eq!(
+        lines,
+        [
+            "pc desktop check failed (1 of 3): 3389 at [fe80::5974:1f1c:540d:99b4%8]: timed out",
+            "pc desktop check failed (2 of 3)",
+        ]
+    );
+    let out = probe(&mut m, 3, Some(crate::ports::ProbeFailure::NotResolved));
+    assert_eq!(m.pc_state(&desktop()), Some(P::Offline));
+    assert!(matches!(out.notices.as_slice(), [Notice::PcLost { .. }]));
+    let lines = log_lines::taken();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.contains("stopped responding"))
+            .collect::<Vec<_>>(),
+        [&format!(
+            "pc {} stopped responding: the name did not resolve",
+            single_config().pcs[0].host
+        )]
+    );
+    // An offline PC's failed checks stay out of the log at info.
+    probe(&mut m, 10, Some(failure));
+    assert!(log_lines::taken().is_empty());
 }
 
 #[test]
@@ -1760,6 +1850,7 @@ fn the_open_ports_of_the_last_probe_reach_the_details() {
             kind: PcProbe::Poll,
             ready: false,
             open: Some(vec![]),
+            failure: None,
         },
         at(0),
     );
@@ -1771,6 +1862,7 @@ fn the_open_ports_of_the_last_probe_reach_the_details() {
             kind: PcProbe::Poll,
             ready: true,
             open: Some(pc_view(&m, "nas").ports.clone()),
+            failure: None,
         },
         at(10),
     );
