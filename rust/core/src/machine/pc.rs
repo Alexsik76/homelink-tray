@@ -26,7 +26,7 @@
 use super::{Effect, Failure, Machine, Output, PcAction, PcFailKind, PcProbe};
 use crate::domain::{PcId, PcState, PowerAction, TunnelState};
 use crate::notice::Notice;
-use crate::ports::Time;
+use crate::ports::{ProbeFailure, Time};
 
 impl Machine {
     /// `Wake(pc)`: connect-and-wake for a PC behind a tunnel (T1-T3), a plain wake otherwise.
@@ -121,13 +121,16 @@ impl Machine {
         });
     }
 
-    /// The result of a PC probe: P1-P4 for polling, P6 and P7 for the wake check.
+    /// The result of a PC probe: P1-P4 for polling, P6 and P7 for the wake check. `failure`
+    /// is why a failed check failed, for the log.
+    #[allow(clippy::too_many_arguments)] // the fields of `Input::PcProbed`, plus time and output
     pub(super) fn pc_probed(
         &mut self,
         id: &PcId,
         kind: PcProbe,
         ready: bool,
         open: Option<Vec<u16>>,
+        failure: Option<&ProbeFailure>,
         now: Time,
         out: &mut Output,
     ) {
@@ -151,7 +154,7 @@ impl Machine {
                 if open.is_some() {
                     p.open_ports = open;
                 }
-                self.poll_result(pi, ready, now, out);
+                self.poll_result(pi, ready, failure, now, out);
             }
             PcProbe::Check => {
                 if p.action != Some(PcAction::Check) {
@@ -181,7 +184,16 @@ impl Machine {
     }
 
     /// P1-P4, a port of the PC half of `_refresh`.
-    fn poll_result(&mut self, pi: usize, ready: bool, now: Time, out: &mut Output) {
+    fn poll_result(
+        &mut self,
+        pi: usize,
+        ready: bool,
+        failure: Option<&ProbeFailure>,
+        now: Time,
+        out: &mut Output,
+    ) {
+        // ": <why>" after the lines of a failed check, when the probe said why.
+        let why = failure.map(|f| format!(": {f}")).unwrap_or_default();
         let Some(p) = self.pcs.get_mut(pi) else {
             return;
         };
@@ -209,7 +221,7 @@ impl Machine {
             let limit = p.timing.offline_after_failures;
             if was == PcState::Online && p.failures < limit {
                 // P2
-                log::info!("pc {} check failed ({} of {limit})", p.id, p.failures);
+                log::info!("pc {} check failed ({} of {limit}){why}", p.id, p.failures);
             } else if was_waking && p.waking_until.is_some_and(|until| now < until) {
                 // P3
             } else {
@@ -226,7 +238,7 @@ impl Machine {
                 }
                 self.set_pc_state(pi, PcState::Offline);
                 if was == PcState::Online && !power_sent {
-                    log::warn!("pc {host} stopped responding");
+                    log::warn!("pc {host} stopped responding{why}");
                     out.notices.push(Notice::PcLost { pc: name.clone() });
                 }
                 if was_waking {

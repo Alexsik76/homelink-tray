@@ -22,7 +22,7 @@ use crate::domain::{
     Host, PcId, PcState, PowerAction, PowerMethod, Timing, TunnelId, TunnelState, WakeMethod,
 };
 use crate::notice::Notice;
-use crate::ports::Time;
+use crate::ports::{ProbeFailure, Time};
 use crate::snapshot::{
     Availability, CHECK_STEP, DisplayState, GroupView, PcAvailability, PcView, Snapshot, TrayState,
     TunnelToggle, TunnelView, WakeSummary,
@@ -134,6 +134,8 @@ pub enum Input {
         ready: bool,
         /// The ports that accepted, when known (for the details window).
         open: Option<Vec<u16>>,
+        /// Why the check failed, when it did and the probe knows (for the log).
+        failure: Option<ProbeFailure>,
     },
     /// Starting a tunnel finished.
     TunnelUpDone {
@@ -501,7 +503,8 @@ impl Machine {
                 kind,
                 ready,
                 open,
-            } => self.pc_probed(&pc, kind, ready, open, now, &mut out),
+                failure,
+            } => self.pc_probed(&pc, kind, ready, open, failure.as_ref(), now, &mut out),
             Input::TunnelUpDone { tunnel, result } => {
                 self.tunnel_up_done(&tunnel, result, now, &mut out);
             }

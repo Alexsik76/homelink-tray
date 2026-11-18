@@ -6,6 +6,8 @@
 //! [`crate::testing`]. All traits are `Send + Sync` because jobs run on worker threads.
 
 use std::collections::HashMap;
+use std::fmt;
+use std::net::SocketAddr;
 use std::ops::Add;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -118,13 +120,89 @@ pub trait PortProbe: Send + Sync {
     fn all_open(&self, host: &Host, ports: &[u16], timeout: Duration) -> bool;
 
     /// The ports that accept a connection, each tried to the end (for the details window,
-    /// which shows every port of the PC open or closed).
-    fn open_ports(&self, host: &Host, ports: &[u16], timeout: Duration) -> Vec<u16> {
-        ports
-            .iter()
-            .copied()
-            .filter(|port| self.all_open(host, &[*port], timeout))
-            .collect()
+    /// which shows every port of the PC open or closed), and why the first port that did not
+    /// accept failed.
+    fn open_ports(&self, host: &Host, ports: &[u16], timeout: Duration) -> PortCheck;
+}
+
+/// The result of [`PortProbe::open_ports`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PortCheck {
+    /// The ports that accepted a connection, in the order asked.
+    pub open: Vec<u16>,
+    /// Why the first port (in the order asked) that did not accept failed; `None` when every
+    /// port accepted.
+    pub failure: Option<ProbeFailure>,
+}
+
+/// Why a port check failed. Written to the log as English text (`Display`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProbeFailure {
+    /// The host name resolved to no address.
+    NotResolved,
+    /// The resolver did not answer within the check's time.
+    ResolveTimedOut,
+    /// No address accepted the connection; `address` is the last one tried, with the port.
+    Connect {
+        /// The address and port of the last attempt (an IPv6 address with its scope).
+        address: SocketAddr,
+        /// How that attempt failed.
+        error: ConnectError,
+    },
+}
+
+/// How a connection attempt failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectError {
+    /// No answer within the time the attempt had.
+    TimedOut,
+    /// The host refused the connection (nothing listens on the port).
+    Refused,
+    /// Another error of the system, with its text.
+    Other(String),
+}
+
+impl ConnectError {
+    /// The kind of an error of `TcpStream::connect_timeout`.
+    pub fn from_io(err: &std::io::Error) -> Self {
+        match err.kind() {
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => Self::TimedOut,
+            std::io::ErrorKind::ConnectionRefused => Self::Refused,
+            _ => Self::Other(err.to_string()),
+        }
+    }
+}
+
+impl fmt::Display for ConnectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TimedOut => f.write_str("timed out"),
+            Self::Refused => f.write_str("refused"),
+            Self::Other(text) => f.write_str(text),
+        }
+    }
+}
+
+impl fmt::Display for ProbeFailure {
+    /// `the name did not resolve`, `name resolution timed out`, or
+    /// `<port> at <address>: <error>` with an IPv6 address in brackets and with its scope, such
+    /// as `3389 at [fe80::5974:1f1c:540d:99b4%8]: timed out`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotResolved => f.write_str("the name did not resolve"),
+            Self::ResolveTimedOut => f.write_str("name resolution timed out"),
+            Self::Connect { address, error } => {
+                write!(f, "{} at ", address.port())?;
+                match address {
+                    SocketAddr::V4(a) => write!(f, "{}", a.ip())?,
+                    SocketAddr::V6(a) if a.scope_id() != 0 => {
+                        write!(f, "[{}%{}]", a.ip(), a.scope_id())?;
+                    }
+                    SocketAddr::V6(a) => write!(f, "[{}]", a.ip())?,
+                }
+                write!(f, ": {error}")
+            }
+        }
     }
 }
 
@@ -275,4 +353,69 @@ pub trait Sink: Send + Sync {
     fn publish(&self, snapshot: Snapshot);
     /// The user should be told something.
     fn notify(&self, notice: Notice);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
+
+    #[test]
+    fn every_reason_is_worded_as_the_log_shows_it() {
+        assert_eq!(
+            ProbeFailure::NotResolved.to_string(),
+            "the name did not resolve"
+        );
+        assert_eq!(
+            ProbeFailure::ResolveTimedOut.to_string(),
+            "name resolution timed out"
+        );
+        let scoped = SocketAddr::V6(SocketAddrV6::new(
+            "fe80::5974:1f1c:540d:99b4".parse::<Ipv6Addr>().unwrap(),
+            3389,
+            0,
+            8,
+        ));
+        let failure = ProbeFailure::Connect {
+            address: scoped,
+            error: ConnectError::TimedOut,
+        };
+        assert_eq!(
+            failure.to_string(),
+            "3389 at [fe80::5974:1f1c:540d:99b4%8]: timed out"
+        );
+        let plain_v6 = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 22, 0, 0));
+        let failure = ProbeFailure::Connect {
+            address: plain_v6,
+            error: ConnectError::Refused,
+        };
+        assert_eq!(failure.to_string(), "22 at [::1]: refused");
+        let v4 = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 168, 25, 189), 3389));
+        let failure = ProbeFailure::Connect {
+            address: v4,
+            error: ConnectError::Other("network is unreachable".into()),
+        };
+        assert_eq!(
+            failure.to_string(),
+            "3389 at 192.168.25.189: network is unreachable"
+        );
+    }
+
+    #[test]
+    fn the_kind_of_a_connect_error_is_read_from_the_system_error() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(
+            ConnectError::from_io(&Error::from(ErrorKind::TimedOut)),
+            ConnectError::TimedOut
+        );
+        assert_eq!(
+            ConnectError::from_io(&Error::from(ErrorKind::ConnectionRefused)),
+            ConnectError::Refused
+        );
+        let other = Error::other("host is down");
+        assert_eq!(
+            ConnectError::from_io(&other),
+            ConnectError::Other("host is down".into())
+        );
+    }
 }

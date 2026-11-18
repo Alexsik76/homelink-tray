@@ -16,8 +16,9 @@ use crate::engine::{Deps, Engine, Handle};
 use crate::machine::{Command, START_POLL};
 use crate::notice::Notice;
 use crate::ports::{
-    Clock, CommandOutput, CommandRunner, Executor, Pinger, PortProbe, PowerError, PowerRunner,
-    Sink, Time, TunnelDriver, TunnelError, WakeError, WakeRegistry, WakeRequest, WakeSender,
+    Clock, CommandOutput, CommandRunner, ConnectError, Executor, Pinger, PortCheck, PortProbe,
+    PowerError, PowerRunner, ProbeFailure, Sink, Time, TunnelDriver, TunnelError, WakeError,
+    WakeRegistry, WakeRequest, WakeSender,
 };
 use crate::snapshot::Snapshot;
 
@@ -236,6 +237,28 @@ impl Pinger for FakeNetwork {
 impl PortProbe for FakeNetwork {
     fn all_open(&self, host: &Host, _ports: &[u16], _timeout: Duration) -> bool {
         self.contains(host)
+    }
+
+    /// Every port of a reachable host is open; an unreachable one fails at its first port with a
+    /// timeout (at the host's address when it is one, else at `0.0.0.0`).
+    fn open_ports(&self, host: &Host, ports: &[u16], _timeout: Duration) -> PortCheck {
+        if self.contains(host) {
+            return PortCheck {
+                open: ports.to_vec(),
+                failure: None,
+            };
+        }
+        let ip = host
+            .as_str()
+            .parse::<std::net::IpAddr>()
+            .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED.into());
+        PortCheck {
+            open: Vec::new(),
+            failure: ports.first().map(|&port| ProbeFailure::Connect {
+                address: std::net::SocketAddr::new(ip, port),
+                error: ConnectError::TimedOut,
+            }),
+        }
     }
 }
 

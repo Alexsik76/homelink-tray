@@ -206,11 +206,11 @@ fn open_ports_names_each_port_that_answers_in_settings_order() {
     let (_b, b) = listen();
     let closed = closed_port();
     assert_eq!(
-        open_ports("127.0.0.1", &[closed, b, a], Duration::from_secs(2)),
+        open_ports("127.0.0.1", &[closed, b, a], Duration::from_secs(2)).open,
         [b, a]
     );
     assert_eq!(
-        open_ports("127.0.0.1", &[], Duration::from_secs(2)),
+        open_ports("127.0.0.1", &[], Duration::from_secs(2)).open,
         Vec::<u16>::new()
     );
 }
